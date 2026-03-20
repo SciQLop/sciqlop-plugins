@@ -1,0 +1,16 @@
+{
+  "name": "CDF Workbench",
+  "version": "0.1.0",
+  "description": "Multi-function CDF file explorer for SciQLop",
+  "authors": [
+    {
+      "name": "Alexis Jeandet",
+      "email": "alexis.jeandet@member.fsf.org",
+      "organization": "LPP"
+    }
+  ],
+  "license": "MIT",
+  "python_dependencies": ["pycdfpp", "httpx", "matplotlib"],
+  "dependencies": [],
+  "disabled": false
+}
