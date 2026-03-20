@@ -8,6 +8,7 @@ _GUI_MODULES = [
     "PySide6.QtWidgets",
     "PySide6.QtCore",
     "PySide6.QtGui",
+    "matplotlib.backends.backend_qtagg",
 ]
 
 for _mod in _GUI_MODULES:
