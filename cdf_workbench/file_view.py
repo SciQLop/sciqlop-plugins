@@ -7,7 +7,7 @@ from PySide6.QtWidgets import (
 )
 import pycdfpp
 
-from .tree_model import CdfTreeModel, VariableInfo
+from .tree_model import CdfTreeModel, CdfItemDelegate, VariableInfo
 from .inspector import CdfInspectorWidget
 from .preview import CdfPreviewWidget
 from .quality import analyze_quality, QualityReport
@@ -106,6 +106,9 @@ class CdfFileView(QWidget):
         self._tree_view.setHeaderHidden(True)
         self._tree_view.expandAll()
         self._tree_view.selectionModel().currentChanged.connect(self._on_variable_selected)
+
+        self._delegate = CdfItemDelegate()
+        self._tree_view.setItemDelegate(self._delegate)
 
         # Context menu
         self._tree_view.setContextMenuPolicy(Qt.CustomContextMenu)

@@ -243,3 +243,128 @@ class CdfTreeModel(_Base):  # type: ignore[misc]
             return self._root
         node = _node_from_qt_index(index)
         return node if node is not None else self._root
+
+
+# ---------------------------------------------------------------------------
+# Item delegate — full implementation requires real Qt; a no-op stub is
+# provided so the name is always importable (tests never instantiate it).
+# ---------------------------------------------------------------------------
+if _REAL_QT:
+    from PySide6.QtWidgets import QStyledItemDelegate, QStyleOptionViewItem
+    from PySide6.QtGui import QPainter, QColor, QPen
+    from PySide6.QtCore import QRect, QSize
+
+    class CdfItemDelegate(QStyledItemDelegate):
+        SPARKLINE_WIDTH = 60
+        SPARKLINE_HEIGHT = 14
+        BADGE_WIDTH = 40
+
+        def __init__(self, parent=None):
+            super().__init__(parent)
+            self._sparklines: dict[str, list[float]] = {}
+            self._quality: dict[str, float] = {}
+
+        def set_sparkline(self, var_name: str, samples: list[float]):
+            self._sparklines[var_name] = samples
+
+        def set_quality(self, var_name: str, valid_pct: float):
+            self._quality[var_name] = valid_pct
+
+        def sizeHint(self, option, index):
+            base = super().sizeHint(option, index)
+            return QSize(base.width() + self.SPARKLINE_WIDTH + self.BADGE_WIDTH + 20, max(base.height(), 22))
+
+        def paint(self, painter, option, index):
+            model = index.model()
+            if hasattr(model, "mapToSource"):
+                source_index = model.mapToSource(index)
+                node = source_index.internalPointer()
+            else:
+                node = index.internalPointer()
+
+            if node is None or node.variable_info is None:
+                super().paint(painter, option, index)
+                return
+
+            painter.save()
+
+            if option.state & QStyleOptionViewItem.State_Selected:
+                painter.fillRect(option.rect, option.palette.highlight())
+
+            name_rect = QRect(option.rect)
+            name_rect.setWidth(option.rect.width() - self.SPARKLINE_WIDTH - self.BADGE_WIDTH - 16)
+            painter.drawText(name_rect, Qt.AlignVCenter | Qt.AlignLeft, node.name)
+
+            var_name = node.name
+
+            if var_name in self._sparklines:
+                spark_rect = QRect(
+                    option.rect.right() - self.SPARKLINE_WIDTH - self.BADGE_WIDTH - 12,
+                    option.rect.top() + (option.rect.height() - self.SPARKLINE_HEIGHT) // 2,
+                    self.SPARKLINE_WIDTH,
+                    self.SPARKLINE_HEIGHT,
+                )
+                self._draw_sparkline(painter, spark_rect, self._sparklines[var_name])
+
+            if var_name in self._quality:
+                badge_rect = QRect(
+                    option.rect.right() - self.BADGE_WIDTH - 4,
+                    option.rect.top() + (option.rect.height() - 16) // 2,
+                    self.BADGE_WIDTH,
+                    16,
+                )
+                self._draw_badge(painter, badge_rect, self._quality[var_name])
+
+            painter.restore()
+
+        def _draw_sparkline(self, painter, rect, samples):
+            if not samples:
+                return
+            mn, mx = min(samples), max(samples)
+            rng = mx - mn if mx != mn else 1.0
+
+            pen = QPen(QColor("#4ecca3"), 1.5)
+            painter.setPen(pen)
+
+            n = len(samples)
+            points = [
+                (
+                    int(rect.left() + i * rect.width() / max(n - 1, 1)),
+                    int(rect.bottom() - ((v - mn) / rng) * rect.height()),
+                )
+                for i, v in enumerate(samples)
+            ]
+
+            for i in range(len(points) - 1):
+                painter.drawLine(points[i][0], points[i][1], points[i + 1][0], points[i + 1][1])
+
+        def _draw_badge(self, painter, rect, valid_pct):
+            if valid_pct > 80:
+                color = QColor("#4ecca3")
+                text_color = QColor("#000")
+            elif valid_pct > 50:
+                color = QColor("#e7c94c")
+                text_color = QColor("#000")
+            else:
+                color = QColor("#e94560")
+                text_color = QColor("#fff")
+
+            painter.setBrush(color)
+            painter.setPen(Qt.NoPen)
+            painter.drawRoundedRect(rect, 3, 3)
+
+            painter.setPen(text_color)
+            font = painter.font()
+            font.setPointSize(8)
+            font.setBold(True)
+            painter.setFont(font)
+            painter.drawText(rect, Qt.AlignCenter, f"{valid_pct:.0f}%")
+else:
+    class CdfItemDelegate:  # type: ignore[no-redef]
+        """Stub used when Qt is not available (e.g. in tests)."""
+
+        def set_sparkline(self, var_name: str, samples: list) -> None:
+            pass
+
+        def set_quality(self, var_name: str, valid_pct: float) -> None:
+            pass
