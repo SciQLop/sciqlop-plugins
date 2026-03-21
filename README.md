@@ -23,6 +23,4 @@ A multi-function CDF file explorer plugin — a Swiss army knife for inspecting,
 
 `pycdfpp`, `pyistp`, `speasy`, `httpx`, `matplotlib`, `astralint`
 
-### Installation
-
-Place the `cdf_workbench/` folder in your SciQLop plugins directory. The plugin registers itself as a dock widget accessible from the Tools menu and toolbar.
+Install from the SciQLop AppStore.
