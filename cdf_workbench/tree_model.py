@@ -122,7 +122,11 @@ def _get_attr(var, name: str, default: str = "") -> str:
 
 def _get_numeric_attr(var, name: str) -> Optional[float]:
     try:
-        return float(var.attributes[name][0])
+        val = var.attributes[name][0]
+        # pycdfpp may return a list for single-element attributes
+        while isinstance(val, (list, tuple)):
+            val = val[0]
+        return float(val)
     except (KeyError, IndexError, TypeError, ValueError, RuntimeError):
         return None
 
@@ -250,14 +254,22 @@ class CdfTreeModel(_Base):  # type: ignore[misc]
 # provided so the name is always importable (tests never instantiate it).
 # ---------------------------------------------------------------------------
 if _REAL_QT:
-    from PySide6.QtWidgets import QStyledItemDelegate, QStyleOptionViewItem
+    from PySide6.QtWidgets import QStyledItemDelegate, QStyleOptionViewItem, QStyle
     from PySide6.QtGui import QPainter, QColor, QPen
     from PySide6.QtCore import QRect, QSize
+
+    _DISPLAY_TYPE_LABELS: dict[str, tuple[str, str]] = {
+        "time_series": ("TS", "#5b9bd5"),
+        "spectrogram": ("SP", "#c678dd"),
+        "stack_plot": ("SK", "#e5c07b"),
+        "no_plot": ("--", "#666666"),
+    }
 
     class CdfItemDelegate(QStyledItemDelegate):
         SPARKLINE_WIDTH = 60
         SPARKLINE_HEIGHT = 14
         BADGE_WIDTH = 40
+        TAG_WIDTH = 24
 
         def __init__(self, parent=None):
             super().__init__(parent)
@@ -272,7 +284,7 @@ if _REAL_QT:
 
         def sizeHint(self, option, index):
             base = super().sizeHint(option, index)
-            return QSize(base.width() + self.SPARKLINE_WIDTH + self.BADGE_WIDTH + 20, max(base.height(), 22))
+            return QSize(base.width() + self.TAG_WIDTH + self.SPARKLINE_WIDTH + self.BADGE_WIDTH + 28, max(base.height(), 22))
 
         def paint(self, painter, option, index):
             model = index.model()
@@ -288,14 +300,32 @@ if _REAL_QT:
 
             painter.save()
 
-            if option.state & QStyleOptionViewItem.State_Selected:
+            is_selected = bool(option.state & QStyle.StateFlag.State_Selected)
+            if is_selected:
                 painter.fillRect(option.rect, option.palette.highlight())
+                painter.setPen(option.palette.highlightedText().color())
+            else:
+                painter.setPen(option.palette.text().color())
 
+            right_margin = self.SPARKLINE_WIDTH + self.BADGE_WIDTH + self.TAG_WIDTH + 24
             name_rect = QRect(option.rect)
-            name_rect.setWidth(option.rect.width() - self.SPARKLINE_WIDTH - self.BADGE_WIDTH - 16)
+            name_rect.setWidth(option.rect.width() - right_margin)
             painter.drawText(name_rect, Qt.AlignVCenter | Qt.AlignLeft, node.name)
 
             var_name = node.name
+            info = node.variable_info
+
+            # Display type tag
+            dt_key = info.display_type.lower().strip() if info else ""
+            tag_label, tag_color = _DISPLAY_TYPE_LABELS.get(dt_key, ("", ""))
+            if tag_label:
+                tag_rect = QRect(
+                    option.rect.right() - self.SPARKLINE_WIDTH - self.BADGE_WIDTH - self.TAG_WIDTH - 16,
+                    option.rect.top() + (option.rect.height() - 14) // 2,
+                    self.TAG_WIDTH,
+                    14,
+                )
+                self._draw_tag(painter, tag_rect, tag_label, tag_color)
 
             if var_name in self._sparklines:
                 spark_rect = QRect(
@@ -316,6 +346,20 @@ if _REAL_QT:
                 self._draw_badge(painter, badge_rect, self._quality[var_name])
 
             painter.restore()
+
+        def _draw_tag(self, painter, rect, label, color_hex):
+            color = QColor(color_hex)
+            color.setAlpha(40)
+            painter.setBrush(color)
+            painter.setPen(Qt.NoPen)
+            painter.drawRoundedRect(rect, 3, 3)
+
+            painter.setPen(QColor(color_hex))
+            font = painter.font()
+            font.setPointSize(7)
+            font.setBold(True)
+            painter.setFont(font)
+            painter.drawText(rect, Qt.AlignCenter, label)
 
         def _draw_sparkline(self, painter, rect, samples):
             if not samples:

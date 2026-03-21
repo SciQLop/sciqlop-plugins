@@ -10,7 +10,7 @@
     }
   ],
   "license": "MIT",
-  "python_dependencies": ["pycdfpp", "httpx", "matplotlib"],
+  "python_dependencies": ["pycdfpp", "httpx", "matplotlib", "astralint"],
   "dependencies": [],
   "disabled": false
 }

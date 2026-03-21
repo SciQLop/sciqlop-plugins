@@ -11,6 +11,7 @@ from .tree_model import CdfTreeModel, CdfItemDelegate, VariableInfo
 from .inspector import CdfInspectorWidget
 from .preview import CdfPreviewWidget
 from .quality import analyze_quality, QualityReport
+from .lint import run_lint, LintReport
 
 logger = logging.getLogger(__name__)
 
@@ -57,9 +58,11 @@ class AnalysisWorker(QObject):
 
                 # Sparkline: downsample to ~60 points
                 if estimated_size < SPARKLINE_SIZE_LIMIT:
-                    flat = values.ravel().astype(float)
+                    flat = values.ravel()
                     if info.fill_value is not None:
-                        flat = flat[flat != info.fill_value]
+                        typed_fill = np.array(info.fill_value, dtype=flat.dtype)
+                        flat = flat[flat != typed_fill]
+                    flat = flat.astype(float)
                     if len(flat) > 60:
                         indices = np.linspace(0, len(flat) - 1, 60, dtype=int)
                         flat = flat[indices]
@@ -70,14 +73,31 @@ class AnalysisWorker(QObject):
                 logger.debug("Analysis failed for %s", name, exc_info=True)
 
 
+class LintWorker(QObject):
+    """Runs AstraLint ISTP validation in a background thread."""
+    lint_ready = Signal(object)  # LintReport
+
+    def __init__(self, source: str):
+        super().__init__()
+        self._source = source
+
+    def run(self):
+        report = run_lint(self._source)
+        if report is not None:
+            self.lint_ready.emit(report)
+
+
 class CdfFileView(QWidget):
-    def __init__(self, cdf: pycdfpp.CDF, main_window=None, parent=None):
+    def __init__(self, cdf: pycdfpp.CDF, source: str = "", main_window=None, parent=None):
         super().__init__(parent)
         self._cdf = cdf
+        self._source = source
         self._main_window = main_window
         self._quality_reports: dict[str, QualityReport] = {}
+        self._lint_report: LintReport | None = None
         self._setup_ui()
         self._start_quality_analysis()
+        self._start_lint()
 
     def _setup_ui(self):
         layout = QVBoxLayout(self)
@@ -123,7 +143,12 @@ class CdfFileView(QWidget):
         self._inspector = CdfInspectorWidget()
         self._inspector.dependency_clicked.connect(self._navigate_to_variable)
         self._inspector.plot_new_panel.connect(self._plot_new_panel)
+        self._inspector.plot_to_panel.connect(self._plot_to_panel)
         right_splitter.addWidget(self._inspector)
+
+        if self._main_window is not None:
+            self._inspector.set_panel_names(self._main_window.plot_panels())
+            self._main_window.panels_list_changed.connect(self._inspector.set_panel_names)
 
         self._preview = CdfPreviewWidget()
         right_splitter.addWidget(self._preview)
@@ -173,7 +198,8 @@ class CdfFileView(QWidget):
                 epochs = epoch_var.values.astype("datetime64[ns]")
 
             if info.fill_value is not None:
-                values = np.where(values == info.fill_value, np.nan, values.astype(float))
+                typed_fill = np.array(info.fill_value, dtype=values.dtype)
+                values = np.where(values == typed_fill, np.nan, values.astype(float))
 
             self._preview.plot_variable(
                 values=values,
@@ -202,26 +228,43 @@ class CdfFileView(QWidget):
         if self._main_window is None:
             return
         try:
-            from SciQLop.user_api.plot import create_plot_panel
+            from SciQLop.user_api.plot import create_plot_panel, TimeRange
+            from speasy.core import datetime64_to_epoch
+            from speasy.core.codecs import get_codec
 
-            info = self._tree_model.variable_info(var_name)
-            var = self._cdf[var_name]
-            values = var.values.astype(float)
-
-            if info.fill_value is not None:
-                values = np.where(values == info.fill_value, np.nan, values)
-
-            x = None
-            if info.depend_0 and info.depend_0 in self._cdf:
-                x = self._cdf[info.depend_0].values
-
+            codec = get_codec('application/x-cdf')
+            speasy_var = codec.load_variable(variable=var_name, file=self._source)
             panel = create_plot_panel()
-            if x is not None:
-                panel.plot_data(x, values)
+            if speasy_var is not None:
+                panel.plot_data(speasy_var)
+                x = datetime64_to_epoch(speasy_var.time)
+                if len(x) >= 2:
+                    panel.time_range = TimeRange(float(x.min()), float(x.max()))
             else:
-                panel.plot_data(np.arange(len(values)), values)
+                var = self._cdf[var_name]
+                panel.plot_data(np.arange(var.shape[0]), var.values.astype(float))
         except Exception:
             logger.warning("Failed to plot %s", var_name, exc_info=True)
+
+    def _plot_to_panel(self, var_name: str, panel_name: str):
+        if self._main_window is None:
+            return
+        try:
+            from SciQLop.user_api.plot import plot_panel
+            from speasy.core.codecs import get_codec
+
+            panel = plot_panel(panel_name)
+            if panel is None:
+                return
+            codec = get_codec('application/x-cdf')
+            speasy_var = codec.load_variable(variable=var_name, file=self._source)
+            if speasy_var is not None:
+                panel.plot_data(speasy_var)
+            else:
+                var = self._cdf[var_name]
+                panel.plot_data(np.arange(var.shape[0]), var.values.astype(float))
+        except Exception:
+            logger.warning("Failed to plot %s to panel %s", var_name, panel_name, exc_info=True)
 
     def _show_context_menu(self, pos):
         index = self._tree_view.indexAt(pos)
@@ -276,10 +319,30 @@ class CdfFileView(QWidget):
             self._delegate.set_sparkline(var_name, samples)
             self._tree_view.viewport().update()
 
+    def _start_lint(self):
+        if not self._source:
+            return
+        self._lint_thread = QThread()
+        self._lint_worker = LintWorker(self._source)
+        self._lint_worker.moveToThread(self._lint_thread)
+        self._lint_thread.started.connect(self._lint_worker.run)
+        self._lint_worker.lint_ready.connect(self._on_lint_result)
+        self._lint_thread.finished.connect(self._lint_thread.deleteLater)
+        self._lint_thread.start()
+
+    def _on_lint_result(self, report: LintReport):
+        self._lint_report = report
+        self._inspector.set_lint_report(report)
+        if hasattr(self, "_lint_thread"):
+            self._lint_thread.quit()
+
     def release(self):
         if hasattr(self, "_analysis_worker"):
             self._analysis_worker.cancel()
         if hasattr(self, "_analysis_thread") and self._analysis_thread.isRunning():
             self._analysis_thread.quit()
             self._analysis_thread.wait(5000)
+        if hasattr(self, "_lint_thread") and self._lint_thread.isRunning():
+            self._lint_thread.quit()
+            self._lint_thread.wait(5000)
         self._cdf = None

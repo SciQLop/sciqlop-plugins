@@ -50,7 +50,7 @@ class CdfWorkbenchPanel(QWidget):
             QMessageBox.warning(self, "Failed to open CDF", str(e))
             return
 
-        file_view = CdfFileView(cdf, main_window=self._main_window)
+        file_view = CdfFileView(cdf, source=source, main_window=self._main_window)
         name = Path(source).name if not source.startswith("http") else source.split("/")[-1]
 
         insert_idx = max(0, self._tabs.count() - 1)

@@ -1,11 +1,14 @@
 from __future__ import annotations
 from PySide6.QtCore import Signal, Qt
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QGridLayout,
     QProgressBar, QPushButton, QFrame, QScrollArea, QMenu,
+    QTreeWidget, QTreeWidgetItem, QSizePolicy,
 )
 from .tree_model import VariableInfo
 from .quality import QualityReport
+from .lint import LintReport, LintIssue
 
 
 class CdfInspectorWidget(QWidget):
@@ -59,8 +62,26 @@ class CdfInspectorWidget(QWidget):
         q_layout.addWidget(self._quality_detail)
         layout.addWidget(self._quality_frame)
 
+        # Lint section — collapsible toggle + tree
+        self._lint_toggle = QPushButton("ISTP Conformance")
+        self._lint_toggle.setFlat(True)
+        self._lint_toggle.setStyleSheet("font-weight: bold; text-align: left;")
+        self._lint_toggle.setCheckable(True)
+        self._lint_toggle.setChecked(False)
+        self._lint_toggle.toggled.connect(self._on_lint_toggled)
+        self._lint_toggle.setVisible(False)
+        layout.addWidget(self._lint_toggle)
+
+        self._lint_tree = QTreeWidget()
+        self._lint_tree.setHeaderHidden(True)
+        self._lint_tree.setRootIsDecorated(False)
+        self._lint_tree.setVisible(False)
+        self._lint_tree.setMaximumHeight(200)
+        layout.addWidget(self._lint_tree)
+
         self._current_var = None
         self._panel_names: list[str] = []
+        self._lint_report: LintReport | None = None
         self._set_enabled(False)
 
     def _set_enabled(self, enabled: bool):
@@ -76,6 +97,7 @@ class CdfInspectorWidget(QWidget):
         self._populate_attributes(info)
         if quality:
             self._update_quality(quality)
+        self._update_lint_display()
 
     def _populate_attributes(self, info: VariableInfo):
         while self._attrs_grid.count():
@@ -140,10 +162,58 @@ class CdfInspectorWidget(QWidget):
     def set_panel_names(self, names: list[str]):
         self._panel_names = names
 
+    def set_lint_report(self, report: LintReport):
+        self._lint_report = report
+        self._update_lint_display()
+
+    def _on_lint_toggled(self, checked: bool):
+        self._lint_tree.setVisible(checked)
+        # Update arrow without rebuilding tree
+        current_text = self._lint_toggle.text()
+        if current_text.startswith("\u25b6") or current_text.startswith("\u25bc"):
+            arrow = "\u25bc" if checked else "\u25b6"
+            self._lint_toggle.setText(arrow + current_text[1:])
+
+    def _update_lint_display(self):
+        if self._lint_report is None:
+            self._lint_toggle.setVisible(False)
+            self._lint_tree.setVisible(False)
+            return
+
+        if self._current_var:
+            issues = self._lint_report.issues_for_variable(self._current_var)
+            n_err = sum(1 for i in issues if i.severity == "ERROR")
+            n_warn = sum(1 for i in issues if i.severity == "WARNING")
+        else:
+            issues = self._lint_report.file_level_issues()
+            n_err = sum(1 for i in issues if i.severity == "ERROR")
+            n_warn = sum(1 for i in issues if i.severity == "WARNING")
+
+        if not issues:
+            self._lint_toggle.setVisible(False)
+            self._lint_tree.setVisible(False)
+            return
+
+        arrow = "\u25bc" if self._lint_toggle.isChecked() else "\u25b6"
+        self._lint_toggle.setText(f"{arrow} ISTP Conformance ({n_err}E / {n_warn}W)")
+        self._lint_toggle.setVisible(True)
+        self._lint_tree.setVisible(self._lint_toggle.isChecked())
+
+        self._lint_tree.clear()
+        severity_colors = {"ERROR": "#e94560", "WARNING": "#e7c94c", "INFO": "#888888"}
+        for issue in issues:
+            item = QTreeWidgetItem([f"[{issue.severity}] {issue.message}"])
+            color = severity_colors.get(issue.severity, "")
+            if color:
+                item.setForeground(0, QColor(color))
+            self._lint_tree.addTopLevelItem(item)
+
     def show_global_attributes(self, attrs: dict):
+        self._current_var = None
         self._header.setText("Global Attributes")
         self._description.setText("")
         self._set_enabled(False)
+        self._update_lint_display()
 
         while self._attrs_grid.count():
             item = self._attrs_grid.takeAt(0)

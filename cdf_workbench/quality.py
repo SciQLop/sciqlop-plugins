@@ -28,13 +28,16 @@ def analyze_quality(
 
     flat = values.ravel()
 
+    # Cast fill_value to data dtype to avoid float32/float64 mismatch
     fill_count = 0
+    typed_fill = None
     if fill_value is not None:
-        fill_count = int(np.sum(flat == fill_value))
+        typed_fill = np.array(fill_value, dtype=flat.dtype)
+        fill_count = int(np.sum(flat == typed_fill))
 
     oor_count = 0
     if valid_min is not None or valid_max is not None:
-        non_fill = flat if fill_value is None else flat[flat != fill_value]
+        non_fill = flat if typed_fill is None else flat[flat != typed_fill]
         if valid_min is not None:
             oor_count += int(np.sum(non_fill < valid_min))
         if valid_max is not None:
