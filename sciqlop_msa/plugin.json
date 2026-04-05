@@ -1,0 +1,10 @@
+{
+  "name": "MSA BepiColombo",
+  "version": "0.1.0",
+  "description": "MSA instrument data access and quick-look panels for BepiColombo/MMO",
+  "authors": [{"name": "LPP Team", "email": "msa-support@lpp.polytechnique.fr", "organization": "LPP/CNRS"}],
+  "license": "MIT",
+  "python_dependencies": ["speasy"],
+  "dependencies": ["speasy_provider"],
+  "disabled": false
+}

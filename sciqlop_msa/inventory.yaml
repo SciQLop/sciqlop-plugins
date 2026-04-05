@@ -1,0 +1,7 @@
+bc_mmo_mppe_msa_l1_l_mass_moments_tof:
+  inventory_path: BepiColombo/MSA/L1_Low_Mass_Moments_TOF
+  master_cdf: https://sciqlop.lpp.polytechnique.fr/data/Bepi/bc_mmo_mppe-msa_l1_l-mass-moments-tof_00000000_v0.9.cdf
+  split_rule: random
+  split_frequency: monthly
+  fname_regex: bc_mmo_mppe-msa_l1_l-mass-moments-tof_(?P<start>\d{8})_r\d+-v\d+-\d+\.cdf
+  url_pattern: https://sciqlop.lpp.polytechnique.fr/data/Bepi/bc_mmo_mppe-msa_l1_l-mass-moments-tof_{Y}{M:02d}\d+_r\d+-v\d+-\d+\.cdf
