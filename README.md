@@ -1,26 +1,59 @@
 # SciQLop Plugins
 
-A collection of plugins for [SciQLop](https://github.com/SciQLop/SciQLop).
+A bundle of plugins for [SciQLop](https://github.com/SciQLop/SciQLop). Each plugin is built as an independent wheel and published as a GitHub release artifact.
 
-## CDF Workbench
+## Plugins
 
-A multi-function CDF file explorer plugin — a Swiss army knife for inspecting, understanding, and plotting data from CDF files. Targets power users familiar with ISTP/CDF conventions.
+### CDF Workbench
 
-### Features
+A multi-function CDF file explorer — a Swiss army knife for inspecting, understanding, and plotting data from CDF files.
 
-- **Structure tree** — variables grouped by VAR_TYPE (data / support_data / metadata) with sparkline thumbnails, display type tags (TS/SP), and color-coded health badges
-- **Variable inspector** — shape, type, compression, all ISTP attributes; DEPEND_0/1/2 and LABL_PTR_1 rendered as clickable navigation links
-- **Global attributes panel** — shown when no variable is selected
-- **Data preview** — matplotlib inline plot respecting DISPLAY_TYPE (time_series / spectrogram) and SCALETYP
-- **Data quality** — per-variable fill value %, VALIDMIN/MAX out-of-range %, epoch gap count
-- **ISTP conformance** — [AstraLint](https://github.com/SciQLop/AstraLint) integration for ISTP standard validation with per-variable and file-level issue reporting
-- **Search/filter** — filter variables by name
-- **Plot to SciQLop** — push data directly to SciQLopPlots panels (new or existing) via Speasy's CDF codec, with automatic time range adjustment
-- **Multi-file tabs** — open multiple CDF files side by side
-- **Drag-and-drop** — drop local files or URLs onto the workbench
+- Structure tree with sparkline thumbnails and health badges
+- Variable inspector with ISTP attributes and clickable DEPEND links
+- Data preview (time series / spectrogram) respecting DISPLAY_TYPE and SCALETYP
+- Data quality reporting (fill %, out-of-range %, epoch gaps)
+- ISTP conformance via [AstraLint](https://github.com/SciQLop/AstraLint)
+- Plot to SciQLop panels via Speasy's CDF codec
+- Multi-file tabs, drag-and-drop, search/filter
 
-### Dependencies
+Dependencies: `pycdfpp`, `httpx`, `matplotlib`
 
-`pycdfpp`, `pyistp`, `speasy`, `httpx`, `matplotlib`, `astralint`
+### MSA BepiColombo
 
-Install from the SciQLop AppStore.
+MSA instrument data access and quick-look panels for the BepiColombo/MMO mission.
+
+- Data access via Speasy inventory
+- Quick-look visualization panels
+
+Dependencies: `speasy`
+
+## Installation
+
+Install from the SciQLop AppStore, or manually:
+
+```bash
+# from a release
+uv pip install https://github.com/SciQLop/sciqlop-plugins/releases/download/v0.1.0/sciqlop_cdf_workbench-0.1.0-py3-none-any.whl
+uv pip install https://github.com/SciQLop/sciqlop-plugins/releases/download/v0.1.0/sciqlop_msa-0.1.0-py3-none-any.whl
+```
+
+## Development
+
+Each plugin lives in its own directory with a `pyproject.toml`:
+
+```
+cdf_workbench/
+├── pyproject.toml
+└── cdf_workbench/
+    ├── __init__.py
+    ├── plugin.json
+    └── ...
+sciqlop_msa/
+├── pyproject.toml
+└── sciqlop_msa/
+    ├── __init__.py
+    ├── plugin.json
+    └── ...
+```
+
+On tag push (`v*`), the CI builds a wheel per plugin and attaches them to a GitHub release.
