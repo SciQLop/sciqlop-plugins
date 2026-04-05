@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sciqlop-cdf-workbench"
+version = "0.1.0"
+description = "Multi-function CDF file explorer for SciQLop"
+requires-python = ">=3.10"
+dependencies = ["pycdfpp", "httpx", "matplotlib"]
+
+[tool.setuptools.packages.find]
+include = ["cdf_workbench*"]
+
+[tool.setuptools.package-data]
+cdf_workbench = ["plugin.json"]
