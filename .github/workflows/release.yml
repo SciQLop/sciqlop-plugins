@@ -1,8 +1,9 @@
-name: Release plugins
+name: Release plugin
 
 on:
   push:
-    tags: ["v*"]
+    tags:
+      - "*/v*"
 
 jobs:
   release:
@@ -19,15 +20,16 @@ jobs:
       - name: Install build tool
         run: pip install build
 
-      - name: Build wheels
+      - name: Build wheel
         run: |
-          mkdir -p dist
-          for dir in */; do
-            if [ -f "${dir}pyproject.toml" ]; then
-              echo "Building $(basename "$dir")"
-              python -m build --wheel --outdir dist "$dir"
-            fi
-          done
+          TAG="${GITHUB_REF#refs/tags/}"
+          PLUGIN_DIR="${TAG%%/v*}"
+          if [ ! -f "${PLUGIN_DIR}/pyproject.toml" ]; then
+            echo "::error::No pyproject.toml found in ${PLUGIN_DIR}/"
+            exit 1
+          fi
+          echo "Building ${PLUGIN_DIR}"
+          python -m build --wheel --outdir dist "${PLUGIN_DIR}"
 
       - name: Create release
         uses: softprops/action-gh-release@v2
