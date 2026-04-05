@@ -9,6 +9,9 @@ description = "SciQLop plugin for BepiColombo MSA instrument data"
 requires-python = ">=3.10"
 dependencies = ["speasy"]
 
+[project.entry-points."sciqlop.plugins"]
+sciqlop_msa = "sciqlop_msa"
+
 [tool.setuptools.packages.find]
 include = ["sciqlop_msa*"]
 

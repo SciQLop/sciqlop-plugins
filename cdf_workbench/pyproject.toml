@@ -9,6 +9,9 @@ description = "Multi-function CDF file explorer for SciQLop"
 requires-python = ">=3.10"
 dependencies = ["pycdfpp", "httpx", "matplotlib"]
 
+[project.entry-points."sciqlop.plugins"]
+cdf_workbench = "cdf_workbench"
+
 [tool.setuptools.packages.find]
 include = ["cdf_workbench*"]
 
