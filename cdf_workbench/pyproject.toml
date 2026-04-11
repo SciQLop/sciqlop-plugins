@@ -7,7 +7,7 @@ name = "sciqlop-cdf-workbench"
 version = "0.2.0"
 description = "Multi-function CDF file explorer for SciQLop"
 requires-python = ">=3.10"
-dependencies = ["pycdfpp", "httpx", "matplotlib"]
+dependencies = ["pycdfpp", "httpx", "astralint"]
 
 [project.entry-points."sciqlop.plugins"]
 cdf_workbench = "cdf_workbench"

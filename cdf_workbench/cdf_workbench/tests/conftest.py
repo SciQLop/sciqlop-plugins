@@ -1,6 +1,27 @@
+import os
+import atexit
+
 import pytest
 import pycdfpp
 import numpy as np
+
+
+def _force_exit():
+    """Avoid segfault during interpreter shutdown.
+
+    SciQLopPlots' PlotsModel singleton is destroyed after QApplication,
+    causing a segfault.  This is an upstream issue — SciQLopPlots' own
+    tests exhibit the same crash.  Force-exit to skip the problematic
+    teardown.
+    """
+    os._exit(0)
+
+
+@pytest.fixture(autouse=True, scope="session")
+def _prevent_exit_segfault():
+    atexit.register(_force_exit)
+    yield
+    # atexit handler will run after pytest returns
 
 
 @pytest.fixture

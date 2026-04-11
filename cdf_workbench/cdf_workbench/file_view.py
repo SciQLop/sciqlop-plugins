@@ -1,7 +1,8 @@
 from __future__ import annotations
 import logging
+import multiprocessing
 import numpy as np
-from PySide6.QtCore import Qt, QThread, Signal, QObject, QSortFilterProxyModel
+from PySide6.QtCore import Qt, QThread, QTimer, Signal, QObject, QSortFilterProxyModel
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QSplitter, QTreeView, QLineEdit, QMenu,
 )
@@ -73,18 +74,26 @@ class AnalysisWorker(QObject):
                 logger.debug("Analysis failed for %s", name, exc_info=True)
 
 
-class LintWorker(QObject):
-    """Runs AstraLint ISTP validation in a background thread."""
-    lint_ready = Signal(object)  # LintReport
+_NON_PLOTTABLE_TYPES = {pycdfpp.DataType.CDF_CHAR, pycdfpp.DataType.CDF_UCHAR, pycdfpp.DataType.CDF_NONE}
+_TIME_TYPES = {pycdfpp.DataType.CDF_EPOCH, pycdfpp.DataType.CDF_EPOCH16, pycdfpp.DataType.CDF_TIME_TT2000}
 
-    def __init__(self, source: str):
-        super().__init__()
-        self._source = source
 
-    def run(self):
-        report = run_lint(self._source)
-        if report is not None:
-            self.lint_ready.emit(report)
+def _is_plottable(info: VariableInfo) -> bool:
+    if info.cdf_type in _NON_PLOTTABLE_TYPES:
+        return False
+    if info.display_type.lower() == "no_plot":
+        return False
+    ndim = len(info.shape)
+    if ndim == 0 or ndim > 2 or any(s == 0 for s in info.shape):
+        return False
+    return True
+
+
+def _lint_in_subprocess(source: str, conn):
+    """Entry point for the lint subprocess — runs lint and sends result back."""
+    report = run_lint(source)
+    conn.send(report)
+    conn.close()
 
 
 class CdfFileView(QWidget):
@@ -153,8 +162,7 @@ class CdfFileView(QWidget):
         self._preview = CdfPreviewWidget()
         right_splitter.addWidget(self._preview)
 
-        right_splitter.setStretchFactor(0, 2)
-        right_splitter.setStretchFactor(1, 1)
+        self._right_splitter = right_splitter
 
         splitter.addWidget(right_splitter)
         splitter.setStretchFactor(0, 1)
@@ -162,6 +170,12 @@ class CdfFileView(QWidget):
 
         layout.addWidget(splitter)
         self._show_global_attributes()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        h = self._right_splitter.height()
+        if h > 0:
+            self._right_splitter.setSizes([h * 3 // 4, h // 4])
 
     def _show_global_attributes(self):
         attrs = {}
@@ -188,26 +202,91 @@ class CdfFileView(QWidget):
         self._inspector.update_variable(info, quality)
         self._update_preview(info)
 
+    def _resolve_labels(self, info: VariableInfo) -> list[str]:
+        if info.labl_ptr_1 and info.labl_ptr_1 in self._cdf:
+            raw = self._cdf[info.labl_ptr_1].values
+            if hasattr(raw, 'tolist'):
+                # pycdfpp returns CDF_CHAR as ndarray of bytes, shape varies:
+                # NRV scalar: (n_components,) or (1, n_components)
+                # time-varying: (n_records, n_components)
+                while raw.ndim > 1:
+                    raw = raw[-1]
+                return [s.decode().strip() if isinstance(s, bytes) else str(s).strip() for s in raw.tolist()]
+        if info.lablaxis:
+            return [info.lablaxis]
+        if info.fieldnam:
+            return [info.fieldnam]
+        return [info.name]
+
+    def _resolve_epochs(self, info: VariableInfo, values: np.ndarray) -> tuple[np.ndarray | None, bool]:
+        """Resolve the x-axis for a variable, handling non-ISTP files.
+
+        Returns (epochs_array_or_None, is_time_axis).
+        """
+        n_records = values.shape[0]
+
+        # Try DEPEND_0 first
+        if info.depend_0 and info.depend_0 in self._cdf:
+            dep0_var = self._cdf[info.depend_0]
+            if dep0_var.shape[0] == n_records:
+                if dep0_var.type in _TIME_TYPES:
+                    return pycdfpp.to_datetime64(dep0_var).astype(np.int64).astype(np.float64) / 1e9, True
+                return dep0_var.values.astype(np.float64), False
+
+        # Fallback: DEPEND_TIME attribute (THEMIS-style non-ISTP files)
+        depend_time_name = info.all_attributes.get("DEPEND_TIME", [""])[0] if "DEPEND_TIME" in info.all_attributes else ""
+        if depend_time_name and depend_time_name in self._cdf:
+            dt_var = self._cdf[depend_time_name]
+            if dt_var.shape[0] == n_records:
+                return dt_var.values.astype(np.float64), True
+
+        return None, False
+
     def _update_preview(self, info: VariableInfo):
+        if not _is_plottable(info):
+            self._preview.clear()
+            return
         try:
             var = self._cdf[info.name]
             values = var.values
-            epochs = None
-            if info.depend_0 and info.depend_0 in self._cdf:
-                epoch_var = self._cdf[info.depend_0]
-                epochs = epoch_var.values.astype("datetime64[ns]")
+            epochs, is_time_axis = self._resolve_epochs(info, values)
+
+            depend_1 = None
+            depend_1_units = ""
+            depend_1_scale = "linear"
+            if info.depend_1 and info.depend_1 in self._cdf:
+                d1_var = self._cdf[info.depend_1]
+                d1 = d1_var.values.astype(np.float64)
+                depend_1 = d1
+                depend_1_units = str(d1_var.attributes["UNITS"][0]) if "UNITS" in d1_var.attributes else ""
+                depend_1_scale = str(d1_var.attributes["SCALETYP"][0]) if "SCALETYP" in d1_var.attributes else "linear"
+
+            # Ensure DEPEND_1 channels are ascending (some CDF files
+            # store energy channels high-to-low); flip both axes together.
+            if depend_1 is not None and depend_1.size > 1:
+                ref = depend_1.ravel() if depend_1.ndim == 1 else depend_1[0, :]
+                finite = ref[np.isfinite(ref)]
+                if len(finite) >= 2 and finite[0] > finite[-1]:
+                    depend_1 = depend_1[..., ::-1]
+                    values = values[..., ::-1]
 
             if info.fill_value is not None:
                 typed_fill = np.array(info.fill_value, dtype=values.dtype)
                 values = np.where(values == typed_fill, np.nan, values.astype(float))
 
+            labels = self._resolve_labels(info)
+
             self._preview.plot_variable(
                 values=values,
                 epochs=epochs,
-                label=info.name,
+                depend_1=depend_1,
+                labels=labels,
                 units=info.units,
                 scale_type=info.scale_type,
+                depend_1_units=depend_1_units,
+                depend_1_scale=depend_1_scale,
                 display_type=info.display_type,
+                is_time_axis=is_time_axis,
             )
         except Exception:
             logger.debug("Preview failed for %s", info.name, exc_info=True)
@@ -268,16 +347,18 @@ class CdfFileView(QWidget):
 
     def _show_context_menu(self, pos):
         index = self._tree_view.indexAt(pos)
-        if not index.isValid():
-            return
-        source_index = self._proxy_model.mapToSource(index)
-        node = source_index.internalPointer()
-        if node is None or node.variable_info is None:
-            return
-
         menu = QMenu(self)
-        menu.addAction("Plot in New Panel", lambda: self._plot_new_panel(node.name))
-        menu.addAction("Send to Console", lambda: self._send_to_console(node.name))
+
+        if index.isValid():
+            source_index = self._proxy_model.mapToSource(index)
+            node = source_index.internalPointer()
+            if node is not None and node.variable_info is not None:
+                menu.addAction("Plot in New Panel", lambda: self._plot_new_panel(node.name))
+                menu.addAction("Send to Console", lambda: self._send_to_console(node.name))
+                menu.addSeparator()
+
+        if menu.isEmpty():
+            return
         menu.exec(self._tree_view.viewport().mapToGlobal(pos))
 
     def _send_to_console(self, var_name: str):
@@ -320,29 +401,40 @@ class CdfFileView(QWidget):
             self._tree_view.viewport().update()
 
     def _start_lint(self):
-        if not self._source:
+        if not self._source or self._lint_report is not None:
             return
-        self._lint_thread = QThread()
-        self._lint_worker = LintWorker(self._source)
-        self._lint_worker.moveToThread(self._lint_thread)
-        self._lint_thread.started.connect(self._lint_worker.run)
-        self._lint_worker.lint_ready.connect(self._on_lint_result)
-        self._lint_thread.finished.connect(self._lint_thread.deleteLater)
-        self._lint_thread.start()
+        parent_conn, child_conn = multiprocessing.Pipe(duplex=False)
+        self._lint_process = multiprocessing.Process(
+            target=_lint_in_subprocess, args=(self._source, child_conn), daemon=True,
+        )
+        self._lint_conn = parent_conn
+        self._lint_process.start()
+        child_conn.close()
+        self._lint_timer = QTimer(self)
+        self._lint_timer.timeout.connect(self._poll_lint)
+        self._lint_timer.start(500)
 
-    def _on_lint_result(self, report: LintReport):
-        self._lint_report = report
-        self._inspector.set_lint_report(report)
-        if hasattr(self, "_lint_thread"):
-            self._lint_thread.quit()
+    def _poll_lint(self):
+        if self._lint_conn.poll():
+            report = self._lint_conn.recv()
+            self._lint_timer.stop()
+            self._lint_process.join(timeout=1)
+            if report is not None:
+                self._lint_report = report
+                self._inspector.set_lint_report(report)
+        elif not self._lint_process.is_alive():
+            self._lint_timer.stop()
+            self._lint_process.join(timeout=1)
 
     def release(self):
         if hasattr(self, "_analysis_worker"):
             self._analysis_worker.cancel()
         if hasattr(self, "_analysis_thread") and self._analysis_thread.isRunning():
             self._analysis_thread.quit()
-            self._analysis_thread.wait(5000)
-        if hasattr(self, "_lint_thread") and self._lint_thread.isRunning():
-            self._lint_thread.quit()
-            self._lint_thread.wait(5000)
+            self._analysis_thread.wait(1000)
+        if hasattr(self, "_lint_timer"):
+            self._lint_timer.stop()
+        if hasattr(self, "_lint_process") and self._lint_process.is_alive():
+            self._lint_process.kill()
+            self._lint_process.join(timeout=1)
         self._cdf = None

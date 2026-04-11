@@ -30,6 +30,7 @@ class CdfWorkbenchPanel(QWidget):
     def _add_open_tab(self):
         placeholder = QLabel("Drop CDF files here or double-click to open")
         placeholder.setAlignment(Qt.AlignCenter)
+        placeholder.mouseDoubleClickEvent = lambda _event: self.open_file_dialog()
         self._tabs.addTab(placeholder, "+")
 
     def _on_tab_double_clicked(self, index: int):
@@ -65,6 +66,16 @@ class CdfWorkbenchPanel(QWidget):
         if isinstance(widget, CdfFileView):
             widget.release()
         widget.deleteLater()
+
+    def _release_all(self):
+        for i in range(self._tabs.count()):
+            w = self._tabs.widget(i)
+            if isinstance(w, CdfFileView):
+                w.release()
+
+    def closeEvent(self, event):
+        self._release_all()
+        super().closeEvent(event)
 
     def dragEnterEvent(self, event: QDragEnterEvent):
         mime = event.mimeData()

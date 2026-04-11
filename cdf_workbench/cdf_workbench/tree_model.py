@@ -87,15 +87,19 @@ UNCATEGORIZED = "Uncategorized"
 class VariableInfo:
     name: str
     shape: tuple
-    cdf_type: str
+    cdf_type: pycdfpp.DataType
     var_type: str
     units: str = ""
     depend_0: str = ""
+    depend_1: str = ""
     display_type: str = ""
     fill_value: Optional[float] = None
     valid_min: Optional[float] = None
     valid_max: Optional[float] = None
     scale_type: str = "linear"
+    lablaxis: str = ""
+    labl_ptr_1: str = ""
+    fieldnam: str = ""
     catdesc: str = ""
     compression: str = ""
     all_attributes: dict = field(default_factory=dict)
@@ -142,15 +146,19 @@ def _build_variable_info(name: str, var) -> VariableInfo:
     return VariableInfo(
         name=name,
         shape=var.shape,
-        cdf_type=str(var.type),
+        cdf_type=var.type,
         var_type=_get_attr(var, "VAR_TYPE"),
         units=_get_attr(var, "UNITS"),
         depend_0=_get_attr(var, "DEPEND_0"),
+        depend_1=_get_attr(var, "DEPEND_1"),
         display_type=_get_attr(var, "DISPLAY_TYPE"),
         fill_value=_get_numeric_attr(var, "FILLVAL"),
         valid_min=_get_numeric_attr(var, "VALIDMIN"),
         valid_max=_get_numeric_attr(var, "VALIDMAX"),
         scale_type=_get_attr(var, "SCALETYP", "linear"),
+        lablaxis=_get_attr(var, "LABLAXIS"),
+        labl_ptr_1=_get_attr(var, "LABL_PTR_1"),
+        fieldnam=_get_attr(var, "FIELDNAM"),
         catdesc=_get_attr(var, "CATDESC"),
         compression=str(var.compression) if hasattr(var, "compression") else "",
         all_attributes=all_attrs,
@@ -265,11 +273,18 @@ if _REAL_QT:
         "no_plot": ("--", "#666666"),
     }
 
+    _DIM_COLORS = ["#888888", "#56b6c2", "#c678dd", "#e5c07b"]
+
+    def _dim_tag(shape: tuple) -> tuple[str, str]:
+        ndim = len(shape)
+        return f"{ndim}D", _DIM_COLORS[min(ndim, len(_DIM_COLORS) - 1)]
+
     class CdfItemDelegate(QStyledItemDelegate):
         SPARKLINE_WIDTH = 60
         SPARKLINE_HEIGHT = 14
         BADGE_WIDTH = 40
         TAG_WIDTH = 24
+        DIM_TAG_WIDTH = 22
 
         def __init__(self, parent=None):
             super().__init__(parent)
@@ -284,7 +299,8 @@ if _REAL_QT:
 
         def sizeHint(self, option, index):
             base = super().sizeHint(option, index)
-            return QSize(base.width() + self.TAG_WIDTH + self.SPARKLINE_WIDTH + self.BADGE_WIDTH + 28, max(base.height(), 22))
+            extra = self.DIM_TAG_WIDTH + self.TAG_WIDTH + self.SPARKLINE_WIDTH + self.BADGE_WIDTH + 32
+            return QSize(base.width() + extra, max(base.height(), 22))
 
         def paint(self, painter, option, index):
             model = index.model()
@@ -307,20 +323,32 @@ if _REAL_QT:
             else:
                 painter.setPen(option.palette.text().color())
 
-            right_margin = self.SPARKLINE_WIDTH + self.BADGE_WIDTH + self.TAG_WIDTH + 24
+            right_margin = self.DIM_TAG_WIDTH + self.SPARKLINE_WIDTH + self.BADGE_WIDTH + self.TAG_WIDTH + 32
             name_rect = QRect(option.rect)
             name_rect.setWidth(option.rect.width() - right_margin)
             painter.drawText(name_rect, Qt.AlignVCenter | Qt.AlignLeft, node.name)
 
             var_name = node.name
             info = node.variable_info
+            x_cursor = option.rect.right() - self.SPARKLINE_WIDTH - self.BADGE_WIDTH - self.TAG_WIDTH - self.DIM_TAG_WIDTH - 24
+
+            # Dimension tag
+            dim_label, dim_color = _dim_tag(info.shape)
+            dim_rect = QRect(
+                x_cursor,
+                option.rect.top() + (option.rect.height() - 14) // 2,
+                self.DIM_TAG_WIDTH,
+                14,
+            )
+            self._draw_tag(painter, dim_rect, dim_label, dim_color)
+            x_cursor += self.DIM_TAG_WIDTH + 4
 
             # Display type tag
             dt_key = info.display_type.lower().strip() if info else ""
             tag_label, tag_color = _DISPLAY_TYPE_LABELS.get(dt_key, ("", ""))
             if tag_label:
                 tag_rect = QRect(
-                    option.rect.right() - self.SPARKLINE_WIDTH - self.BADGE_WIDTH - self.TAG_WIDTH - 16,
+                    x_cursor,
                     option.rect.top() + (option.rect.height() - 14) // 2,
                     self.TAG_WIDTH,
                     14,

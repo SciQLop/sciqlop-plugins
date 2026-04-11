@@ -33,11 +33,19 @@ def analyze_quality(
     typed_fill = None
     if fill_value is not None:
         typed_fill = np.array(fill_value, dtype=flat.dtype)
-        fill_count = int(np.sum(flat == typed_fill))
+        if np.isnan(typed_fill):
+            fill_count = int(np.sum(np.isnan(flat)))
+        else:
+            fill_count = int(np.sum(flat == typed_fill))
 
     oor_count = 0
     if valid_min is not None or valid_max is not None:
-        non_fill = flat if typed_fill is None else flat[flat != typed_fill]
+        if typed_fill is None:
+            non_fill = flat
+        elif np.isnan(typed_fill):
+            non_fill = flat[~np.isnan(flat)]
+        else:
+            non_fill = flat[flat != typed_fill]
         if valid_min is not None:
             oor_count += int(np.sum(non_fill < valid_min))
         if valid_max is not None:

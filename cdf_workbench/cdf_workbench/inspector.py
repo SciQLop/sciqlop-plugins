@@ -108,7 +108,7 @@ class CdfInspectorWidget(QWidget):
         row = 0
         fixed_attrs = {
             "Shape": str(info.shape),
-            "Type": info.cdf_type,
+            "Type": str(info.cdf_type),
             "Compression": info.compression,
         }
         for key, val in fixed_attrs.items():
