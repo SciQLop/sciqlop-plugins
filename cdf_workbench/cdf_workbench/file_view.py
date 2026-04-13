@@ -19,6 +19,11 @@ logger = logging.getLogger(__name__)
 # Size threshold for skipping sparklines (100 MB)
 SPARKLINE_SIZE_LIMIT = 100 * 1024 * 1024
 
+# A 2D variable without DISPLAY_TYPE=spectrogram is drawn as N line components.
+# Above this threshold the plot becomes unusable and freezes the UI (e.g. CDFs
+# where axis-1 is samples-per-record, not components).
+MAX_LINE_COMPONENTS = 32
+
 
 class AnalysisWorker(QObject):
     """Runs quality analysis and sparkline extraction in a background thread."""
@@ -85,6 +90,8 @@ def _is_plottable(info: VariableInfo) -> bool:
         return False
     ndim = len(info.shape)
     if ndim == 0 or ndim > 2 or any(s == 0 for s in info.shape):
+        return False
+    if ndim == 2 and info.display_type.lower() != "spectrogram" and info.shape[1] > MAX_LINE_COMPONENTS:
         return False
     return True
 

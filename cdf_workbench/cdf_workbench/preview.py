@@ -21,13 +21,15 @@ def _sciqlop_palette(n: int = 32) -> list[QColor]:
     return [QColor(int(r * 255), int(g * 255), int(b * 255)) for r, g, b in seaborn_color_palette(n_colors=n)]
 
 
-def _make_theme(parent=None):
+def _make_theme():
+    # Never pass a parent to SciQLopTheme — set_theme takes ownership and
+    # a double-owned theme crashes when the plot is reparented/destroyed.
     if SciQLopTheme is None:
         return None
     try:
         from SciQLop.components.theming.palette import SCIQLOP_PALETTE
         is_dark = QColor(SCIQLOP_PALETTE.get("Window", "#ffffff")).lightnessF() < 0.5
-        theme = SciQLopTheme.dark(parent) if is_dark else SciQLopTheme.light(parent)
+        theme = SciQLopTheme.dark() if is_dark else SciQLopTheme.light()
         _MAP = {
             "set_background": "Base",
             "set_foreground": "Text",
@@ -45,7 +47,7 @@ def _make_theme(parent=None):
             theme.set_legend_background(c)
         return theme
     except Exception:
-        return SciQLopTheme.dark(parent) if SciQLopTheme else None
+        return SciQLopTheme.dark() if SciQLopTheme else None
 
 
 class CdfPreviewWidget(QWidget):
@@ -70,7 +72,7 @@ class CdfPreviewWidget(QWidget):
         palette = _sciqlop_palette()
         for p in self._plots.values():
             p.set_color_palette(palette)
-            theme = _make_theme(p)
+            theme = _make_theme()
             if theme is not None:
                 p.set_theme(theme)
             self._layout.addWidget(p)
