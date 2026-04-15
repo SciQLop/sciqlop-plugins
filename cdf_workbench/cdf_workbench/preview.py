@@ -9,6 +9,7 @@ try:
 except ImportError:
     SciQLopTheme = None
 from seaborn import color_palette as seaborn_color_palette
+from SciQLop.core.plot_hints import PlotHints, apply_plot_hints
 
 
 def _to_f64(arr: np.ndarray) -> np.ndarray:
@@ -99,18 +100,14 @@ class CdfPreviewWidget(QWidget):
         values: np.ndarray,
         epochs: np.ndarray | None = None,
         depend_1: np.ndarray | None = None,
-        labels: list[str] | None = None,
-        units: str = "",
-        scale_type: str = "linear",
-        depend_1_units: str = "",
-        depend_1_scale: str = "linear",
-        display_type: str = "",
+        hints: PlotHints | None = None,
         is_time_axis: bool = False,
     ):
+        hints = hints or PlotHints()
         x = _to_f64(epochs) if epochs is not None else np.arange(len(values), dtype=np.float64)
         v = _to_f64(values)
-        is_spectrogram = display_type.lower() == "spectrogram" and v.ndim == 2
-        labels = labels or []
+        is_spectrogram = hints.display_type == "spectrogram" and v.ndim == 2
+        labels = list(hints.component_labels or [])
 
         if is_spectrogram:
             key = (True, is_time_axis)
@@ -122,12 +119,7 @@ class CdfPreviewWidget(QWidget):
             else:
                 self._graphs[key].set_data(x, y, v)
                 self._graphs[key].set_name(name)
-            plot.y2_axis().set_log(depend_1_scale == "log")
-            if depend_1_units:
-                plot.y2_axis().set_label(depend_1_units)
-            plot.z_axis().set_log(scale_type == "log")
-            if units:
-                plot.z_axis().set_label(units)
+            apply_plot_hints(plot, hints)
             if is_time_axis:
                 plot.x_axis().set_range(SciQLopPlotRange(float(x[0]), float(x[-1])))
             plot.rescale_axes()
@@ -147,9 +139,7 @@ class CdfPreviewWidget(QWidget):
                 shiboken6.delete(self._graphs[key])
                 self._graphs[key] = None
             self._graphs[key] = plot.line(x, v, labels=labels)
-            plot.y_axis().set_log(scale_type == "log")
-            if units:
-                plot.y_axis().set_label(units)
+            apply_plot_hints(plot, hints)
             if is_time_axis:
                 plot.x_axis().set_range(SciQLopPlotRange(float(x[0]), float(x[-1])))
             plot.rescale_axes()

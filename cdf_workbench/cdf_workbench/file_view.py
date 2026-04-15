@@ -254,19 +254,21 @@ class CdfFileView(QWidget):
             self._preview.clear()
             return
         try:
+            from SciQLop.core.istp_hints import istp_metadata_to_hints
+
             var = self._cdf[info.name]
             values = var.values
             epochs, is_time_axis = self._resolve_epochs(info, values)
 
             depend_1 = None
-            depend_1_units = ""
-            depend_1_scale = "linear"
+            depend_1_meta: dict | None = None
             if info.depend_1 and info.depend_1 in self._cdf:
                 d1_var = self._cdf[info.depend_1]
-                d1 = d1_var.values.astype(np.float64)
-                depend_1 = d1
-                depend_1_units = str(d1_var.attributes["UNITS"][0]) if "UNITS" in d1_var.attributes else ""
-                depend_1_scale = str(d1_var.attributes["SCALETYP"][0]) if "SCALETYP" in d1_var.attributes else "linear"
+                depend_1 = d1_var.values.astype(np.float64)
+                depend_1_meta = {
+                    k: list(v) if hasattr(v, "__iter__") and not isinstance(v, str) else v
+                    for k, v in d1_var.attributes.items()
+                }
 
             # Ensure DEPEND_1 channels are ascending (some CDF files
             # store energy channels high-to-low); flip both axes together.
@@ -281,18 +283,20 @@ class CdfFileView(QWidget):
                 typed_fill = np.array(info.fill_value, dtype=values.dtype)
                 values = np.where(values == typed_fill, np.nan, values.astype(float))
 
-            labels = self._resolve_labels(info)
+            meta = dict(info.all_attributes)
+            if depend_1_meta is not None:
+                meta["_depend_1"] = depend_1_meta
+            hints = istp_metadata_to_hints(meta)
+
+            resolved_labels = self._resolve_labels(info)
+            if resolved_labels:
+                hints = hints.model_copy(update={"component_labels": resolved_labels})
 
             self._preview.plot_variable(
                 values=values,
                 epochs=epochs,
                 depend_1=depend_1,
-                labels=labels,
-                units=info.units,
-                scale_type=info.scale_type,
-                depend_1_units=depend_1_units,
-                depend_1_scale=depend_1_scale,
-                display_type=info.display_type,
+                hints=hints,
                 is_time_axis=is_time_axis,
             )
         except Exception:
