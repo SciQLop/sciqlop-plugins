@@ -1,0 +1,16 @@
+{
+  "name": "Claude Chat",
+  "version": "0.1.0",
+  "description": "Embedded Claude chat dock for SciQLop. Uses the Claude Code CLI's OAuth login — no API key required.",
+  "authors": [
+    {
+      "name": "Alexis Jeandet",
+      "email": "alexis.jeandet@member.fsf.org",
+      "organization": "LPP"
+    }
+  ],
+  "license": "MIT",
+  "python_dependencies": ["claude-agent-sdk"],
+  "dependencies": [],
+  "disabled": false
+}

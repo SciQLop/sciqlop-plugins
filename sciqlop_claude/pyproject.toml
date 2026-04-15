@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sciqlop-claude"
+version = "0.1.0"
+description = "Claude chat dock for SciQLop (powered by Claude Code CLI via the Claude Agent SDK)"
+requires-python = ">=3.10"
+dependencies = ["claude-agent-sdk>=0.1.0"]
+
+[project.entry-points."sciqlop.plugins"]
+sciqlop_claude = "sciqlop_claude"
+
+[tool.setuptools.packages.find]
+include = ["sciqlop_claude*"]
+
+[tool.setuptools.package-data]
+sciqlop_claude = ["plugin.json"]
