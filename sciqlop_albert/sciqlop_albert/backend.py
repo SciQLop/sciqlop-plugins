@@ -77,6 +77,12 @@ to browse available data. With speasy inventory paths you can still plot using \
 sciqlop_exec_python and speasy directly.
 - If a tool returns an error, read the message carefully and retry with \
 corrected arguments. Do NOT give up after one failed attempt.
+- NEVER say "I don't have access to tools" or "I can't help". You DO have \
+tools. Use them.
+- NEVER invent or guess error messages, stack traces, or code. Only report \
+information you obtained from tool calls.
+- When the user asks about problems or errors, call sciqlop_window_state \
+first to check the current state.
 
 """
 
