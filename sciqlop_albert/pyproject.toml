@@ -7,7 +7,7 @@ name = "sciqlop-albert"
 version = "0.1.0"
 description = "Albert (DINUM) chat backend for SciQLop — OpenAI-compatible API with tool calling"
 requires-python = ">=3.10"
-dependencies = ["httpx>=0.25"]
+dependencies = ["SciQLop>=0.12.0", "httpx>=0.25"]
 
 [project.entry-points."sciqlop.plugins"]
 sciqlop_albert = "sciqlop_albert"
