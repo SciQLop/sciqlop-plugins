@@ -96,8 +96,9 @@ def fetch_models() -> List[tuple[str, Optional[str]]]:
             timeout=10,
         )
         resp.raise_for_status()
+        _CHAT_TYPES = {"text-generation", "image-text-to-text"}
         for m in resp.json().get("data", []):
-            if m.get("type") == "text-generation":
+            if m.get("type") in _CHAT_TYPES:
                 model_id = m["id"]
                 choices.append((model_id, model_id))
     except Exception:
