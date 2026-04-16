@@ -70,6 +70,14 @@ Step 9: sciqlop_screenshot_panel(name="Panel0")
 KEY: each "//" separates one tree level. Drill down one level at a time \
 until you find the exact parameter. Do NOT skip levels or guess paths.
 
+TROUBLESHOOTING:
+- If sciqlop_products_tree("") returns empty, the tree may still be loading. \
+Wait a moment and try again, or use sciqlop_speasy_inventory("") as fallback \
+to browse available data. With speasy inventory paths you can still plot using \
+sciqlop_exec_python and speasy directly.
+- If a tool returns an error, read the message carefully and retry with \
+corrected arguments. Do NOT give up after one failed attempt.
+
 """
 
 _WRITES_ENABLED = """\
