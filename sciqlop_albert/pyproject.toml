@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sciqlop-albert"
+version = "0.1.0"
+description = "Albert (DINUM) chat backend for SciQLop — OpenAI-compatible API with tool calling"
+requires-python = ">=3.10"
+dependencies = ["httpx>=0.25"]
+
+[project.entry-points."sciqlop.plugins"]
+sciqlop_albert = "sciqlop_albert"
+
+[tool.setuptools.packages.find]
+include = ["sciqlop_albert*"]
+
+[tool.setuptools.package-data]
+sciqlop_albert = ["plugin.json", "resources/*"]
