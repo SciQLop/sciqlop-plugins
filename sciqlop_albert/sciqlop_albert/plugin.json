@@ -1,0 +1,16 @@
+{
+  "name": "Albert Chat",
+  "version": "0.1.0",
+  "description": "Albert (DINUM/Etalab) chat backend for SciQLop. Uses the OpenAI-compatible API at albert.api.etalab.gouv.fr.",
+  "authors": [
+    {
+      "name": "Alexis Jeandet",
+      "email": "alexis.jeandet@member.fsf.org",
+      "organization": "LPP"
+    }
+  ],
+  "license": "MIT",
+  "python_dependencies": ["httpx"],
+  "dependencies": [],
+  "disabled": false
+}
