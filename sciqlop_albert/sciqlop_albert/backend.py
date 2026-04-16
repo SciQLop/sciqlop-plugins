@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import uuid
 from pathlib import Path
 from typing import AsyncIterator, Dict, List, Optional
 
@@ -185,7 +186,7 @@ class AlbertBackend:
                                     {"id": "", "function": {"name": "", "arguments": ""}}
                                 )
                             tc = tool_calls[idx]
-                            if "id" in tc_delta:
+                            if tc_delta.get("id"):
                                 tc["id"] = tc_delta["id"]
                             fn = tc_delta.get("function", {})
                             if "name" in fn:
@@ -196,6 +197,10 @@ class AlbertBackend:
             if not tool_calls:
                 self._history.append({"role": "assistant", "content": assistant_text})
                 break
+
+            for tc in tool_calls:
+                if not tc["id"]:
+                    tc["id"] = f"call_{uuid.uuid4().hex[:24]}"
 
             self._history.append({
                 "role": "assistant",
