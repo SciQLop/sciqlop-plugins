@@ -145,13 +145,20 @@ class AlbertBackend:
             assistant_text = ""
             tool_calls: List[dict] = []
 
+            request_body = self._build_request()
             async with self._client.stream(
                 "POST",
                 f"{self._base_url}/chat/completions",
                 headers=self._headers,
-                json=self._build_request(),
+                json=request_body,
             ) as resp:
-                resp.raise_for_status()
+                if resp.status_code >= 400:
+                    body = await resp.aread()
+                    raise httpx.HTTPStatusError(
+                        f"{resp.status_code}: {body.decode(errors='replace')}",
+                        request=resp.request,
+                        response=resp,
+                    )
                 async for line in resp.aiter_lines():
                     if not line.startswith("data: "):
                         continue
