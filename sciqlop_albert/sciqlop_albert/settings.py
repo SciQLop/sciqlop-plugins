@@ -37,7 +37,7 @@ class AlbertSettings(ConfigEntry):
         json_schema_extra={"widget": "password"},
     )
     temperature: float = Field(
-        default=0.7,
+        default=0.3,
         description="Sampling temperature (0 = deterministic, 2 = max randomness)",
         ge=0.0,
         le=2.0,
