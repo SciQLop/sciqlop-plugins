@@ -1,5 +1,5 @@
 """Albert backend settings — API key stored in the system keyring."""
-from pydantic import Field
+from pydantic import Field, field_validator
 from SciQLop.components.settings import SettingsCategory
 from SciQLop.components.settings.backend import ConfigEntry
 
@@ -53,6 +53,24 @@ class AlbertSettings(ConfigEntry):
         description="Maximum number of tokens in the response (0 = no limit)",
         ge=0,
     )
+
+    # Clamp out-of-range persisted values so stale or hand-edited YAML
+    # doesn't crash the settings panel.
+    @field_validator("top_p", mode="before")
+    @classmethod
+    def _clamp_top_p(cls, v):
+        try:
+            return max(0.0, min(1.0, float(v)))
+        except (TypeError, ValueError):
+            return v
+
+    @field_validator("temperature", mode="before")
+    @classmethod
+    def _clamp_temperature(cls, v):
+        try:
+            return max(0.0, min(2.0, float(v)))
+        except (TypeError, ValueError):
+            return v
 
     def __init__(self, **data):
         super().__init__(**data)
