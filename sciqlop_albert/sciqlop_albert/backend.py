@@ -173,7 +173,6 @@ class AlbertBackend:
         self._tempdir.mkdir(parents=True, exist_ok=True)
         self._model: Optional[str] = None
         self._history: List[dict] = []
-        self._client = httpx.AsyncClient(timeout=120)
 
     async def ask(
         self, prompt: str, image_paths: Optional[List[str]] = None
@@ -181,56 +180,22 @@ class AlbertBackend:
         self._history.append({"role": "user", "content": prompt})
 
         while True:
-            assistant_text = ""
+            assistant_text_parts: List[str] = []
             tool_calls: List[dict] = []
 
             request_body = self._build_request()
-            async with self._client.stream(
-                "POST",
-                f"{self._base_url}/chat/completions",
-                headers=self._headers,
-                json=request_body,
-            ) as resp:
-                if resp.status_code >= 400:
-                    body = await resp.aread()
-                    raise httpx.HTTPStatusError(
-                        f"{resp.status_code}: {body.decode(errors='replace')}",
-                        request=resp.request,
-                        response=resp,
-                    )
-                async for line in resp.aiter_lines():
-                    if not line.startswith("data: "):
-                        continue
-                    payload = line[6:]
-                    if payload.strip() == "[DONE]":
-                        break
-                    chunk = json.loads(payload)
-                    choices = chunk.get("choices", [])
-                    if not choices:
-                        continue
-                    delta = choices[0].get("delta", {})
+            url = f"{self._base_url}/chat/completions"
 
-                    # Text content
-                    if "content" in delta and delta["content"]:
-                        assistant_text += delta["content"]
-                        yield TextBlock(text=delta["content"])
+            async for block in _stream_sse(
+                url, self._headers, request_body, assistant_text_parts, tool_calls
+            ):
+                yield block
 
-                    # Tool calls (streamed incrementally)
-                    if "tool_calls" in delta:
-                        for tc_delta in delta["tool_calls"]:
-                            idx = tc_delta["index"]
-                            while len(tool_calls) <= idx:
-                                tool_calls.append(
-                                    {"id": "", "function": {"name": "", "arguments": ""}}
-                                )
-                            tc = tool_calls[idx]
-                            if tc_delta.get("id"):
-                                tc["id"] = tc_delta["id"]
-                            fn = tc_delta.get("function", {})
-                            if "name" in fn:
-                                tc["function"]["name"] += fn["name"]
-                            if "arguments" in fn:
-                                tc["function"]["arguments"] += fn["arguments"]
+            assistant_text = "".join(assistant_text_parts)
+            tool_calls = [
+                tc for tc in tool_calls
+                if (tc.get("function", {}).get("name") or "").strip()
+            ]
 
             if not tool_calls:
                 self._history.append({"role": "assistant", "content": assistant_text})
@@ -372,3 +337,90 @@ def _build_openai_tools(tools: List[dict]) -> List[dict]:
         }
         for t in tools
     ]
+
+
+async def _stream_sse(
+    url: str,
+    headers: dict,
+    body: dict,
+    out_text: List[str],
+    out_tool_calls: List[dict],
+) -> AsyncIterator[TextBlock]:
+    """Stream OpenAI-shaped SSE. Yields text blocks as they arrive; also
+    collects assistant text and tool-call deltas into the given lists.
+
+    Uses *sync* httpx in a worker thread and bridges chunks to the async
+    side through an asyncio.Queue. This avoids the anyio 'cancel scope in
+    a different task' noise that httpx.AsyncClient produces under qasync.
+    """
+    loop = asyncio.get_running_loop()
+    queue: asyncio.Queue = asyncio.Queue()
+    sentinel: object = object()
+    error_holder: List[BaseException] = []
+
+    def put(item) -> None:
+        loop.call_soon_threadsafe(queue.put_nowait, item)
+
+    def consume_line(line: str) -> None:
+        if not line.startswith("data: "):
+            return
+        data = line[6:]
+        if data.strip() == "[DONE]":
+            return
+        chunk = json.loads(data)
+        choices = chunk.get("choices", [])
+        if not choices:
+            return
+        delta = choices[0].get("delta", {})
+        if "content" in delta and delta["content"]:
+            out_text.append(delta["content"])
+            put(TextBlock(text=delta["content"]))
+        if "tool_calls" in delta:
+            for tc_delta in delta["tool_calls"]:
+                idx = tc_delta["index"]
+                while len(out_tool_calls) <= idx:
+                    out_tool_calls.append(
+                        {"id": "", "function": {"name": "", "arguments": ""}}
+                    )
+                tc = out_tool_calls[idx]
+                if tc_delta.get("id"):
+                    tc["id"] = tc_delta["id"]
+                fn = tc_delta.get("function", {})
+                if "name" in fn:
+                    tc["function"]["name"] += fn["name"]
+                if "arguments" in fn:
+                    tc["function"]["arguments"] += fn["arguments"]
+
+    def blocking_reader() -> None:
+        try:
+            with httpx.Client(timeout=120) as client:
+                with client.stream("POST", url, headers=headers, json=body) as resp:
+                    if resp.status_code >= 400:
+                        payload = resp.read()
+                        raise httpx.HTTPStatusError(
+                            f"{resp.status_code}: {payload.decode(errors='replace')}",
+                            request=resp.request,
+                            response=resp,
+                        )
+                    for line in resp.iter_lines():
+                        consume_line(line)
+        except BaseException as e:
+            error_holder.append(e)
+        finally:
+            put(sentinel)
+
+    future = loop.run_in_executor(None, blocking_reader)
+    try:
+        while True:
+            item = await queue.get()
+            if item is sentinel:
+                break
+            yield item
+    finally:
+        try:
+            await future
+        except BaseException:
+            pass
+
+    if error_holder:
+        raise error_holder[0]
