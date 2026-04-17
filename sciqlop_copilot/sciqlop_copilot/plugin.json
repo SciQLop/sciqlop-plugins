@@ -1,0 +1,16 @@
+{
+  "name": "GitHub Copilot Chat",
+  "version": "0.1.0",
+  "description": "GitHub Copilot Chat backend for SciQLop. Reuses the same endpoint used by copilot.vim / JetBrains / VS Code plugins. Requires an active Copilot subscription; sign in via Tools → Sign in to GitHub Copilot.",
+  "authors": [
+    {
+      "name": "Alexis Jeandet",
+      "email": "alexis.jeandet@member.fsf.org",
+      "organization": "LPP"
+    }
+  ],
+  "license": "MIT",
+  "python_dependencies": ["httpx"],
+  "dependencies": [],
+  "disabled": false
+}
