@@ -12,7 +12,7 @@ from PySide6.QtGui import QIcon
 from SciQLop.components.agents import ensure_agent_dock, register_agent_backend
 from SciQLop.components.theming.icons import register_icon, theme_adapted_icon
 
-from .backend import ClaudeBackend
+from .backend import ClaudeBackend, fetch_models
 
 _ICON_NAME = "sciqlop_claude_chat"
 _ICON_PATH = str(Path(__file__).parent / "resources" / "chat.svg")
@@ -22,6 +22,10 @@ _DOCK_TITLE = "Agents"
 def load(main_window):
     register_icon(_ICON_NAME, lambda: QIcon(_ICON_PATH))
     icon = theme_adapted_icon(_ICON_NAME)
+
+    models = fetch_models()
+    if models:
+        ClaudeBackend.model_choices = models
 
     register_agent_backend(ClaudeBackend)
     dock = ensure_agent_dock(main_window)

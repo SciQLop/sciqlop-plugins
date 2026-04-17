@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import shutil
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import AsyncIterator, Callable, List, Optional
 
@@ -41,12 +42,46 @@ except Exception as e:  # pragma: no cover
 
 _MCP_SERVER_NAME = "sciqlop"
 
-_MODEL_CHOICES: List[tuple[str, Optional[str]]] = [
+_DEFAULT_MODEL_CHOICES: List[tuple[str, Optional[str]]] = [
     ("Default (Claude Code)", None),
-    ("Sonnet", "sonnet"),
-    ("Opus", "opus"),
-    ("Haiku", "haiku"),
 ]
+
+
+def fetch_models(timeout: float = 10.0) -> List[tuple[str, Optional[str]]]:
+    """Fetch the live model list from the `claude` CLI.
+
+    The CLI returns `{value, displayName, description}` per model via the
+    initialize control request. We map `value == "default"` to `None` so the
+    backend keeps its "no override" semantic.
+    """
+    if not _SDK_AVAILABLE or not claude_cli_available():
+        return list(_DEFAULT_MODEL_CHOICES)
+
+    async def _run() -> list:
+        async with ClaudeSDKClient(options=ClaudeAgentOptions()) as client:
+            info = await client.get_server_info() or {}
+            return info.get("models") or []
+
+    # Run in a worker thread with its own loop — plugin load happens while
+    # SciQLop's qasync loop is already running, so asyncio.run() here would
+    # raise "cannot be called from a running event loop".
+    def _blocking() -> list:
+        return asyncio.run(asyncio.wait_for(_run(), timeout=timeout))
+
+    try:
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            raw = pool.submit(_blocking).result(timeout=timeout + 2.0)
+    except Exception:
+        return list(_DEFAULT_MODEL_CHOICES)
+
+    choices: List[tuple[str, Optional[str]]] = []
+    for m in raw:
+        value = m.get("value")
+        label = m.get("displayName") or value
+        if not value or not label:
+            continue
+        choices.append((label, None if value == "default" else value))
+    return choices or list(_DEFAULT_MODEL_CHOICES)
 
 SYSTEM_PROMPT = (
     "You are a helper embedded inside SciQLop, a Qt desktop application for "
@@ -126,7 +161,7 @@ def sdk_available() -> tuple[bool, Optional[str]]:
 
 class ClaudeBackend:
     display_name = "Claude"
-    model_choices = _MODEL_CHOICES
+    model_choices: List[tuple[str, Optional[str]]] = list(_DEFAULT_MODEL_CHOICES)
     supports_sessions = True
 
     def __init__(self, ctx: BackendContext):
