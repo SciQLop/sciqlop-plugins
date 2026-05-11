@@ -1,0 +1,15 @@
+{
+  "name": "Radio Spectra",
+  "version": "0.1.0",
+  "description": "Heliospheric radio dynamic-spectra browser for SciQLop",
+  "authors": [
+    {
+      "name": "Alexis Jeandet",
+      "email": "alexis.jeandet@member.fsf.org",
+      "organization": "LPP"
+    }
+  ],
+  "license": "MIT",
+  "dependencies": [],
+  "disabled": true
+}
