@@ -190,6 +190,8 @@ def load(main_window):
             toggle_action.setIcon(icon)
             main_window.toolBar.addAction(toggle_action)
 
-    main_window.toolsMenu.addAction(icon, "Agent Chat", dock.show)
+    # The "Agent Chat" entry in the Tools menu is added by
+    # SciQLop.components.agents.ensure_agent_dock (idempotent) so multiple
+    # backend plugins don't produce duplicate entries.
 
     return dock
