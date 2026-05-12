@@ -25,10 +25,10 @@ def fake_radiospectra(monkeypatch):
     fake.Spectrogram = Spectrogram
     fake.SpectrogramSequence = SpectrogramSequence
     import sys
-    sys.modules["radiospectra"] = fake
-    sys.modules["radiospectra.spectrogram"] = types.SimpleNamespace(
+    monkeypatch.setitem(sys.modules, "radiospectra", fake)
+    monkeypatch.setitem(sys.modules, "radiospectra.spectrogram", types.SimpleNamespace(
         Spectrogram=Spectrogram, SpectrogramSequence=SpectrogramSequence
-    )
+    ))
     return fake
 
 
