@@ -26,6 +26,9 @@ sciqlop_sismo = "sciqlop_sismo"
 [tool.setuptools.packages.find]
 include = ["sciqlop_sismo*"]
 
+[tool.setuptools.package-data]
+sciqlop_sismo = ["plugin.json"]
+
 [tool.pytest.ini_options]
 markers = ["live: tests that hit real FDSN data centers (slow; skipped by default)"]
 addopts = "-m 'not live'"

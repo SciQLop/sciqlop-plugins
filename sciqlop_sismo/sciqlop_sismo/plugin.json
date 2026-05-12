@@ -1,0 +1,16 @@
+{
+  "name": "Sismo",
+  "version": "0.1.0",
+  "description": "FDSN/ObsPy seismic waveforms exposed as Speasy products",
+  "authors": [
+    {
+      "name": "Alexis Jeandet",
+      "email": "alexis.jeandet@member.fsf.org",
+      "organization": "LPP"
+    }
+  ],
+  "license": "MIT",
+  "python_dependencies": ["obspy>=1.4", "speasy>=1.7", "numpy", "scipy", "pydantic>=2", "PyYAML", "SciQLop>=0.12.0"],
+  "dependencies": ["speasy_provider"],
+  "disabled": false
+}
