@@ -31,6 +31,10 @@ def _do_search(source, t_start: datetime, t_end: datetime) -> list[Any]:
     """Run Fido.search synchronously; return a flat list of result rows.
 
     Isolated so tests can patch it without touching sunpy.
+
+    Raises RuntimeError if Fido attached errors to the response (e.g.
+    upstream radiospectra/sunpy Scraper API mismatch) — otherwise those
+    errors would surface as a silent zero-rows result.
     """
     from sunpy.net import Fido, attrs as a  # type: ignore
 
@@ -45,16 +49,29 @@ def _do_search(source, t_start: datetime, t_end: datetime) -> list[Any]:
     for table in response:
         for row in table:
             rows.append(row)
+
+    errors = list(getattr(response, "errors", []) or [])
+    if errors and not rows:
+        details = "; ".join(f"{type(e).__name__}: {e}" for e in errors)
+        raise RuntimeError(f"Fido client errors (no rows returned): {details}")
     return rows
 
 
 def _do_fetch(rows: Iterable[Any], cache_dir: Path) -> list[Path]:
-    """Run Fido.fetch synchronously; return list of local paths in row order."""
+    """Run Fido.fetch synchronously; return list of local paths in row order.
+
+    Fido.fetch refuses a plain Python list (it wants QueryResponseRow /
+    QueryResponseTable / UnifiedResponse), so we drive it one row at a
+    time. This is what gives us per-file failure isolation too.
+    """
     from sunpy.net import Fido  # type: ignore
 
     cache_dir.mkdir(parents=True, exist_ok=True)
-    result = Fido.fetch(list(rows), path=str(cache_dir / "{file}"))
-    return [Path(p) for p in result]
+    paths: list[Path] = []
+    for row in rows:
+        result = Fido.fetch(row, path=str(cache_dir / "{file}"))
+        paths.extend(Path(p) for p in result)
+    return paths
 
 
 def _cache_path_for(row: Any, cache_dir: Path) -> Path:

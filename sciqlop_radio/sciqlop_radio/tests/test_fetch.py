@@ -97,6 +97,37 @@ def test_format_time_for_fido_output_parses_with_astropy():
     Time(_format_time_for_fido(aware))  # must not raise
 
 
+def test_do_search_surfaces_response_errors(monkeypatch):
+    """When Fido attaches client-side errors AND returns no rows, _do_search
+    must raise so the dock shows a real message instead of 'Found 0 file(s)'.
+    Regression for the radiospectra/sunpy Scraper API mismatch."""
+    from types import SimpleNamespace
+
+    from sciqlop_radio import fetch as fetch_mod
+    from sciqlop_radio.sources import SOURCES
+
+    class FakeResponse:
+        errors = [TypeError("Scraper.__init__() missing 1 required positional argument: 'format'")]
+        def __iter__(self):
+            return iter([])  # zero tables
+
+    fake_Fido = SimpleNamespace(search=lambda *args, **kwargs: FakeResponse())
+    fake_attrs = SimpleNamespace(
+        Time=lambda *a, **k: object(),
+        Instrument=lambda *a, **k: object(),
+    )
+
+    import sys, types
+    fake_sunpy_net = types.ModuleType("sunpy.net")
+    fake_sunpy_net.Fido = fake_Fido
+    fake_sunpy_net.attrs = fake_attrs
+    monkeypatch.setitem(sys.modules, "sunpy.net", fake_sunpy_net)
+
+    src = next(s for s in SOURCES if s.fido_instrument)
+    with pytest.raises(RuntimeError, match="Fido client errors"):
+        fetch_mod._do_search(src, datetime(2024, 5, 1, tzinfo=timezone.utc), datetime(2024, 5, 2, tzinfo=timezone.utc))
+
+
 def test_fetch_uses_cache_hit(qapp, tmp_path):
     from sciqlop_radio.fetch import RadioFetchService
 
