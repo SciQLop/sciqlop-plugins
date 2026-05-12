@@ -101,3 +101,48 @@ def test_search_error_lands_in_status_bar(qtbot, dock):
 def _Qt_LeftButton():
     from PySide6.QtCore import Qt
     return Qt.MouseButton.LeftButton
+
+
+def test_plot_waveform_calls_create_plot_panel(qtbot, dock, fake_inventory, mock_provider):
+    tab = dock.stations_tab
+    with patch("sciqlop_sismo.dock_stations.search_stations", return_value=fake_inventory):
+        with qtbot.waitSignal(tab.search_finished, timeout=5000):
+            qtbot.mouseClick(tab.search_button, _Qt_LeftButton())
+    model = tab.results_tree.model()
+    chan = model.index(0, 0, model.index(0, 0, model.index(0, 0)))
+    sel = tab.results_tree.selectionModel()
+    sel.select(chan, sel.SelectionFlag.ClearAndSelect | sel.SelectionFlag.Rows)
+    panel = MagicMock()
+    with patch("sciqlop_sismo.dock_stations._create_plot_panel", return_value=panel) as cpp:
+        qtbot.mouseClick(tab.plot_waveform_button, _Qt_LeftButton())
+    cpp.assert_called_once()
+    panel.plot_product.assert_called_once_with("sismo/G/SSB/00.HHZ/waveform")
+
+
+def test_plot_spectrogram_uses_spectrogram_uid(qtbot, dock, fake_inventory, mock_provider):
+    tab = dock.stations_tab
+    with patch("sciqlop_sismo.dock_stations.search_stations", return_value=fake_inventory):
+        with qtbot.waitSignal(tab.search_finished, timeout=5000):
+            qtbot.mouseClick(tab.search_button, _Qt_LeftButton())
+    model = tab.results_tree.model()
+    chan = model.index(0, 0, model.index(0, 0, model.index(0, 0)))
+    sel = tab.results_tree.selectionModel()
+    sel.select(chan, sel.SelectionFlag.ClearAndSelect | sel.SelectionFlag.Rows)
+    panel = MagicMock()
+    with patch("sciqlop_sismo.dock_stations._create_plot_panel", return_value=panel):
+        qtbot.mouseClick(tab.plot_spectrogram_button, _Qt_LeftButton())
+    panel.plot_product.assert_called_once_with("sismo/G/SSB/00.HHZ/spectrogram")
+
+
+def test_plot_buttons_noop_when_create_plot_panel_unavailable(qtbot, dock, fake_inventory, mock_provider):
+    tab = dock.stations_tab
+    with patch("sciqlop_sismo.dock_stations.search_stations", return_value=fake_inventory):
+        with qtbot.waitSignal(tab.search_finished, timeout=5000):
+            qtbot.mouseClick(tab.search_button, _Qt_LeftButton())
+    model = tab.results_tree.model()
+    chan = model.index(0, 0, model.index(0, 0, model.index(0, 0)))
+    sel = tab.results_tree.selectionModel()
+    sel.select(chan, sel.SelectionFlag.ClearAndSelect | sel.SelectionFlag.Rows)
+    with patch("sciqlop_sismo.dock_stations._create_plot_panel", side_effect=ImportError):
+        qtbot.mouseClick(tab.plot_waveform_button, _Qt_LeftButton())
+    assert "SciQLop" in dock.status_label.text() or "unavailable" in dock.status_label.text().lower()

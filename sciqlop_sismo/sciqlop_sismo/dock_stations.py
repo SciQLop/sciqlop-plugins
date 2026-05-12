@@ -21,6 +21,16 @@ from PySide6.QtWidgets import (
 from .fdsn_client import search_stations
 
 
+def _create_plot_panel():
+    """Lazy import of SciQLop's plot panel helper.
+
+    Raises ImportError if SciQLop's host runtime is not available
+    (e.g. headless test).
+    """
+    from SciQLop.user_api.plot import create_plot_panel
+    return create_plot_panel()
+
+
 class _SearchSignals(QObject):
     completed = Signal(object)
     failed = Signal(str)
@@ -94,12 +104,17 @@ class StationsTab(QWidget):
 
         buttons = QHBoxLayout()
         self.add_button = QPushButton("Add to inventory")
-        buttons.addWidget(self.add_button)
+        self.plot_waveform_button = QPushButton("Plot waveform")
+        self.plot_spectrogram_button = QPushButton("Plot spectrogram")
+        for b in (self.add_button, self.plot_waveform_button, self.plot_spectrogram_button):
+            buttons.addWidget(b)
         buttons.addStretch(1)
         root.addLayout(buttons)
 
         self.search_button.clicked.connect(self._on_search_clicked)
         self.add_button.clicked.connect(self._on_add_clicked)
+        self.plot_waveform_button.clicked.connect(lambda: self._on_plot_clicked("waveform"))
+        self.plot_spectrogram_button.clicked.connect(lambda: self._on_plot_clicked("spectrogram"))
 
     def _on_search_clicked(self):
         self._status_sink(f"Searching {self.routing_combo.currentText()}…")
@@ -171,6 +186,26 @@ class StationsTab(QWidget):
                 routing=self.routing_combo.currentText(),
             )
         self._status_sink(f"Added {len(rows)} channel(s) to inventory")
+
+    def _on_plot_clicked(self, kind: str):
+        rows = self._selected_channel_rows()
+        if not rows:
+            self._status_sink("No channel selected")
+            return
+        # Make sure rows are in the inventory before plotting.
+        self._on_add_clicked()
+        try:
+            panel = _create_plot_panel()
+        except ImportError:
+            self._status_sink("SciQLop main-window plot API unavailable")
+            return
+        for payload in rows:
+            uid = (
+                f"sismo/{payload['network']}/{payload['station']}/"
+                f"{payload['location']}.{payload['channel']}/{kind}"
+            )
+            panel.plot_product(uid)
+        self._status_sink(f"Plotted {len(rows)} {kind}(s)")
 
     def _selected_channel_rows(self) -> list[dict]:
         rows = []
