@@ -159,6 +159,19 @@ def test_inventory_persisted_to_yaml(tmp_path, monkeypatch):
     assert "sismo/G/SSB/00.HHZ" in p2.flat_inventory.datasets
 
 
+def test_remove_channel_persists_across_reload(tmp_path, monkeypatch):
+    monkeypatch.setenv("SCIQLOP_SISMO_INVENTORY_DIR", str(tmp_path))
+    p1 = SismoProvider()
+    p1.add_channel(
+        network="G", station="SSB", location="00", channel="HHZ",
+        start_date=_utc(2020, 1, 1), stop_date=_utc(2030, 1, 1),
+        sampling_rate_hz=100.0, routing="iris-federator",
+    )
+    p1.remove_channel("G", "SSB", "00", "HHZ")
+    p2 = SismoProvider()
+    assert "sismo/G/SSB/00.HHZ" not in p2.flat_inventory.datasets
+
+
 def test_get_data_accepts_numpy_datetime64_and_float(provider, fake_stream):
     import numpy as np
     provider.add_channel(
