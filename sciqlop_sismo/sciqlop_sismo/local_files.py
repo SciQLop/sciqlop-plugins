@@ -41,6 +41,8 @@ def import_file(path: Path) -> List[ChannelInfo]:
     if not p.exists():
         raise FileNotFoundError(p)
     stream = obspy.read(str(p))
+    if len(stream) == 0:
+        raise ValueError(f"no traces in {p}")
     routing = f"local:{_sha1_of_path(p)}"
     out: List[ChannelInfo] = []
     seen: set[tuple[str, str, str, str]] = set()

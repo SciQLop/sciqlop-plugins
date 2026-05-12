@@ -78,3 +78,13 @@ def test_routing_includes_sha1_of_path(tmp_path):
     suffix = info.routing.removeprefix("local:")
     assert len(suffix) == 40
     int(suffix, 16)  # raises if not hex
+
+
+def test_import_file_raises_on_empty_stream(tmp_path, monkeypatch):
+    import pytest
+    from obspy import Stream
+    p = tmp_path / "empty.mseed"
+    p.write_bytes(b"")  # any path — we monkeypatch the read
+    monkeypatch.setattr("sciqlop_sismo.local_files.obspy.read", lambda _: Stream([]))
+    with pytest.raises(ValueError, match="no traces"):
+        import_file(p)
