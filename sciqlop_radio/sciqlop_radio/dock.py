@@ -13,7 +13,8 @@ from typing import Optional
 from PySide6.QtCore import QDateTime, Qt, Signal
 from PySide6.QtWidgets import (
     QComboBox, QDateTimeEdit, QFileDialog, QHBoxLayout, QLabel,
-    QListWidget, QListWidgetItem, QPushButton, QTabWidget, QVBoxLayout, QWidget,
+    QListWidget, QListWidgetItem, QMessageBox, QPushButton, QTabWidget,
+    QVBoxLayout, QWidget,
 )
 
 from .fetch import RadioFetchService
@@ -159,18 +160,39 @@ class RadioSpectraDock(QWidget):
         self._set_status(f"Fetch failed: {message}")
 
     def _open_paths(self, paths: list[Path]):
+        errors: list[tuple[str, str]] = []  # (filename, error message)
+        plotted = 0
         for path in paths:
             try:
                 spec = open_spectrogram(path)
                 plot = spectrogram_to_plot(spec, parent=self)
             except RadioPlotError as e:
-                self._set_status(f"Failed to plot {path.name}: {e}")
+                errors.append((path.name, str(e)))
                 continue
             except Exception as e:  # noqa: BLE001 — final user-facing safety net
-                self._set_status(f"Failed to plot {path.name}: {e}")
+                errors.append((path.name, f"{type(e).__name__}: {e}"))
                 continue
             self.tabs.addTab(plot, path.name)
             self.tabs.setCurrentWidget(plot)
+            plotted += 1
+
+        if errors and plotted == 0:
+            # Every file failed — pop a modal so the user can't miss it.
+            detail = "\n\n".join(f"{name}:\n  {err}" for name, err in errors)
+            box = QMessageBox(self)
+            box.setIcon(QMessageBox.Warning)
+            box.setWindowTitle("Could not plot")
+            box.setText(f"None of the {len(paths)} file(s) could be plotted.")
+            box.setDetailedText(detail)
+            box.setTextInteractionFlags(Qt.TextSelectableByMouse)
+            box.exec()
+            self._set_status(f"Plot failed for {len(errors)} file(s); see dialog for details")
+        elif errors:
+            self._set_status(
+                f"Plotted {plotted} file(s); {len(errors)} failed — last: {errors[-1][1][:120]}"
+            )
+        elif plotted:
+            self._set_status(f"Plotted {plotted} file(s)")
 
     def _close_tab(self, index: int):
         widget = self.tabs.widget(index)
