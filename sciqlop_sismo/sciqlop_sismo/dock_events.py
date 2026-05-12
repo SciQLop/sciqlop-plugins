@@ -115,12 +115,15 @@ class EventsTab(QWidget):
         self.max_radius_spin.setRange(0.0, 180.0)
         self.max_radius_spin.setValue(30.0)
         self.channel_edit = QLineEdit("HH?,BH?")
+        self.routing_combo = QComboBox()
+        self.routing_combo.addItems(["iris-federator", "eida-routing", "IRIS", "RESIF", "GEOFON", "IPGP"])
         self.find_stations_button = QPushButton("Find stations")
         self.add_all_button = QPushButton("Add all to inventory")
         for label, w in (
             ("Min radius°", self.min_radius_spin),
             ("Max radius°", self.max_radius_spin),
             ("Chan filter", self.channel_edit),
+            ("Routing", self.routing_combo),
         ):
             radius_row.addWidget(QLabel(label))
             radius_row.addWidget(w)
@@ -189,7 +192,7 @@ class EventsTab(QWidget):
             network="*", station="*", location="*",
             channel=self.channel_edit.text(),
             start_time=t_start, end_time=t_end,
-            routing="iris-federator",
+            routing=self.routing_combo.currentText(),
             latitude=origin.latitude, longitude=origin.longitude,
             min_radius_deg=self.min_radius_spin.value(),
             max_radius_deg=self.max_radius_spin.value(),
@@ -235,7 +238,7 @@ class EventsTab(QWidget):
                 start_date=_obspy_dt(row["start_date"]),
                 stop_date=_obspy_dt(row["end_date"]),
                 sampling_rate_hz=row["sample_rate"],
-                routing="iris-federator",
+                routing=self.routing_combo.currentText(),
             )
         self._status_sink(f"Added {len(selected)} channel(s)")
 
