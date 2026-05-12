@@ -15,10 +15,10 @@ from obspy.clients.fdsn import Client, RoutingClient
 _KNOWN_ROUTERS = {"iris-federator", "eida-routing"}
 
 
-def _client_for(routing: str):
+def _client_for(routing: str, timeout: float | None = None):
     if routing.lower() in _KNOWN_ROUTERS:
-        return RoutingClient(routing.lower())
-    return Client(routing)
+        return RoutingClient(routing.lower(), timeout=timeout) if timeout else RoutingClient(routing.lower())
+    return Client(routing, timeout=timeout) if timeout else Client(routing)
 
 
 def _to_utc(dt: datetime) -> UTCDateTime:
@@ -30,10 +30,11 @@ def fetch_stream(
     start_time: datetime,
     end_time: datetime,
     routing: str = "iris-federator",
+    timeout: float | None = None,
 ) -> Stream:
     """Fetch waveforms for one NSLC tuple. Raises if the result is empty."""
     net, sta, loc, chan = nslc
-    client = _client_for(routing)
+    client = _client_for(routing, timeout=timeout)
     stream = client.get_waveforms(
         network=net, station=sta, location=loc, channel=chan,
         starttime=_to_utc(start_time), endtime=_to_utc(end_time),
@@ -50,6 +51,7 @@ def search_stations(
     network: str, station: str, location: str, channel: str,
     start_time: datetime, end_time: datetime,
     routing: str = "iris-federator",
+    timeout: float | None = None,
     *,
     latitude: Optional[float] = None,
     longitude: Optional[float] = None,
@@ -57,7 +59,7 @@ def search_stations(
     max_radius_deg: Optional[float] = None,
 ):
     """Query the FDSN station service at channel level."""
-    client = _client_for(routing)
+    client = _client_for(routing, timeout=timeout)
     kwargs = dict(
         network=network, station=station, location=location, channel=channel,
         starttime=_to_utc(start_time), endtime=_to_utc(end_time),
@@ -82,9 +84,10 @@ def search_events(
     latitude: Optional[float] = None, longitude: Optional[float] = None,
     min_radius_deg: Optional[float] = None, max_radius_deg: Optional[float] = None,
     provider: str = "USGS",
+    timeout: float | None = None,
 ):
     """Query an FDSN event service. `provider` is an FDSN-event center."""
-    client = Client(provider)
+    client = Client(provider, timeout=timeout) if timeout else Client(provider)
     kwargs = dict(starttime=_to_utc(start_time), endtime=_to_utc(end_time))
     if min_magnitude is not None:
         kwargs["minmagnitude"] = min_magnitude

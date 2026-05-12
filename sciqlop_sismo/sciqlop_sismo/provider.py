@@ -222,7 +222,7 @@ class SismoProvider(DataProvider):
         if routing.startswith("local:"):
             path = self._find_local_path_for(nslc, routing)
             return _read_local(path)
-        return fetch_stream(nslc, t0, t1, routing=routing)
+        return fetch_stream(nslc, t0, t1, routing=routing, timeout=self._settings.fetch_timeout_s)
 
     def _find_local_path_for(self, nslc, routing):
         for record in self._pending_records:
