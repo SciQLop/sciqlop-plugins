@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
 from .fetch import RadioFetchService
 from .plot import spectrogram_to_plot, RadioPlotError
 from .reader import open_spectrogram
+from .settings import RadioSettings
 from .sources import SOURCES, RadioSource
 
 
@@ -37,8 +38,10 @@ class RadioSpectraDock(QWidget):
         super().__init__(parent)
         self.setWindowTitle("Radio Spectra")
         self._main_window = main_window
+        _cfg = RadioSettings()
         self._svc = fetch_service or RadioFetchService(
-            cache_dir=Path.home() / ".cache" / "sciqlop_radio",
+            cache_dir=_cfg.cache_dir,
+            timeout_s=_cfg.download_timeout_s,
         )
 
         root = QVBoxLayout(self)
@@ -66,10 +69,8 @@ class RadioSpectraDock(QWidget):
         times.addWidget(QLabel("End (UTC):"))
         times.addWidget(self.end_picker)
         self.fetch_button = QPushButton("Fetch")
-        self.cancel_button = QPushButton("Cancel")
-        self.cancel_button.setEnabled(False)
+        # Cancel is out-of-scope for the MVP; revisit when long-running EOVSA / SWAVES fetches surface as a real pain point.
         times.addWidget(self.fetch_button)
-        times.addWidget(self.cancel_button)
         root.addLayout(times)
 
         self.results_list = QListWidget()

@@ -14,7 +14,7 @@ from typing import Any, Iterable
 from PySide6.QtCore import QObject, QRunnable, QThreadPool, Signal
 
 
-def _do_search(source, t_start: datetime, t_end: datetime, timeout_s: int) -> list[Any]:
+def _do_search(source, t_start: datetime, t_end: datetime) -> list[Any]:
     """Run Fido.search synchronously; return a flat list of result rows.
 
     Isolated so tests can patch it without touching sunpy.
@@ -35,7 +35,7 @@ def _do_search(source, t_start: datetime, t_end: datetime, timeout_s: int) -> li
     return rows
 
 
-def _do_fetch(rows: Iterable[Any], cache_dir: Path, timeout_s: int) -> list[Path]:
+def _do_fetch(rows: Iterable[Any], cache_dir: Path) -> list[Path]:
     """Run Fido.fetch synchronously; return list of local paths in row order."""
     from sunpy.net import Fido  # type: ignore
 
@@ -62,7 +62,7 @@ class _SearchTask(QRunnable):
     def run(self):
         svc = self._svc
         try:
-            rows = _do_search(self._source, self._t_start, self._t_end, svc._timeout_s)
+            rows = _do_search(self._source, self._t_start, self._t_end)
             svc.searchCompleted.emit(rows)
         except Exception as e:
             svc.searchFailed.emit(f"{type(e).__name__}: {e}")
@@ -89,12 +89,20 @@ class _FetchTask(QRunnable):
                 to_fetch.append(row)
 
         if to_fetch:
+            paths: list = []
             try:
-                paths = _do_fetch(to_fetch, svc._cache_dir, svc._timeout_s)
+                paths = _do_fetch(to_fetch, svc._cache_dir)
                 ok.extend(paths)
             except Exception as e:
                 for row in to_fetch:
                     failed.append((row, f"{type(e).__name__}: {e}"))
+            else:
+                # Account for per-file failures that Fido swallows: if fewer files came
+                # back than were requested, mark the deficit as failed (we lack a
+                # row→path mapping from Fido, so report a count discrepancy).
+                if len(paths) < len(to_fetch):
+                    deficit = len(to_fetch) - len(paths)
+                    failed.append((None, f"{deficit} of {len(to_fetch)} files failed during Fido.fetch (no per-row diagnostic)"))
 
         svc.fetchProgress.emit(len(ok), len(self._rows))
         svc.fetchCompleted.emit(ok, failed)
@@ -102,7 +110,12 @@ class _FetchTask(QRunnable):
 
 
 class RadioFetchService(QObject):
-    """Async wrapper around sunpy.net.Fido with Qt signals."""
+    """Async wrapper around sunpy.net.Fido with Qt signals.
+
+    The settings page exposes a `download_timeout_s` field, but the current
+    implementation does not pass it to Fido (Fido.fetch has no timeout
+    parameter). Plumb it through a custom parfive.Downloader when needed.
+    """
 
     searchCompleted = Signal(list)            # list[FidoRow]
     searchFailed = Signal(str)

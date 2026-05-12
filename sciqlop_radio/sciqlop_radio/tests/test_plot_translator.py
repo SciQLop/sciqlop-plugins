@@ -109,8 +109,33 @@ def test_missing_data_raises_radio_plot_error(fake_radiospectra):
 
 def test_sequence_concatenates_along_time(fake_radiospectra):
     from sciqlop_radio.plot import spectrogram_to_plot
-    s1 = _make_spec(fake_radiospectra.Spectrogram, n_t=4)
-    s2 = _make_spec(fake_radiospectra.Spectrogram, n_t=6)
-    seq = fake_radiospectra.SpectrogramSequence([s1, s2])
+    import types
+    from datetime import datetime, timezone
+    import numpy as np
+
+    # s1 covers 2024-05-01 00:00:00..03; s2 covers 04..09 (no overlap)
+    def _spec_at(SpecCls, start_offset_s: int, n_t: int):
+        spec = SpecCls()
+        t0 = datetime(2024, 5, 1, tzinfo=timezone.utc).timestamp()
+        spec.times = types.SimpleNamespace(
+            unix=np.arange(n_t, dtype=np.float64) + t0 + start_offset_s,
+            to_datetime=lambda: np.array([
+                datetime.fromtimestamp(t0 + start_offset_s + i, tz=timezone.utc)
+                for i in range(n_t)
+            ]),
+        )
+        spec.frequencies = types.SimpleNamespace(
+            to_value=lambda unit: np.array([1.0, 2.0, 4.0, 8.0, 16.0]),
+            unit="MHz",
+        )
+        rng = np.random.default_rng(0)
+        spec.data = rng.random((5, n_t)).astype(np.float32)
+        spec.meta = {"instrument": "TEST", "wavelength_unit": "MHz"}
+        return spec
+
+    s1 = _spec_at(fake_radiospectra.Spectrogram, start_offset_s=0, n_t=4)
+    s2 = _spec_at(fake_radiospectra.Spectrogram, start_offset_s=4, n_t=6)
+    seq = fake_radiospectra.SpectrogramSequence([s2, s1])  # intentionally out of order; sort should reorder
     plot = spectrogram_to_plot(seq, parent=None)
     assert plot._radio_n_time_samples == 10
+    assert np.all(np.diff(plot._radio_times_unix) >= 0), "concatenated times must be monotonically non-decreasing"

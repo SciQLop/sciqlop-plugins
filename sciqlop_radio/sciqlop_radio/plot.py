@@ -208,6 +208,7 @@ def spectrogram_to_plot(spec, parent=None):
     plot._radio_n_freq_channels = int(freqs.size)
     plot._radio_data_shape = tuple(data.shape)
     plot._radio_y_array = freqs
+    plot._radio_times_unix = times_unix
     plot._radio_title = title
     plot._radio_instrument = instrument
     return plot
