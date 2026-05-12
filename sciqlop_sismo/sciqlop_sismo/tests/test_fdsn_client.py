@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 import pytest
 from obspy import Inventory, Stream, Trace, UTCDateTime
-from obspy.core.inventory import Channel, Network, Station
+from obspy.core.inventory import Inventory, Network
 
 from sciqlop_sismo.fdsn_client import (
     fetch_stream,
