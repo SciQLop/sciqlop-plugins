@@ -146,3 +146,47 @@ def test_plot_buttons_noop_when_create_plot_panel_unavailable(qtbot, dock, fake_
     with patch("sciqlop_sismo.dock_stations._create_plot_panel", side_effect=ImportError):
         qtbot.mouseClick(tab.plot_waveform_button, _Qt_LeftButton())
     assert "SciQLop" in dock.status_label.text() or "unavailable" in dock.status_label.text().lower()
+
+
+@pytest.fixture
+def fake_catalog():
+    from unittest.mock import MagicMock
+    event = MagicMock()
+    origin = MagicMock()
+    origin.time = MagicMock()
+    origin.time.datetime = datetime(2024, 4, 2, 14, 0, tzinfo=timezone.utc)
+    origin.latitude = 45.0
+    origin.longitude = 5.0
+    origin.depth = 10000.0
+    magnitude = MagicMock()
+    magnitude.mag = 5.5
+    event.preferred_origin = MagicMock(return_value=origin)
+    event.preferred_magnitude = MagicMock(return_value=magnitude)
+    cat = MagicMock()
+    cat.__iter__ = MagicMock(return_value=iter([event]))
+    cat.__len__ = MagicMock(return_value=1)
+    return cat
+
+
+def test_events_tab_search_events_populates_table(qtbot, dock, fake_catalog):
+    tab = dock.events_tab
+    with patch("sciqlop_sismo.dock_events.search_events", return_value=fake_catalog) as se:
+        with qtbot.waitSignal(tab.search_finished, timeout=5000):
+            qtbot.mouseClick(tab.search_button, _Qt_LeftButton())
+    se.assert_called_once()
+    assert tab.events_table.rowCount() == 1
+    assert "5.5" in tab.events_table.item(0, 4).text()
+
+
+def test_find_stations_uses_event_coordinates(qtbot, dock, fake_catalog, fake_inventory):
+    tab = dock.events_tab
+    with patch("sciqlop_sismo.dock_events.search_events", return_value=fake_catalog):
+        with qtbot.waitSignal(tab.search_finished, timeout=5000):
+            qtbot.mouseClick(tab.search_button, _Qt_LeftButton())
+    tab.events_table.selectRow(0)
+    with patch("sciqlop_sismo.dock_events.search_stations", return_value=fake_inventory) as ss:
+        with qtbot.waitSignal(tab.stations_finished, timeout=5000):
+            qtbot.mouseClick(tab.find_stations_button, _Qt_LeftButton())
+    kwargs = ss.call_args.kwargs
+    assert kwargs["latitude"] == 45.0
+    assert kwargs["longitude"] == 5.0

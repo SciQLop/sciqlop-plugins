@@ -23,7 +23,8 @@ class SismoBrowserDock(QWidget):
         root = QVBoxLayout(self)
         self.tab_widget = QTabWidget()
         self.stations_tab = StationsTab(provider=provider, status_sink=self._set_status)
-        self.events_tab = QWidget()
+        from .dock_events import EventsTab
+        self.events_tab = EventsTab(provider=provider, status_sink=self._set_status)
         self.local_tab = QWidget()
         self.tab_widget.addTab(self.stations_tab, "Stations")
         self.tab_widget.addTab(self.events_tab, "Events")
