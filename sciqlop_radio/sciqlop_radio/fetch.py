@@ -7,11 +7,24 @@ qasync — keeps us out of the cancel-scope bug class.
 from __future__ import annotations
 
 import threading
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
 from PySide6.QtCore import QObject, QRunnable, QThreadPool, Signal
+
+
+def _format_time_for_fido(t: datetime) -> str:
+    """Render a datetime in a format `astropy.time.Time` accepts.
+
+    Astropy's `isot` format does not tolerate a timezone suffix like
+    `+00:00`, so naive `datetime.isoformat()` on a UTC-aware datetime
+    fails with `Time ... does not match isot format`. Convert to UTC,
+    drop tzinfo, then format.
+    """
+    if t.tzinfo is not None:
+        t = t.astimezone(timezone.utc).replace(tzinfo=None)
+    return t.isoformat(sep="T", timespec="seconds")
 
 
 def _do_search(source, t_start: datetime, t_end: datetime) -> list[Any]:
@@ -25,7 +38,7 @@ def _do_search(source, t_start: datetime, t_end: datetime) -> list[Any]:
         raise RuntimeError(f"source {source.key!r} does not support Fido search")
 
     response = Fido.search(
-        a.Time(t_start.isoformat(), t_end.isoformat()),
+        a.Time(_format_time_for_fido(t_start), _format_time_for_fido(t_end)),
         a.Instrument(source.fido_instrument),
     )
     rows: list[Any] = []

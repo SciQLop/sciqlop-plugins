@@ -80,6 +80,10 @@ class RadioSpectraDock(QWidget):
         root.addWidget(self.plot_button)
 
         self.status_label = QLabel("ready")
+        self.status_label.setTextInteractionFlags(
+            Qt.TextSelectableByMouse | Qt.TextSelectableByKeyboard
+        )
+        self.status_label.setWordWrap(True)
         root.addWidget(self.status_label)
 
         self.tabs = QTabWidget()

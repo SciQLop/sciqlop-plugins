@@ -65,6 +65,38 @@ def test_search_failure_emits_search_failed(qapp, tmp_path):
     assert "boom" in received[0][1]
 
 
+def test_format_time_for_fido_strips_timezone():
+    """astropy.time.Time's isot parser rejects '+00:00' suffix; the helper
+    must hand it a naive-UTC ISO string."""
+    from sciqlop_radio.fetch import _format_time_for_fido
+
+    aware = datetime(2024, 5, 1, 12, 30, 45, tzinfo=timezone.utc)
+    assert _format_time_for_fido(aware) == "2024-05-01T12:30:45"
+
+    naive = datetime(2024, 5, 1, 12, 30, 45)
+    assert _format_time_for_fido(naive) == "2024-05-01T12:30:45"
+
+
+def test_format_time_for_fido_converts_non_utc_offset():
+    """Aware datetimes in another timezone get converted to UTC before format."""
+    from datetime import timezone as tz, timedelta
+    from sciqlop_radio.fetch import _format_time_for_fido
+
+    paris = datetime(2024, 5, 1, 14, 30, 0, tzinfo=tz(timedelta(hours=2)))
+    assert _format_time_for_fido(paris) == "2024-05-01T12:30:00"
+
+
+def test_format_time_for_fido_output_parses_with_astropy():
+    """Regression guard for the actual bug: astropy.time.Time must accept the output."""
+    pytest.importorskip("astropy")
+    from astropy.time import Time
+
+    from sciqlop_radio.fetch import _format_time_for_fido
+
+    aware = datetime(2024, 5, 1, tzinfo=timezone.utc)
+    Time(_format_time_for_fido(aware))  # must not raise
+
+
 def test_fetch_uses_cache_hit(qapp, tmp_path):
     from sciqlop_radio.fetch import RadioFetchService
 
