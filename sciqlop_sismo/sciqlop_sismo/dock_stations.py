@@ -67,7 +67,7 @@ class StationsTab(QWidget):
         now = datetime.now(tz=timezone.utc)
         self.start_picker = QDateTimeEdit()
         self.start_picker.setCalendarPopup(True)
-        self.start_picker.setDateTime(_to_qdatetime(now.replace(hour=0, minute=0)))
+        self.start_picker.setDateTime(_to_qdatetime(now.replace(hour=0, minute=0, second=0, microsecond=0)))
         self.end_picker = QDateTimeEdit()
         self.end_picker.setCalendarPopup(True)
         self.end_picker.setDateTime(_to_qdatetime(now))
