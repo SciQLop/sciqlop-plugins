@@ -190,3 +190,26 @@ def test_find_stations_uses_event_coordinates(qtbot, dock, fake_catalog, fake_in
     kwargs = ss.call_args.kwargs
     assert kwargs["latitude"] == 45.0
     assert kwargs["longitude"] == 5.0
+
+
+def test_local_tab_open_file_calls_provider(qtbot, dock, mock_provider, tmp_path):
+    import numpy as np
+    from obspy import Trace, UTCDateTime
+    fp = tmp_path / "x.mseed"
+    Trace(
+        data=np.zeros(100, dtype=np.float32),
+        header={
+            "network": "XX", "station": "TEST", "location": "00",
+            "channel": "HHZ", "sampling_rate": 100.0,
+            "starttime": UTCDateTime("2026-01-01T00:00:00"),
+        },
+    ).write(str(fp), format="MSEED")
+    tab = dock.local_tab
+    with patch(
+        "sciqlop_sismo.dock_local.QFileDialog.getOpenFileNames",
+        return_value=([str(fp)], "Seismic files (*.mseed *.sac)"),
+    ):
+        qtbot.mouseClick(tab.open_button, _Qt_LeftButton())
+    mock_provider.add_channel_from_local.assert_called_once()
+    info = mock_provider.add_channel_from_local.call_args.args[0]
+    assert info.network == "XX"

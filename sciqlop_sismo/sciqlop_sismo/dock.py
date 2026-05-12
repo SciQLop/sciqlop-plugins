@@ -25,7 +25,8 @@ class SismoBrowserDock(QWidget):
         self.stations_tab = StationsTab(provider=provider, status_sink=self._set_status)
         from .dock_events import EventsTab
         self.events_tab = EventsTab(provider=provider, status_sink=self._set_status)
-        self.local_tab = QWidget()
+        from .dock_local import LocalFilesTab
+        self.local_tab = LocalFilesTab(provider=provider, status_sink=self._set_status)
         self.tab_widget.addTab(self.stations_tab, "Stations")
         self.tab_widget.addTab(self.events_tab, "Events")
         self.tab_widget.addTab(self.local_tab, "Local files")
