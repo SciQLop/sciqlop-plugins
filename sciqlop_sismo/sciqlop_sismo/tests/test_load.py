@@ -23,10 +23,6 @@ def _patch_load_deps():
     """Patch every Qt/heavy dep imported inside load()."""
     with (
         patch("sciqlop_sismo._import_qtads", return_value=MagicMock()),
-        patch("sciqlop_sismo.dock.SismoBrowserDock", return_value=MagicMock()),
-        patch("sciqlop_sismo.provider.SismoProvider", return_value=MagicMock()),
-        patch("sciqlop_sismo.PySide6_QIcon", create=True),
-        # patch the lazy imports inside load()
         patch.dict(
             "sys.modules",
             {
