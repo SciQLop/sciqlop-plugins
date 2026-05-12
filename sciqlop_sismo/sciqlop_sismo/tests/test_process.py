@@ -27,8 +27,9 @@ def _synthetic_trace(data: np.ndarray, sampling_rate: float = 100.0) -> Trace:
 def test_detrend_removes_constant_offset():
     n = 1000
     tr = _synthetic_trace(np.ones(n) * 42.0)
-    out = detrend(Stream([tr]))
-    assert out is not Stream([tr])
+    stream = Stream([tr])
+    out = detrend(stream)
+    assert out is not stream
     assert np.mean(out[0].data) == pytest.approx(0.0, abs=1e-9)
 
 
@@ -75,4 +76,6 @@ def test_pure_functions_do_not_mutate_input():
     original = tr.data.copy()
     stream = Stream([tr])
     _ = detrend(stream)
+    np.testing.assert_array_equal(tr.data, original)
+    _ = bandpass(stream, fmin=1.0, fmax=10.0)
     np.testing.assert_array_equal(tr.data, original)
