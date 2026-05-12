@@ -16,6 +16,9 @@ def _default_cache_dir() -> Path:
     return Path(base) / "sciqlop" / "sismo"
 
 
+_MAX_XML_CACHE_HOURS = 24 * 30  # 30 days
+
+
 class SismoSettings(BaseModel):
     default_routing: str = Field(default="iris-federator")
     bandpass_min_hz: float = Field(default=0.01)
@@ -44,7 +47,7 @@ class SismoSettings(BaseModel):
     @field_validator("stationxml_cache_hours", mode="before")
     @classmethod
     def _clamp_xml_hours(cls, v):
-        return max(0, min(24 * 30, int(v)))
+        return max(0, min(_MAX_XML_CACHE_HOURS, int(v)))
 
     @field_validator("search_timeout_s", "fetch_timeout_s", mode="before")
     @classmethod
