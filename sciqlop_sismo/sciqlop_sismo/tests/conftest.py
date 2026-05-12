@@ -1,17 +1,29 @@
-"""Local conftest: stub Qt-only imports + atexit segfault workaround.
+"""Local conftest: undo root-conftest PySide6 stubbing if a real install exists.
 
-The root conftest already stubs PySide6 modules for tests that don't
-need a real Qt environment. We add the os._exit workaround per
-`feedback_sciqlopplots_exit_segfault` so pytest doesn't segfault on
-exit when SciQLopPlots has been imported.
+Also adds the os._exit workaround for SciQLopPlots' exit segfault.
 """
 import atexit
+import importlib
 import os
+import sys
 
 
 def _force_exit():
     os._exit(0)
 
 
-# Registered last → runs first during interpreter teardown.
 atexit.register(_force_exit)
+
+
+def _restore_real_pyside():
+    try:
+        for mod_name in list(sys.modules.keys()):
+            if mod_name.startswith("PySide6"):
+                sys.modules.pop(mod_name, None)
+        importlib.import_module("PySide6.QtWidgets")
+    except ImportError:
+        # No real PySide6 — leave stubs in place; Qt tests will skip on use.
+        pass
+
+
+_restore_real_pyside()
