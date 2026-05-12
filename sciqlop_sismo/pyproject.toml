@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sciqlop-sismo"
+version = "0.1.0"
+description = "SciQLop plugin for FDSN/ObsPy seismic waveforms"
+requires-python = ">=3.10"
+dependencies = [
+    "obspy>=1.4",
+    "speasy>=1.7",
+    "numpy",
+    "scipy",
+    "pydantic>=2",
+    "PyYAML",
+]
+
+[project.optional-dependencies]
+test = ["pytest", "pytest-qt"]
+
+[project.entry-points."sciqlop.plugins"]
+sciqlop_sismo = "sciqlop_sismo"
+
+[tool.setuptools.packages.find]
+include = ["sciqlop_sismo*"]
