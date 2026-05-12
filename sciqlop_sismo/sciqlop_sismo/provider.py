@@ -77,7 +77,7 @@ class SismoProvider(DataProvider):
     # ----- DataProvider hooks ------------------------------------------------
 
     def build_inventory(self, root: SpeasyIndex) -> SpeasyIndex:
-        for record in self._load_persisted_records():
+        for record in self._reload_pending_from_yaml():
             self._materialize_record(root, record)
         return root
 
@@ -156,7 +156,8 @@ class SismoProvider(DataProvider):
 
     # ----- Internals --------------------------------------------------------
 
-    def _load_persisted_records(self) -> list[dict]:
+    def _reload_pending_from_yaml(self) -> list[dict]:
+        """Refresh `_pending_records` from disk and return a copy. Side effect: mutates `_pending_records`."""
         path = _inventory_path()
         if path.exists():
             with path.open("r") as f:
@@ -244,7 +245,12 @@ def _get_or_make_child(parent: SpeasyIndex, name: str, provider: str) -> SpeasyI
 def _coerce_datetime(value) -> datetime:
     if isinstance(value, datetime):
         return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
-    return datetime.fromisoformat(str(value))
+    import numpy as np
+    import obspy
+    # np.datetime64 → ISO string so obspy.UTCDateTime doesn't misroute it
+    if isinstance(value, np.datetime64):
+        value = str(value)
+    return datetime.fromtimestamp(obspy.UTCDateTime(value).timestamp, tz=timezone.utc)
 
 
 def _read_local(path: Path):

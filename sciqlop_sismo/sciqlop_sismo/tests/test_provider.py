@@ -157,3 +157,18 @@ def test_inventory_persisted_to_yaml(tmp_path, monkeypatch):
     )
     p2 = SismoProvider()
     assert "sismo/G/SSB/00.HHZ" in p2.flat_inventory.datasets
+
+
+def test_get_data_accepts_numpy_datetime64_and_float(provider, fake_stream):
+    import numpy as np
+    provider.add_channel(
+        network="G", station="SSB", location="00", channel="HHZ",
+        start_date=_utc(2020, 1, 1), stop_date=_utc(2030, 1, 1),
+        sampling_rate_hz=100.0, routing="iris-federator",
+    )
+    uid = "sismo/G/SSB/00.HHZ/waveform"
+    t0_np = np.datetime64("2026-01-01T00:00:00")
+    t1_float = datetime(2026, 1, 1, 0, 1, tzinfo=timezone.utc).timestamp()
+    with patch("sciqlop_sismo.provider.fetch_stream", return_value=fake_stream):
+        var = provider.get_data(uid, t0_np, t1_float)
+    assert isinstance(var, SpeasyVariable)
