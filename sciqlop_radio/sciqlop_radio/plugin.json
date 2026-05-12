@@ -10,7 +10,7 @@
     }
   ],
   "license": "MIT",
-  "python_dependencies": ["SciQLop>=0.12.0", "sunpy[net]>=6.0", "radiospectra>=1.0", "astropy", "numpy>=1.24", "pydantic>=2.0"],
+  "python_dependencies": ["SciQLop>=0.12.0", "sunpy[net]>=6.0,<7", "radiospectra>=0.6,<1.0", "astropy", "numpy>=1.24", "pydantic>=2.0"],
   "dependencies": [],
   "disabled": false
 }
