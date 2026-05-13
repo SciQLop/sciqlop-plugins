@@ -6,6 +6,7 @@ thread. No qasync (per `feedback_qasync_httpx_async_client`).
 """
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 from typing import Callable
 
@@ -31,6 +32,9 @@ def _create_plot_panel():
     return create_plot_panel()
 
 
+_log = logging.getLogger(__name__)
+
+
 def _build_plot_callback(provider, uid: str):
     """Closure SciQLop will call as `f(start_epoch, stop_epoch) → arrays`.
 
@@ -41,16 +45,23 @@ def _build_plot_callback(provider, uid: str):
     import numpy as np
 
     def _callback(start, stop):
+        _log.info("sismo callback fired: uid=%s start=%s stop=%s", uid, start, stop)
         try:
             t0 = datetime.fromtimestamp(float(start), tz=timezone.utc)
             t1 = datetime.fromtimestamp(float(stop), tz=timezone.utc)
             var = provider.get_data(uid, t0, t1)
         except Exception:  # noqa: BLE001
+            _log.exception("sismo callback: provider.get_data raised for %s", uid)
             return []
         if var is None:
+            _log.warning("sismo callback: provider.get_data returned None for %s", uid)
             return []
         time = var.time.astype("datetime64[ns]").astype("int64").astype("float64") / 1e9
         values = np.ascontiguousarray(var.values.astype("float64"))
+        _log.info(
+            "sismo callback returning shapes time=%s values=%s ndim=%s axes=%s",
+            time.shape, values.shape, values.ndim, len(var.axes),
+        )
         if values.ndim == 2 and len(var.axes) >= 2 and np.issubdtype(var.axes[1].values.dtype, np.number):
             return [time, var.axes[1].values.astype("float64"), values]
         return [time, values]
@@ -217,15 +228,21 @@ class StationsTab(QWidget):
         self._status_sink(f"Added {len(rows)} channel(s) to inventory")
 
     def _on_plot_clicked(self, kind: str):
+        _log.info("=== sismo plot button clicked: kind=%s ===", kind)
         rows = self._selected_channel_rows()
+        _log.info("sismo plot: %d row(s) selected", len(rows))
         if not rows:
             self._status_sink("No channel selected")
             return
         # Make sure rows are in the inventory before plotting.
         self._on_add_clicked()
+        _log.info("sismo plot: inventory parameters now contain: %s",
+                  list(self._provider.flat_inventory.parameters.keys()))
         try:
             panel = _create_plot_panel()
-        except ImportError:
+            _log.info("sismo plot: panel created: %r", panel)
+        except ImportError as exc:
+            _log.exception("sismo plot: create_plot_panel failed: %s", exc)
             self._status_sink("SciQLop main-window plot API unavailable")
             return
         plot_kwargs: dict = {}
@@ -247,7 +264,11 @@ class StationsTab(QWidget):
                 f"{payload['location']}.{payload['channel']}/{kind}"
             )
             callback = _build_plot_callback(self._provider, param_uid)
-            panel.plot_function(callback, name=label, **plot_kwargs)
+            try:
+                result = panel.plot_function(callback, name=label, **plot_kwargs)
+                _log.info("sismo plot: plot_function returned %r for uid=%s", result, param_uid)
+            except Exception:  # noqa: BLE001
+                _log.exception("sismo plot: plot_function raised for uid=%s", param_uid)
         self._status_sink(f"Plotted {len(rows)} {kind}(s)")
 
     def _selected_channel_rows(self) -> list[dict]:
