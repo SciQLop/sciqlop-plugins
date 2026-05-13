@@ -40,6 +40,14 @@ class RadioSource(BaseModel):
 
 
 SOURCES: list[RadioSource] = [
+    # Only sources that radiospectra ships a Fido client for. The
+    # `fido_instrument` string must match the client's registered
+    # `a.Instrument` name (see radiospectra/net/sources/*.py
+    # register_values()). Wind/WAVES, Solar Orbiter/RPW and
+    # STEREO/SWAVES are NOT here — radiospectra has no client for
+    # them, so Fido falls back to default clients that return
+    # non-spectrogram data products. Add them back if radiospectra
+    # grows a dyn-spectrum client for those instruments.
     RadioSource(
         key="psp_rfs",
         label="PSP / FIELDS / RFS",
@@ -47,45 +55,27 @@ SOURCES: list[RadioSource] = [
         notes="LFR (10 kHz–1.7 MHz) + HFR (1.3–19.2 MHz); receiver mode varies along orbit",
     ),
     RadioSource(
-        key="solo_rpw",
-        label="Solar Orbiter / RPW",
-        fido_instrument="rpw",
-        notes="TNR + HFR L2/L3; multi-receiver sequence",
-    ),
-    RadioSource(
-        key="wind_waves",
-        label="Wind / WAVES",
-        fido_instrument="waves",
-        notes="RAD1 (20–1040 kHz) + RAD2 (1.075–13.825 MHz)",
-    ),
-    RadioSource(
-        key="stereo_swaves",
-        label="STEREO / SWAVES",
-        fido_instrument="swaves",
-        notes="2.5 kHz – 16 MHz; STEREO-A only post 2014",
-    ),
-    RadioSource(
         key="ecallisto",
         label="e-CALLISTO (network)",
-        fido_instrument="callisto",
+        fido_instrument="eCALLISTO",
         notes="Worldwide ground-based network; many stations with different frequency windows",
     ),
     RadioSource(
         key="eovsa",
         label="EOVSA",
-        fido_instrument="eovsa",
+        fido_instrument="EOVSA",
         notes="Expanded Owens Valley Solar Array; 1–18 GHz imaging spectroscopy",
     ),
     RadioSource(
         key="ilofar",
         label="I-LOFAR (mode 357 BST)",
-        fido_instrument="ilofar",
+        fido_instrument="ILOFAR",
         notes="Irish LOFAR station, beam-formed mode 357",
     ),
     RadioSource(
         key="rstn",
         label="RSTN",
-        fido_instrument="rstn",
+        fido_instrument="RSTN",
         notes="Radio Solar Telescope Network (USAF); data source may be stale",
     ),
     RadioSource(

@@ -122,6 +122,9 @@ def test_do_search_surfaces_response_errors(monkeypatch):
     fake_sunpy_net.Fido = fake_Fido
     fake_sunpy_net.attrs = fake_attrs
     monkeypatch.setitem(sys.modules, "sunpy.net", fake_sunpy_net)
+    # _do_search also `import radiospectra.net` for side effects; stub it
+    # too so it doesn't blow up on the faked sunpy.net.
+    monkeypatch.setitem(sys.modules, "radiospectra.net", types.ModuleType("radiospectra.net"))
 
     src = next(s for s in SOURCES if s.fido_instrument)
     with pytest.raises(RuntimeError, match="Fido client errors"):

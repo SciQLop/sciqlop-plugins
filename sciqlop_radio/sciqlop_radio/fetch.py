@@ -32,10 +32,17 @@ def _do_search(source, t_start: datetime, t_end: datetime) -> list[Any]:
 
     Isolated so tests can patch it without touching sunpy.
 
+    CRITICAL: `import radiospectra.net` BEFORE the Fido call — that's
+    what registers RFSClient / eCALLISTOClient / EOVSAClient /
+    ILOFARClient / RSTNClient with sunpy's client registry. Without it
+    Fido falls back to default clients (e.g. VSOClient for swaves,
+    which returns TDS-max .txt summaries instead of spectrograms).
+
     Raises RuntimeError if Fido attached errors to the response (e.g.
     upstream radiospectra/sunpy Scraper API mismatch) — otherwise those
     errors would surface as a silent zero-rows result.
     """
+    import radiospectra.net  # noqa: F401 — side-effect import registers Fido clients
     from sunpy.net import Fido, attrs as a  # type: ignore
 
     if not source.fido_instrument:

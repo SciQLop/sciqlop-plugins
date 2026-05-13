@@ -3,21 +3,22 @@ import pytest
 from sciqlop_radio.sources import RadioSource, SOURCES
 
 
+# Only the instruments radiospectra ships a Fido client for, plus the
+# local-file passthrough. RPW/WAVES/SWAVES were intentionally removed
+# because radiospectra has no Fido client for them and the default
+# sunpy clients return non-spectrogram data.
 EXPECTED_KEYS = {
     "ecallisto",
     "eovsa",
     "ilofar",
     "psp_rfs",
-    "solo_rpw",
     "rstn",
-    "stereo_swaves",
-    "wind_waves",
     "custom",
 }
 
 
 def test_sources_list_is_non_empty():
-    assert len(SOURCES) >= 9
+    assert len(SOURCES) >= 6
 
 
 def test_every_source_has_unique_key():
