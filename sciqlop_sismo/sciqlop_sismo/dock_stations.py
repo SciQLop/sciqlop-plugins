@@ -178,6 +178,7 @@ class StationsTab(QWidget):
             return
         for payload in rows:
             self._provider.add_channel(
+                defer_refresh=True,
                 network=payload["network"], station=payload["station"],
                 location=payload["location"], channel=payload["channel"],
                 start_date=_obspy_to_dt(payload["start_date"]),
@@ -185,6 +186,7 @@ class StationsTab(QWidget):
                 sampling_rate_hz=payload["sample_rate"],
                 routing=self.routing_combo.currentText(),
             )
+        self._provider.update_inventory()
         self._status_sink(f"Added {len(rows)} channel(s) to inventory")
 
     def _on_plot_clicked(self, kind: str):
@@ -201,7 +203,7 @@ class StationsTab(QWidget):
             return
         for payload in rows:
             uid = (
-                f"sismo/{payload['network']}/{payload['station']}/"
+                f"speasy/sismo/{payload['network']}/{payload['station']}/"
                 f"{payload['location']}.{payload['channel']}/{kind}"
             )
             panel.plot_product(uid)

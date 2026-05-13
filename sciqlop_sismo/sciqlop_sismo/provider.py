@@ -120,6 +120,8 @@ class SismoProvider(DataProvider):
         stop_date: datetime,
         sampling_rate_hz: float,
         routing: str = "iris-federator",
+        *,
+        defer_refresh: bool = False,
     ) -> None:
         record = {
             "network": network, "station": station, "location": location,
@@ -128,9 +130,10 @@ class SismoProvider(DataProvider):
             "sampling_rate_hz": float(sampling_rate_hz), "routing": routing,
         }
         self._upsert_record(record)
-        self.update_inventory()
+        if not defer_refresh:
+            self.update_inventory()
 
-    def add_channel_from_local(self, info: ChannelInfo) -> None:
+    def add_channel_from_local(self, info: ChannelInfo, *, defer_refresh: bool = False) -> None:
         record = {
             "network": info.network, "station": info.station,
             "location": info.location, "channel": info.channel,
@@ -141,7 +144,8 @@ class SismoProvider(DataProvider):
             "path": str(info.path) if info.path else None,
         }
         self._upsert_record(record)
-        self.update_inventory()
+        if not defer_refresh:
+            self.update_inventory()
 
     def remove_channel(
         self, network: str, station: str, location: str, channel: str
@@ -185,7 +189,7 @@ class SismoProvider(DataProvider):
         sta = record["station"]
         loc = record["location"]
         chan = record["channel"]
-        dataset_uid = f"sismo/{net}/{sta}/{loc}.{chan}"
+        dataset_uid = f"{net}/{sta}/{loc}.{chan}"
         net_node = _get_or_make_child(root, net, provider=PROVIDER_NAME)
         sta_node = _get_or_make_child(net_node, sta, provider=PROVIDER_NAME)
         dataset = DatasetIndex(

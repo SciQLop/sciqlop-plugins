@@ -53,12 +53,12 @@ def test_add_channel_creates_dataset_and_three_parameters(provider):
     flat = provider.flat_inventory
     chan_params = [
         uid for uid in flat.parameters
-        if uid.startswith("sismo/G/SSB/00.HHZ/")
+        if uid.startswith("G/SSB/00.HHZ/")
     ]
     assert set(p.rsplit("/", 1)[-1] for p in chan_params) == {
         "waveform", "raw", "spectrogram",
     }
-    assert "sismo/G/SSB/00.HHZ" in flat.datasets
+    assert "G/SSB/00.HHZ" in flat.datasets
 
 
 def test_add_channel_idempotent(provider):
@@ -82,7 +82,7 @@ def test_remove_channel_deletes_dataset(provider):
     )
     provider.remove_channel("G", "SSB", "00", "HHZ")
     flat = provider.flat_inventory
-    assert "sismo/G/SSB/00.HHZ" not in flat.datasets
+    assert "G/SSB/00.HHZ" not in flat.datasets
 
 
 def test_get_data_waveform_dispatches_through_fetch_and_pipeline(provider, fake_stream):
@@ -91,7 +91,7 @@ def test_get_data_waveform_dispatches_through_fetch_and_pipeline(provider, fake_
         start_date=_utc(2020, 1, 1), stop_date=_utc(2030, 1, 1),
         sampling_rate_hz=100.0, routing="iris-federator",
     )
-    uid = "sismo/G/SSB/00.HHZ/waveform"
+    uid = "G/SSB/00.HHZ/waveform"
     with patch("sciqlop_sismo.provider.fetch_stream", return_value=fake_stream) as fs:
         var = provider.get_data(uid, _utc(2026, 1, 1), _utc(2026, 1, 1, 0, 1))
     fs.assert_called_once()
@@ -106,7 +106,7 @@ def test_get_data_raw_skips_pipeline(provider, fake_stream):
         start_date=_utc(2020, 1, 1), stop_date=_utc(2030, 1, 1),
         sampling_rate_hz=100.0, routing="iris-federator",
     )
-    uid = "sismo/G/SSB/00.HHZ/raw"
+    uid = "G/SSB/00.HHZ/raw"
     with patch("sciqlop_sismo.provider.fetch_stream", return_value=fake_stream):
         var = provider.get_data(uid, _utc(2026, 1, 1), _utc(2026, 1, 1, 0, 1))
     assert var.unit == "counts"
@@ -118,7 +118,7 @@ def test_get_data_spectrogram_returns_2d_variable(provider, fake_stream):
         start_date=_utc(2020, 1, 1), stop_date=_utc(2030, 1, 1),
         sampling_rate_hz=100.0, routing="iris-federator",
     )
-    uid = "sismo/G/SSB/00.HHZ/spectrogram"
+    uid = "G/SSB/00.HHZ/spectrogram"
     with patch("sciqlop_sismo.provider.fetch_stream", return_value=fake_stream):
         var = provider.get_data(uid, _utc(2026, 1, 1), _utc(2026, 1, 1, 0, 1))
     assert var.values.ndim == 2
@@ -140,7 +140,7 @@ def test_get_data_for_local_file_reads_file_instead_of_fdsn(provider, tmp_path):
     info = import_file(fp)[0]
     provider.add_channel_from_local(info)
 
-    uid = "sismo/XX/LOC/00.HHZ/waveform"
+    uid = "XX/LOC/00.HHZ/waveform"
     with patch("sciqlop_sismo.provider.fetch_stream") as fs:
         var = provider.get_data(uid, _utc(2026, 1, 1), _utc(2026, 1, 1, 0, 1))
     fs.assert_not_called()
@@ -156,7 +156,7 @@ def test_inventory_persisted_to_yaml(tmp_path, monkeypatch):
         sampling_rate_hz=100.0, routing="iris-federator",
     )
     p2 = SismoProvider()
-    assert "sismo/G/SSB/00.HHZ" in p2.flat_inventory.datasets
+    assert "G/SSB/00.HHZ" in p2.flat_inventory.datasets
 
 
 def test_remove_channel_persists_across_reload(tmp_path, monkeypatch):
@@ -169,7 +169,7 @@ def test_remove_channel_persists_across_reload(tmp_path, monkeypatch):
     )
     p1.remove_channel("G", "SSB", "00", "HHZ")
     p2 = SismoProvider()
-    assert "sismo/G/SSB/00.HHZ" not in p2.flat_inventory.datasets
+    assert "G/SSB/00.HHZ" not in p2.flat_inventory.datasets
 
 
 def test_get_data_accepts_numpy_datetime64_and_float(provider, fake_stream):
@@ -179,7 +179,7 @@ def test_get_data_accepts_numpy_datetime64_and_float(provider, fake_stream):
         start_date=_utc(2020, 1, 1), stop_date=_utc(2030, 1, 1),
         sampling_rate_hz=100.0, routing="iris-federator",
     )
-    uid = "sismo/G/SSB/00.HHZ/waveform"
+    uid = "G/SSB/00.HHZ/waveform"
     t0_np = np.datetime64("2026-01-01T00:00:00")
     t1_float = datetime(2026, 1, 1, 0, 1, tzinfo=timezone.utc).timestamp()
     with patch("sciqlop_sismo.provider.fetch_stream", return_value=fake_stream):

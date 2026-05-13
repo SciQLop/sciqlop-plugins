@@ -233,6 +233,7 @@ class EventsTab(QWidget):
         for index in selected:
             row = self.stations_table.item(index.row(), 0).data(Qt.ItemDataRole.UserRole)
             self._provider.add_channel(
+                defer_refresh=True,
                 network=row["network"], station=row["station"],
                 location=row["location"], channel=row["channel"],
                 start_date=_obspy_dt(row["start_date"]),
@@ -240,6 +241,7 @@ class EventsTab(QWidget):
                 sampling_rate_hz=row["sample_rate"],
                 routing=self.routing_combo.currentText(),
             )
+        self._provider.update_inventory()
         self._status_sink(f"Added {len(selected)} channel(s)")
 
 

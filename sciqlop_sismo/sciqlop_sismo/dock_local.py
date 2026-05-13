@@ -43,7 +43,7 @@ class LocalFilesTab(QWidget):
         for p in paths:
             try:
                 for info in import_file(Path(p)):
-                    self._provider.add_channel_from_local(info)
+                    self._provider.add_channel_from_local(info, defer_refresh=True)
                     item = QListWidgetItem(
                         f"{info.network}.{info.station}.{info.location}.{info.channel}  {p}"
                     )
@@ -52,6 +52,8 @@ class LocalFilesTab(QWidget):
                     added += 1
             except Exception as exc:  # noqa: BLE001
                 errors.append((str(p), f"{type(exc).__name__}: {exc}"))
+        if added:
+            self._provider.update_inventory()
         if errors and added == 0:
             self._status_sink(
                 f"Failed to import any of {len(paths)} file(s); last: {errors[-1][1]}"
