@@ -276,7 +276,8 @@ class StationsTab(QWidget):
                 plot_kwargs["z_log_scale"] = False  # power is already in dB
             except ImportError:
                 pass
-        for payload in rows:
+        _trace("plot: entering plot loop with %d row(s), kwargs=%s", len(rows), plot_kwargs)
+        for i, payload in enumerate(rows):
             param_uid = (
                 f"{payload['network']}/{payload['station']}/"
                 f"{payload['location']}.{payload['channel']}/{kind}"
@@ -285,12 +286,17 @@ class StationsTab(QWidget):
                 f"{payload['network']}.{payload['station']}."
                 f"{payload['location']}.{payload['channel']}/{kind}"
             )
+            _trace("plot: row %d/%d uid=%s label=%s", i, len(rows), param_uid, label)
             callback = _build_plot_callback(self._provider, param_uid)
+            _trace("plot: callback built, about to call panel.plot_function for uid=%s", param_uid)
             try:
                 result = panel.plot_function(callback, name=label, **plot_kwargs)
-                _trace("plot: plot_function returned %r for uid=%s", result, param_uid)
+                _trace("plot: plot_function returned for uid=%s (type=%s)",
+                       param_uid, type(result).__name__)
             except Exception as exc:  # noqa: BLE001
-                _trace("plot: plot_function raised for uid=%s: %r", param_uid, exc)
+                _trace("plot: plot_function raised for uid=%s: %s: %s",
+                       param_uid, type(exc).__name__, str(exc)[:500])
+        _trace("plot: loop finished, status_sink next")
         self._status_sink(f"Plotted {len(rows)} {kind}(s)")
 
     def _selected_channel_rows(self) -> list[dict]:
