@@ -78,15 +78,14 @@ def test_search_results_populate_list(dock, qtbot):
     assert "example_0.cdf" in w.results_list.item(0).text()
 
 
-def test_search_filters_unsupported_extensions(dock, qtbot):
-    """Fido sometimes returns .txt summaries (e.g. STEREO/SWAVES TDS-max) that
-    radiospectra can't parse. They should be silently skipped in the list."""
+def test_search_drops_non_spectrogram_results(dock, qtbot):
     w, svc = dock
     rows = []
     for url in (
-        "https://archive/swaves_tds_tdsmax_20240612.txt",  # unsupported
-        "https://archive/psp_rfs_20240612.cdf",            # supported
-        "https://archive/callisto_20240612.fit.gz",        # supported
+        "https://archive/swaves_tds_tdsmax_20240612.txt",      # not a spectrogram
+        "https://archive/psp_rfs_20240612.cdf",                # spectrogram
+        "https://archive/callisto_20240612.fit.gz",            # spectrogram
+        "https://archive/something_else.bin",                  # not a spectrogram
     ):
         r = MagicMock()
         r.url = url
@@ -95,8 +94,8 @@ def test_search_filters_unsupported_extensions(dock, qtbot):
         svc.searchCompleted.emit(rows)
     assert w.results_list.count() == 2
     names = [w.results_list.item(i).text() for i in range(w.results_list.count())]
-    assert all(not n.endswith(".txt") for n in names)
-    assert "skipped 1" in w.status_label.text()
+    assert not any(n.endswith(".txt") or n.endswith(".bin") for n in names)
+    assert "2 non-spectrogram" in w.status_label.text()
 
 
 def test_search_failure_shows_status(dock, qtbot):

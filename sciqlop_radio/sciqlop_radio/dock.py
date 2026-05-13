@@ -25,13 +25,14 @@ from .settings import RadioSettings
 from .sources import SOURCES, RadioSource
 
 
-# Extensions radiospectra has a parser for. STEREO/SWAVES also serves
-# TDS-max .txt summaries via Fido — those are peak-amplitude time series,
-# not dynamic spectra, so radiospectra can't (and shouldn't) read them.
+# Extensions radiospectra has a parser for. Anything else Fido returns
+# (e.g. STEREO/SWAVES TDS-max .txt summaries, which are peak-amplitude
+# time series rather than dynamic spectra) is dropped from the results
+# list — the plugin only does radio spectrograms.
 _SUPPORTED_EXTENSIONS = (
     ".cdf", ".fits", ".fit", ".fits.gz", ".fit.gz",
-    ".srs",   # RSTN ASCII flux
-    ".r1", ".r2",  # Wind/WAVES daily binaries
+    ".srs",          # RSTN ASCII flux
+    ".r1", ".r2",    # Wind/WAVES daily binaries
 )
 
 
@@ -157,21 +158,19 @@ class RadioSpectraDock(QWidget):
 
     def _on_search_completed(self, rows: list):
         self.results_list.clear()
-        kept = 0
-        skipped: list[str] = []
+        skipped = 0
         for row in rows:
             url = getattr(row, "url", None) or ""
             name = url.rsplit("/", 1)[-1] if url else repr(row)
             if not _is_supported_filename(name):
-                skipped.append(name)
+                skipped += 1
                 continue
             item = QListWidgetItem(name)
             item.setData(Qt.UserRole, row)
             self.results_list.addItem(item)
-            kept += 1
-        msg = f"Found {kept} file(s)"
+        msg = f"Found {self.results_list.count()} spectrogram file(s)"
         if skipped:
-            msg += f"; skipped {len(skipped)} (unsupported format)"
+            msg += f" ({skipped} non-spectrogram row(s) hidden)"
         self._set_status(msg)
         self._results_changed.emit()
 
