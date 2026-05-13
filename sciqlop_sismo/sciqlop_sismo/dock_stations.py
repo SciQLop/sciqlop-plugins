@@ -31,6 +31,33 @@ def _create_plot_panel():
     return create_plot_panel()
 
 
+def _build_plot_callback(provider, uid: str):
+    """Closure SciQLop will call as `f(start_epoch, stop_epoch) → arrays`.
+
+    Bypasses SciQLop's ProductsModel (which is built once at startup
+    and doesn't know about runtime-added channels) by feeding the panel
+    directly via `plot_function(callback)`.
+    """
+    import numpy as np
+
+    def _callback(start, stop):
+        try:
+            t0 = datetime.fromtimestamp(float(start), tz=timezone.utc)
+            t1 = datetime.fromtimestamp(float(stop), tz=timezone.utc)
+            var = provider.get_data(uid, t0, t1)
+        except Exception:  # noqa: BLE001
+            return []
+        if var is None:
+            return []
+        time = var.time.astype("datetime64[ns]").astype("int64").astype("float64") / 1e9
+        values = np.ascontiguousarray(var.values.astype("float64"))
+        if values.ndim == 2 and len(var.axes) >= 2 and np.issubdtype(var.axes[1].values.dtype, np.number):
+            return [time, var.axes[1].values.astype("float64"), values]
+        return [time, values]
+
+    return _callback
+
+
 class _SearchSignals(QObject):
     completed = Signal(object)
     failed = Signal(str)
@@ -201,12 +228,26 @@ class StationsTab(QWidget):
         except ImportError:
             self._status_sink("SciQLop main-window plot API unavailable")
             return
+        plot_kwargs: dict = {}
+        if kind == "spectrogram":
+            try:
+                from SciQLop.core.enums import GraphType
+                plot_kwargs["graph_type"] = GraphType.ColorMap
+                plot_kwargs["y_log_scale"] = True
+                plot_kwargs["z_log_scale"] = False  # power is already in dB
+            except ImportError:
+                pass
         for payload in rows:
-            uid = (
-                f"speasy/sismo/{payload['network']}/{payload['station']}/"
+            param_uid = (
+                f"{payload['network']}/{payload['station']}/"
                 f"{payload['location']}.{payload['channel']}/{kind}"
             )
-            panel.plot_product(uid)
+            label = (
+                f"{payload['network']}.{payload['station']}."
+                f"{payload['location']}.{payload['channel']}/{kind}"
+            )
+            callback = _build_plot_callback(self._provider, param_uid)
+            panel.plot_function(callback, name=label, **plot_kwargs)
         self._status_sink(f"Plotted {len(rows)} {kind}(s)")
 
     def _selected_channel_rows(self) -> list[dict]:
