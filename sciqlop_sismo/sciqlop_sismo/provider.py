@@ -31,6 +31,28 @@ from .stream_to_variable import (
 PROVIDER_NAME = "sismo"
 
 
+def _make_vp_callback(provider, kind: str, nslc: tuple, routing: str):
+    """Factory for a SciQLop virtual-product callback.
+
+    SciQLop calls the returned closure with `(start, stop)` (epoch seconds
+    as floats). The closure delegates to `provider.get_data(uid, t0, t1)`
+    which returns a SpeasyVariable that SciQLop renders natively.
+    """
+    uid = f"{nslc[0]}/{nslc[1]}/{nslc[2]}.{nslc[3]}/{kind}"
+
+    def callback(start, stop):
+        try:
+            t0 = datetime.fromtimestamp(float(start), tz=timezone.utc)
+            t1 = datetime.fromtimestamp(float(stop), tz=timezone.utc)
+            return provider.get_data(uid, t0, t1)
+        except Exception:  # noqa: BLE001
+            import logging
+            logging.getLogger(__name__).exception("sismo VP callback failed for %s", uid)
+            return None
+
+    return callback
+
+
 def _inventory_dir() -> Path:
     override = os.environ.get("SCIQLOP_SISMO_INVENTORY_DIR")
     if override:
@@ -67,6 +89,9 @@ class SismoProvider(DataProvider):
         # Must be set before DataProvider.__init__ because that calls
         # update_inventory() → build_inventory() immediately.
         self._pending_records: list[dict] = []
+        # Keep VirtualProduct references alive — SciQLop's product tree owns
+        # them weakly via the callback; losing the Python wrapper drops the node.
+        self._virtual_products: dict[str, object] = {}
         DataProvider.__init__(
             self,
             provider_name=PROVIDER_NAME,
@@ -130,6 +155,7 @@ class SismoProvider(DataProvider):
             "sampling_rate_hz": float(sampling_rate_hz), "routing": routing,
         }
         self._upsert_record(record)
+        self._register_virtual_products(record)
         if not defer_refresh:
             self.update_inventory()
 
@@ -144,6 +170,7 @@ class SismoProvider(DataProvider):
             "path": str(info.path) if info.path else None,
         }
         self._upsert_record(record)
+        self._register_virtual_products(record)
         if not defer_refresh:
             self.update_inventory()
 
@@ -156,7 +183,43 @@ class SismoProvider(DataProvider):
             if (r["network"], r["station"], r["location"], r["channel"]) != key
         ]
         self._persist_records()
+        # Drop our VirtualProduct refs for this channel; SciQLop will reap them.
+        prefix = f"sismo/{key[0]}/{key[1]}/{key[2]}.{key[3]}/"
+        for path in [p for p in self._virtual_products if p.startswith(prefix)]:
+            self._virtual_products.pop(path, None)
         self.update_inventory()
+
+    # ----- Virtual-product registration -------------------------------------
+
+    def _register_virtual_products(self, record: dict) -> None:
+        """Register the channel's waveform/raw/spectrogram in SciQLop's product
+        tree via the user-facing virtual-products API. Silently skips when
+        SciQLop isn't importable (headless tests).
+        """
+        try:
+            from SciQLop.user_api.virtual_products import (
+                create_virtual_product, VirtualProductType,
+            )
+        except ImportError:
+            return
+        net = record["network"]; sta = record["station"]
+        loc = record["location"]; chan = record["channel"]
+        for kind, vp_type, labels in (
+            ("waveform", VirtualProductType.Scalar, [chan]),
+            ("raw", VirtualProductType.Scalar, [chan]),
+            ("spectrogram", VirtualProductType.Spectrogram, None),
+        ):
+            path = f"sismo/{net}/{sta}/{loc}.{chan}/{kind}"
+            callback = _make_vp_callback(self, kind, (net, sta, loc, chan), record["routing"])
+            try:
+                if labels is None:
+                    vp = create_virtual_product(path, callback, vp_type)
+                else:
+                    vp = create_virtual_product(path, callback, vp_type, labels=labels)
+                self._virtual_products[path] = vp
+            except Exception:  # noqa: BLE001
+                import logging
+                logging.getLogger(__name__).exception("create_virtual_product failed for %s", path)
 
     # ----- Internals --------------------------------------------------------
 

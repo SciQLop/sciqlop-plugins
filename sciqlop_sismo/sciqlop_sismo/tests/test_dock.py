@@ -116,9 +116,12 @@ def test_plot_waveform_calls_create_plot_panel(qtbot, dock, fake_inventory, mock
     with patch("sciqlop_sismo.dock_stations._create_plot_panel", return_value=panel) as cpp:
         qtbot.mouseClick(tab.plot_waveform_button, _Qt_LeftButton())
     cpp.assert_called_once()
-    panel.plot_function.assert_called_once()
-    args, kwargs = panel.plot_function.call_args
-    assert callable(args[0])
+    # Plot either via the VirtualProduct object or by path — the dock uses
+    # whichever is available.
+    assert panel.plot.called or panel.plot_product.called
+    if panel.plot_product.called:
+        args, _ = panel.plot_product.call_args
+        assert args[0] == "sismo/G/SSB/00.HHZ/waveform"
 
 
 def test_plot_spectrogram_uses_spectrogram_uid(qtbot, dock, fake_inventory, mock_provider):
@@ -133,9 +136,10 @@ def test_plot_spectrogram_uses_spectrogram_uid(qtbot, dock, fake_inventory, mock
     panel = MagicMock()
     with patch("sciqlop_sismo.dock_stations._create_plot_panel", return_value=panel):
         qtbot.mouseClick(tab.plot_spectrogram_button, _Qt_LeftButton())
-    panel.plot_function.assert_called_once()
-    args, kwargs = panel.plot_function.call_args
-    assert callable(args[0])
+    assert panel.plot.called or panel.plot_product.called
+    if panel.plot_product.called:
+        args, _ = panel.plot_product.call_args
+        assert args[0] == "sismo/G/SSB/00.HHZ/spectrogram"
 
 
 def test_plot_buttons_noop_when_create_plot_panel_unavailable(qtbot, dock, fake_inventory, mock_provider):

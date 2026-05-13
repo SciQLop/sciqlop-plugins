@@ -250,47 +250,31 @@ class StationsTab(QWidget):
         self._status_sink(f"Added {len(rows)} channel(s) to inventory")
 
     def _on_plot_clicked(self, kind: str):
-        _trace("plot button clicked kind=%s", kind)
         rows = self._selected_channel_rows()
-        _trace("plot: %d row(s) selected", len(rows))
-        # Always show clicked-button confirmation in the status bar (visible no matter what).
-        self._status_sink(f"[sismo build {_BUILD_TAG}] Plot {kind} clicked, {len(rows)} row(s) selected")
         if not rows:
+            self._status_sink("No channel selected")
             return
+        # Ensure channels are added to the SciQLop product tree as virtual
+        # products (provider.add_channel registers them).
         self._on_add_clicked()
-        params = list(self._provider.flat_inventory.parameters.keys())
-        _trace("plot: inventory parameters: %s", params)
         try:
             panel = _create_plot_panel()
-            _trace("plot: panel created: %r", panel)
-        except ImportError as exc:
-            _trace("plot: create_plot_panel failed: %r", exc)
+        except ImportError:
             self._status_sink("SciQLop main-window plot API unavailable")
             return
-        plot_kwargs: dict = {}
-        if kind == "spectrogram":
-            try:
-                from SciQLop.user_api.plot import GraphType
-                plot_kwargs["graph_type"] = GraphType.ColorMap
-            except ImportError:
-                pass
-        _trace("plot: entering plot loop with %d row(s), kwargs=%s", len(rows), plot_kwargs)
-        for i, payload in enumerate(rows):
-            param_uid = (
-                f"{payload['network']}/{payload['station']}/"
+        for payload in rows:
+            path = (
+                f"sismo/{payload['network']}/{payload['station']}/"
                 f"{payload['location']}.{payload['channel']}/{kind}"
             )
-            _trace("plot: row %d/%d uid=%s", i, len(rows), param_uid)
-            callback = _build_plot_callback(self._provider, param_uid)
-            _trace("plot: callback built, about to call panel.plot_function for uid=%s", param_uid)
+            vp = self._provider._virtual_products.get(path)
             try:
-                result = panel.plot_function(callback, **plot_kwargs)
-                _trace("plot: plot_function returned for uid=%s (type=%s)",
-                       param_uid, type(result).__name__)
+                if vp is not None:
+                    panel.plot(vp)
+                else:
+                    panel.plot_product(path)
             except Exception as exc:  # noqa: BLE001
-                _trace("plot: plot_function raised for uid=%s: %s: %s",
-                       param_uid, type(exc).__name__, str(exc)[:500])
-        _trace("plot: loop finished, status_sink next")
+                self._status_sink(f"Plot failed for {path}: {type(exc).__name__}: {exc}")
         self._status_sink(f"Plotted {len(rows)} {kind}(s)")
 
     def _selected_channel_rows(self) -> list[dict]:
