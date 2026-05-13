@@ -25,6 +25,21 @@ from .settings import RadioSettings
 from .sources import SOURCES, RadioSource
 
 
+# Extensions radiospectra has a parser for. STEREO/SWAVES also serves
+# TDS-max .txt summaries via Fido — those are peak-amplitude time series,
+# not dynamic spectra, so radiospectra can't (and shouldn't) read them.
+_SUPPORTED_EXTENSIONS = (
+    ".cdf", ".fits", ".fit", ".fits.gz", ".fit.gz",
+    ".srs",   # RSTN ASCII flux
+    ".r1", ".r2",  # Wind/WAVES daily binaries
+)
+
+
+def _is_supported_filename(name: str) -> bool:
+    lower = name.lower()
+    return any(lower.endswith(ext) for ext in _SUPPORTED_EXTENSIONS)
+
+
 def _safe_basename(path: Path) -> str:
     """Filesystem name minus extensions, lowercased, slashes stripped — safe to
     embed in a virtual-product tree path."""
@@ -142,13 +157,22 @@ class RadioSpectraDock(QWidget):
 
     def _on_search_completed(self, rows: list):
         self.results_list.clear()
+        kept = 0
+        skipped: list[str] = []
         for row in rows:
             url = getattr(row, "url", None) or ""
             name = url.rsplit("/", 1)[-1] if url else repr(row)
+            if not _is_supported_filename(name):
+                skipped.append(name)
+                continue
             item = QListWidgetItem(name)
             item.setData(Qt.UserRole, row)
             self.results_list.addItem(item)
-        self._set_status(f"Found {len(rows)} file(s)")
+            kept += 1
+        msg = f"Found {kept} file(s)"
+        if skipped:
+            msg += f"; skipped {len(skipped)} (unsupported format)"
+        self._set_status(msg)
         self._results_changed.emit()
 
     def _on_search_failed(self, message: str):

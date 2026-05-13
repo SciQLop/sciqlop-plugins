@@ -78,6 +78,27 @@ def test_search_results_populate_list(dock, qtbot):
     assert "example_0.cdf" in w.results_list.item(0).text()
 
 
+def test_search_filters_unsupported_extensions(dock, qtbot):
+    """Fido sometimes returns .txt summaries (e.g. STEREO/SWAVES TDS-max) that
+    radiospectra can't parse. They should be silently skipped in the list."""
+    w, svc = dock
+    rows = []
+    for url in (
+        "https://archive/swaves_tds_tdsmax_20240612.txt",  # unsupported
+        "https://archive/psp_rfs_20240612.cdf",            # supported
+        "https://archive/callisto_20240612.fit.gz",        # supported
+    ):
+        r = MagicMock()
+        r.url = url
+        rows.append(r)
+    with qtbot.waitSignal(w._results_changed, timeout=1000):
+        svc.searchCompleted.emit(rows)
+    assert w.results_list.count() == 2
+    names = [w.results_list.item(i).text() for i in range(w.results_list.count())]
+    assert all(not n.endswith(".txt") for n in names)
+    assert "skipped 1" in w.status_label.text()
+
+
 def test_search_failure_shows_status(dock, qtbot):
     w, svc = dock
     with qtbot.waitSignal(w._status_changed, timeout=1000):
