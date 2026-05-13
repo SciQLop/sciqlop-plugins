@@ -43,7 +43,6 @@ def _make_spec(SpecCls, *, n_t=8, n_f=5, instrument="TEST"):
         ]),
         unix=np.arange(n_t, dtype=np.float64) + t0.timestamp(),
     )
-    # Use exact powers-of-two grid; size scales with n_f so shape is consistent.
     freq_vals = np.array([2.0 ** i for i in range(n_f)], dtype=np.float64)
     spec.frequencies = types.SimpleNamespace(
         to_value=lambda unit, _fv=freq_vals: _fv,
@@ -55,65 +54,62 @@ def _make_spec(SpecCls, *, n_t=8, n_f=5, instrument="TEST"):
     return spec
 
 
-def test_to_plot_returns_a_time_series_plot(fake_radiospectra):
-    from sciqlop_radio.plot import spectrogram_to_plot
+def test_to_variable_is_2d_speasy_variable(fake_radiospectra):
+    from speasy.products.variable import SpeasyVariable
+
+    from sciqlop_radio.plot import spectrogram_to_speasy_variable
     spec = _make_spec(fake_radiospectra.Spectrogram)
-    plot = spectrogram_to_plot(spec, parent=None)
-    assert plot is not None
-    assert getattr(plot, "_radio_n_time_samples", None) == 8
-    assert getattr(plot, "_radio_n_freq_channels", None) == 5
+    var = spectrogram_to_speasy_variable(spec)
+    assert isinstance(var, SpeasyVariable)
+    assert var.values.ndim == 2
+    assert var.values.shape == (8, 5)  # (n_time, n_freq)
+    assert len(var.axes) == 2
 
 
-def test_to_plot_data_orientation_is_time_by_freq(fake_radiospectra):
-    """SciQLopPlot.colormap wants data shape (n_time, n_freq).
-
-    radiospectra hands us (n_freq, n_time); the translator must transpose.
-    """
-    from sciqlop_radio.plot import spectrogram_to_plot
+def test_to_variable_data_orientation_is_time_by_freq(fake_radiospectra):
+    """radiospectra hands (n_freq, n_time); converter must transpose."""
+    from sciqlop_radio.plot import spectrogram_to_speasy_variable
     spec = _make_spec(fake_radiospectra.Spectrogram, n_t=12, n_f=7)
-    plot = spectrogram_to_plot(spec, parent=None)
-    np.testing.assert_array_equal(plot._radio_data_shape, (12, 7))
+    var = spectrogram_to_speasy_variable(spec)
+    assert var.values.shape == (12, 7)
 
 
-def test_to_plot_extracts_frequency_array(fake_radiospectra):
-    from sciqlop_radio.plot import spectrogram_to_plot
+def test_to_variable_frequency_axis_values(fake_radiospectra):
+    from sciqlop_radio.plot import spectrogram_to_speasy_variable
     spec = _make_spec(fake_radiospectra.Spectrogram)
-    plot = spectrogram_to_plot(spec, parent=None)
+    var = spectrogram_to_speasy_variable(spec)
+    freq_axis = var.axes[1]
     np.testing.assert_array_equal(
-        plot._radio_y_array, np.array([1.0, 2.0, 4.0, 8.0, 16.0])
+        freq_axis.values, np.array([1.0, 2.0, 4.0, 8.0, 16.0])
     )
 
 
-def test_to_plot_uses_instrument_name_in_title(fake_radiospectra):
-    from sciqlop_radio.plot import spectrogram_to_plot
+def test_to_variable_carries_instrument_in_columns(fake_radiospectra):
+    from sciqlop_radio.plot import spectrogram_to_speasy_variable
     spec = _make_spec(fake_radiospectra.Spectrogram, instrument="PSP/RFS")
-    plot = spectrogram_to_plot(spec, parent=None)
-    assert "PSP/RFS" in plot._radio_title
+    var = spectrogram_to_speasy_variable(spec)
+    assert "PSP/RFS" in var.columns
 
 
 def test_missing_times_raises_radio_plot_error(fake_radiospectra):
-    from sciqlop_radio.plot import spectrogram_to_plot, RadioPlotError
+    from sciqlop_radio.plot import RadioPlotError, spectrogram_to_speasy_variable
     spec = _make_spec(fake_radiospectra.Spectrogram)
     spec.times = None
     with pytest.raises(RadioPlotError):
-        spectrogram_to_plot(spec, parent=None)
+        spectrogram_to_speasy_variable(spec)
 
 
 def test_missing_data_raises_radio_plot_error(fake_radiospectra):
-    from sciqlop_radio.plot import spectrogram_to_plot, RadioPlotError
+    from sciqlop_radio.plot import RadioPlotError, spectrogram_to_speasy_variable
     spec = _make_spec(fake_radiospectra.Spectrogram)
     spec.data = np.empty((0, 0))
     with pytest.raises(RadioPlotError):
-        spectrogram_to_plot(spec, parent=None)
+        spectrogram_to_speasy_variable(spec)
 
 
 def test_sequence_concatenates_along_time(fake_radiospectra):
-    from sciqlop_radio.plot import spectrogram_to_plot
-    import types
-    from datetime import datetime, timezone
-    import numpy as np
+    from sciqlop_radio.plot import spectrogram_to_speasy_variable
 
-    # s1 covers 2024-05-01 00:00:00..03; s2 covers 04..09 (no overlap)
     def _spec_at(SpecCls, start_offset_s: int, n_t: int):
         spec = SpecCls()
         t0 = datetime(2024, 5, 1, tzinfo=timezone.utc).timestamp()
@@ -135,7 +131,8 @@ def test_sequence_concatenates_along_time(fake_radiospectra):
 
     s1 = _spec_at(fake_radiospectra.Spectrogram, start_offset_s=0, n_t=4)
     s2 = _spec_at(fake_radiospectra.Spectrogram, start_offset_s=4, n_t=6)
-    seq = fake_radiospectra.SpectrogramSequence([s2, s1])  # intentionally out of order; sort should reorder
-    plot = spectrogram_to_plot(seq, parent=None)
-    assert plot._radio_n_time_samples == 10
-    assert np.all(np.diff(plot._radio_times_unix) >= 0), "concatenated times must be monotonically non-decreasing"
+    seq = fake_radiospectra.SpectrogramSequence([s2, s1])  # out of order on purpose
+    var = spectrogram_to_speasy_variable(seq)
+    assert var.values.shape[0] == 10  # 4 + 6 time samples
+    time_ns = var.axes[0].values.astype("datetime64[ns]").astype("int64")
+    assert np.all(np.diff(time_ns) >= 0), "concatenated times must be non-decreasing"

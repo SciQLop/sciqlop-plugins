@@ -1,13 +1,14 @@
-"""Translator: radiospectra Spectrogram → SciQLopTimeSeriesPlot colormap.
+"""Translator: radiospectra Spectrogram → 2-D SpeasyVariable.
 
-The only module that imports SciQLop plotting types. Pure transform with
-testable sentinels (`_radio_*` attributes) attached to the returned plot
-so unit tests can verify axis/data wiring without instantiating real Qt.
+The only module that knows about radiospectra's shape quirks. Pure
+transform — no Qt, no SciQLop imports. The dock turns the resulting
+SpeasyVariable into a virtual product so SciQLop's main timeline can
+render it as a colormap natively (per the user_api/virtual_products
+contract).
 """
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Any
 
 import numpy as np
 
@@ -29,7 +30,7 @@ def _to_f64(arr) -> np.ndarray:
 
 
 def _times_to_unix_seconds(times) -> np.ndarray | None:
-    """Astropy Time → float64 unix seconds (what SciQLop time axis expects)."""
+    """Astropy Time → float64 unix seconds."""
     if times is None:
         return None
     if hasattr(times, "unix"):
@@ -65,7 +66,7 @@ def _normalize_data(data, n_time: int, n_freq: int, source: str = "unknown") -> 
 
 
 class _Flattened:
-    """Internal sequence-flattened view with the four fields the renderer needs."""
+    """Internal sequence-flattened view with the four fields the converter needs."""
 
     def __init__(self, *, times, freqs, unit, data, meta):
         self._times_unix = times
@@ -126,89 +127,32 @@ def _instrument_name(spec) -> str:
     return str(meta.get("instrument", "unknown"))
 
 
-def _make_theme():
-    """Guarded theme construction. NEVER pass a parent to SciQLopTheme."""
-    try:
-        from SciQLopPlots import SciQLopTheme
-    except ImportError:
-        return None
-    try:
-        return SciQLopTheme.dark()
-    except Exception:
-        return None
+def spectrogram_to_speasy_variable(spec) -> "SpeasyVariable":
+    """Convert a radiospectra Spectrogram (or SpectrogramSequence) to a 2-D
+    `SpeasyVariable` with axes = [time, frequency]. Pure: no Qt, no SciQLop.
 
-
-def _build_plot_hints(freq_unit: str, data_unit: str, instrument: str):
-    try:
-        from SciQLop.core.plot_hints import PlotHints
-    except ImportError:
-        return None
-    return PlotHints(
-        display_type="spectrogram",
-        component_labels=[f"{instrument}"],
-        units=data_unit,
-        scale_type="log",
-        depend_1_units=freq_unit,
-        depend_1_scale="log",
-    )
-
-
-def _format_iso(unix_seconds: float) -> str:
-    return datetime.fromtimestamp(unix_seconds, tz=timezone.utc).isoformat()
-
-
-class _StubPlot:
-    """Stand-in returned when SciQLopPlots is not importable (tests / headless)."""
-    pass
-
-
-def spectrogram_to_plot(spec, parent=None):
-    """Build a configured SciQLopTimeSeriesPlot colormap from a radiospectra Spectrogram.
-
-    Returns the plot widget. Raises RadioPlotError on missing/empty fields.
+    Raises `RadioPlotError` on malformed input. The dock wraps the result
+    in a `VirtualProductType.Spectrogram` so SciQLop's main timeline can
+    render it as a colormap.
     """
+    from speasy.core.data_containers import DataContainer, VariableAxis, VariableTimeAxis
+    from speasy.products.variable import SpeasyVariable
+
     spec = _flatten_sequence(spec)
     times_unix, freqs, freq_unit, data, meta = _extract_arrays(spec)
     instrument = str(meta.get("instrument", "unknown"))
     data_unit = str(meta.get("units") or meta.get("data_unit") or "")
 
-    try:
-        from SciQLopPlots import SciQLopTimeSeriesPlot
-    except ImportError:
-        SciQLopTimeSeriesPlot = None
+    epochs_ns = (times_unix * 1e9).astype("int64").astype("datetime64[ns]")
+    time_axis = VariableTimeAxis(values=epochs_ns)
+    freq_axis = VariableAxis(
+        name="frequency", values=freqs, meta={"UNITS": freq_unit},
+    )
+    values = DataContainer(
+        values=data, meta={"UNITS": data_unit}, name=f"{instrument}.spectrogram",
+    )
+    return SpeasyVariable(axes=[time_axis, freq_axis], values=values, columns=[instrument])
 
-    if SciQLopTimeSeriesPlot is None:
-        plot = _StubPlot()
-    else:
-        plot = SciQLopTimeSeriesPlot(parent)
-        theme = _make_theme()
-        if theme is not None:
-            plot.set_theme(theme)
 
-        plot.colormap(times_unix, freqs, data, name=instrument)
-
-        hints = _build_plot_hints(freq_unit, data_unit, instrument)
-        if hints is not None:
-            try:
-                from SciQLop.core.plot_hints import apply_plot_hints
-                apply_plot_hints(plot, hints)
-            except ImportError:
-                pass
-
-        try:
-            plot.y_axis().set_visible(False)  # cmap data lives on y2_axis
-            plot.rescale_axes()
-            plot.replot()
-        except Exception:
-            pass
-
-    title = f"{instrument} — {_format_iso(times_unix[0])}"
-
-    plot._radio_n_time_samples = int(times_unix.size)
-    plot._radio_n_freq_channels = int(freqs.size)
-    plot._radio_data_shape = tuple(data.shape)
-    plot._radio_y_array = freqs
-    plot._radio_times_unix = times_unix
-    plot._radio_title = title
-    plot._radio_instrument = instrument
-    return plot
+def _format_iso(unix_seconds: float) -> str:
+    return datetime.fromtimestamp(unix_seconds, tz=timezone.utc).isoformat()

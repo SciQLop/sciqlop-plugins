@@ -1,8 +1,10 @@
-"""RadioSpectraDock — the one widget the user sees.
+"""RadioSpectraDock — Fido search/fetch dock that pushes results onto the
+SciQLop main timeline as virtual products (per `user_api/virtual_products`).
 
-Owns a fetch service and a QTabWidget. Selecting "Fetch" runs a Fido
-search; clicking a result then "Plot selected" downloads (if not
-cached) and opens each result in a new tab containing the colormap.
+The dock owns no plot widgets. Each fetched (or local) spectrogram is
+converted to a 2-D `SpeasyVariable`, registered as a
+`VirtualProductType.Spectrogram` at path `radio/<source>/<file-stem>`,
+then plotted on a fresh `create_plot_panel()`.
 """
 from __future__ import annotations
 
@@ -13,19 +15,29 @@ from typing import Optional
 from PySide6.QtCore import QDateTime, Qt, Signal
 from PySide6.QtWidgets import (
     QComboBox, QDateTimeEdit, QFileDialog, QHBoxLayout, QLabel,
-    QListWidget, QListWidgetItem, QMessageBox, QPushButton, QTabWidget,
-    QVBoxLayout, QWidget,
+    QListWidget, QListWidgetItem, QMessageBox, QPushButton, QVBoxLayout, QWidget,
 )
 
 from .fetch import RadioFetchService
-from .plot import spectrogram_to_plot, RadioPlotError
+from .plot import RadioPlotError, spectrogram_to_speasy_variable
 from .reader import open_spectrogram
 from .settings import RadioSettings
 from .sources import SOURCES, RadioSource
 
 
+def _safe_basename(path: Path) -> str:
+    """Filesystem name minus extensions, lowercased, slashes stripped — safe to
+    embed in a virtual-product tree path."""
+    name = path.name
+    for ext in (".fits.gz", ".fit.gz", ".fits", ".fit", ".cdf"):
+        if name.lower().endswith(ext):
+            name = name[: -len(ext)]
+            break
+    return name.replace("/", "_")
+
+
 class RadioSpectraDock(QWidget):
-    """Source picker + time range + result list + plot tabs."""
+    """Source picker + time range + result list. No embedded plots."""
 
     _results_changed = Signal()
     _status_changed = Signal()
@@ -44,6 +56,8 @@ class RadioSpectraDock(QWidget):
             cache_dir=_cfg.cache_dir,
             timeout_s=_cfg.download_timeout_s,
         )
+        # Keep VirtualProduct refs alive; SciQLop tree holds the callback weakly.
+        self._virtual_products: dict[str, object] = {}
 
         root = QVBoxLayout(self)
 
@@ -70,7 +84,6 @@ class RadioSpectraDock(QWidget):
         times.addWidget(QLabel("End (UTC):"))
         times.addWidget(self.end_picker)
         self.fetch_button = QPushButton("Fetch")
-        # Cancel is out-of-scope for the MVP; revisit when long-running EOVSA / SWAVES fetches surface as a real pain point.
         times.addWidget(self.fetch_button)
         root.addLayout(times)
 
@@ -87,12 +100,6 @@ class RadioSpectraDock(QWidget):
         self.status_label.setWordWrap(True)
         root.addWidget(self.status_label)
 
-        self.tabs = QTabWidget()
-        self.tabs.setTabsClosable(True)
-        self.tabs.tabCloseRequested.connect(self._close_tab)
-        root.addWidget(self.tabs, 2)
-
-        # Wiring
         self.fetch_button.clicked.connect(self._on_fetch_clicked)
         self.open_local_button.clicked.connect(self._on_open_local_clicked)
         self.plot_button.clicked.connect(self._on_plot_selected_clicked)
@@ -121,7 +128,7 @@ class RadioSpectraDock(QWidget):
             self, "Open local radio file", "", "Radio data (*.cdf *.fits *.fit *.fit.gz);;All files (*)"
         )
         if paths:
-            self._open_paths([Path(p) for p in paths])
+            self._plot_paths([Path(p) for p in paths], source_key="local")
 
     def _on_plot_selected_clicked(self):
         rows = [self.results_list.item(i).data(Qt.UserRole)
@@ -150,7 +157,9 @@ class RadioSpectraDock(QWidget):
         self._results_changed.emit()
 
     def _on_fetch_completed(self, ok: list, failed: list):
-        self._open_paths(list(ok))
+        source: RadioSource = self.source_combo.currentData()
+        source_key = source.key if source is not None else "fetched"
+        self._plot_paths(list(ok), source_key=source_key)
         msg = f"Downloaded {len(ok)} file(s)"
         if failed:
             msg += f"; {len(failed)} failed"
@@ -159,25 +168,50 @@ class RadioSpectraDock(QWidget):
     def _on_fetch_failed(self, message: str):
         self._set_status(f"Fetch failed: {message}")
 
-    def _open_paths(self, paths: list[Path]):
-        errors: list[tuple[str, str]] = []  # (filename, error message)
+    def _plot_paths(self, paths: list[Path], source_key: str):
+        """Convert each spectrogram → SpeasyVariable, register as a virtual
+        product, then push onto a fresh main-timeline panel."""
+        errors: list[tuple[str, str]] = []
         plotted = 0
+        try:
+            from SciQLop.user_api.plot import create_plot_panel
+            from SciQLop.user_api.virtual_products import (
+                create_virtual_product, VirtualProductType,
+            )
+        except ImportError as exc:
+            self._set_status(f"SciQLop user-API unavailable: {exc}")
+            return
+
+        panel = None
         for path in paths:
             try:
                 spec = open_spectrogram(path)
-                plot = spectrogram_to_plot(spec, parent=self)
+                variable = spectrogram_to_speasy_variable(spec)
             except RadioPlotError as e:
                 errors.append((path.name, str(e)))
                 continue
             except Exception as e:  # noqa: BLE001 — final user-facing safety net
                 errors.append((path.name, f"{type(e).__name__}: {e}"))
                 continue
-            self.tabs.addTab(plot, path.name)
-            self.tabs.setCurrentWidget(plot)
-            plotted += 1
+            vp_path = f"radio/{source_key}/{_safe_basename(path)}"
+            callback = _build_static_callback(variable)
+            try:
+                vp = create_virtual_product(
+                    vp_path, callback, VirtualProductType.Spectrogram,
+                )
+            except Exception as e:  # noqa: BLE001
+                errors.append((path.name, f"create_virtual_product: {type(e).__name__}: {e}"))
+                continue
+            self._virtual_products[vp_path] = vp
+            if panel is None:
+                panel = create_plot_panel()
+            try:
+                panel.plot(vp)
+                plotted += 1
+            except Exception as e:  # noqa: BLE001
+                errors.append((path.name, f"plot: {type(e).__name__}: {e}"))
 
         if errors and plotted == 0:
-            # Every file failed — pop a modal so the user can't miss it.
             detail = "\n\n".join(f"{name}:\n  {err}" for name, err in errors)
             box = QMessageBox(self)
             box.setIcon(QMessageBox.Warning)
@@ -194,12 +228,18 @@ class RadioSpectraDock(QWidget):
         elif plotted:
             self._set_status(f"Plotted {plotted} file(s)")
 
-    def _close_tab(self, index: int):
-        widget = self.tabs.widget(index)
-        self.tabs.removeTab(index)
-        if widget is not None:
-            widget.deleteLater()
-
     def _set_status(self, text: str):
         self.status_label.setText(text)
         self._status_changed.emit()
+
+
+def _build_static_callback(variable):
+    """Closure SciQLop will call as `f(start, stop) → SpeasyVariable`.
+
+    Radio data is a fixed time window (whatever was fetched); we return
+    the same SpeasyVariable regardless of the requested range — SciQLop
+    handles display clipping itself.
+    """
+    def _callback(start, stop):  # noqa: ARG001
+        return variable
+    return _callback

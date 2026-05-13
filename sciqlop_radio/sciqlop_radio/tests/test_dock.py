@@ -85,33 +85,48 @@ def test_search_failure_shows_status(dock, qtbot):
     assert "nope" in w.status_label.text()
 
 
-def test_plot_selected_calls_translator_for_each_path(dock, qtbot, tmp_path, monkeypatch):
+def test_plot_selected_registers_virtual_product_and_plots_on_panel(dock, qtbot, tmp_path, monkeypatch):
+    """When a fetch completes, each path → SpeasyVariable → VirtualProduct → panel.plot(vp)."""
     w, svc = dock
     p = tmp_path / "example_0.cdf"
     p.write_bytes(b"\x00")
 
-    fake_spec = MagicMock()
+    fake_var = MagicMock(name="speasy_variable")
+    monkeypatch.setattr("sciqlop_radio.dock.open_spectrogram", lambda path: MagicMock())
     monkeypatch.setattr(
-        "sciqlop_radio.dock.open_spectrogram", lambda path: fake_spec
+        "sciqlop_radio.dock.spectrogram_to_speasy_variable", lambda spec: fake_var
     )
-    rendered = []
-    monkeypatch.setattr(
-        "sciqlop_radio.dock.spectrogram_to_plot",
-        lambda spec, parent=None: rendered.append((spec, parent)) or _make_stub_plot(),
-    )
+
+    panel = MagicMock(name="panel")
+    fake_vp = MagicMock(name="virtual_product")
+    create_panel_calls = []
+    vp_calls = []
+
+    import sys
+    import types as _types
+    fake_user_api_plot = _types.ModuleType("SciQLop.user_api.plot")
+    fake_user_api_plot.create_plot_panel = lambda: (create_panel_calls.append(1) or panel)
+    fake_user_api_vp = _types.ModuleType("SciQLop.user_api.virtual_products")
+    fake_user_api_vp.create_virtual_product = lambda *a, **kw: (vp_calls.append((a, kw)) or fake_vp)
+
+    class _VPT:
+        Spectrogram = "Spectrogram"
+
+    fake_user_api_vp.VirtualProductType = _VPT
+    monkeypatch.setitem(sys.modules, "SciQLop.user_api.plot", fake_user_api_plot)
+    monkeypatch.setitem(sys.modules, "SciQLop.user_api.virtual_products", fake_user_api_vp)
 
     svc.fetchCompleted.emit([p], [])
     qtbot.wait(50)
 
-    assert len(rendered) >= 1
-    assert w.tabs.count() >= 1
+    assert len(vp_calls) == 1
+    args, kwargs = vp_calls[0]
+    assert args[0].startswith("radio/")
+    assert args[0].endswith("/example_0")
+    assert args[2] == _VPT.Spectrogram
+    panel.plot.assert_called_once_with(fake_vp)
 
 
 def _qdt(y, m, d):
     from PySide6.QtCore import QDateTime
     return QDateTime(y, m, d, 0, 0, 0)
-
-
-def _make_stub_plot():
-    from PySide6.QtWidgets import QLabel
-    return QLabel("stub plot")
