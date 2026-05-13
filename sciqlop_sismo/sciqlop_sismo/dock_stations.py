@@ -270,10 +270,8 @@ class StationsTab(QWidget):
         plot_kwargs: dict = {}
         if kind == "spectrogram":
             try:
-                from SciQLop.core.enums import GraphType
+                from SciQLop.user_api.plot import GraphType
                 plot_kwargs["graph_type"] = GraphType.ColorMap
-                plot_kwargs["y_log_scale"] = True
-                plot_kwargs["z_log_scale"] = False  # power is already in dB
             except ImportError:
                 pass
         _trace("plot: entering plot loop with %d row(s), kwargs=%s", len(rows), plot_kwargs)
@@ -282,15 +280,11 @@ class StationsTab(QWidget):
                 f"{payload['network']}/{payload['station']}/"
                 f"{payload['location']}.{payload['channel']}/{kind}"
             )
-            label = (
-                f"{payload['network']}.{payload['station']}."
-                f"{payload['location']}.{payload['channel']}/{kind}"
-            )
-            _trace("plot: row %d/%d uid=%s label=%s", i, len(rows), param_uid, label)
+            _trace("plot: row %d/%d uid=%s", i, len(rows), param_uid)
             callback = _build_plot_callback(self._provider, param_uid)
             _trace("plot: callback built, about to call panel.plot_function for uid=%s", param_uid)
             try:
-                result = panel.plot_function(callback, name=label, **plot_kwargs)
+                result = panel.plot_function(callback, **plot_kwargs)
                 _trace("plot: plot_function returned for uid=%s (type=%s)",
                        param_uid, type(result).__name__)
             except Exception as exc:  # noqa: BLE001

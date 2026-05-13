@@ -119,7 +119,6 @@ def test_plot_waveform_calls_create_plot_panel(qtbot, dock, fake_inventory, mock
     panel.plot_function.assert_called_once()
     args, kwargs = panel.plot_function.call_args
     assert callable(args[0])
-    assert kwargs.get("name") == "G.SSB.00.HHZ/waveform"
 
 
 def test_plot_spectrogram_uses_spectrogram_uid(qtbot, dock, fake_inventory, mock_provider):
@@ -136,7 +135,7 @@ def test_plot_spectrogram_uses_spectrogram_uid(qtbot, dock, fake_inventory, mock
         qtbot.mouseClick(tab.plot_spectrogram_button, _Qt_LeftButton())
     panel.plot_function.assert_called_once()
     args, kwargs = panel.plot_function.call_args
-    assert kwargs.get("name") == "G.SSB.00.HHZ/spectrogram"
+    assert callable(args[0])
 
 
 def test_plot_buttons_noop_when_create_plot_panel_unavailable(qtbot, dock, fake_inventory, mock_provider):
