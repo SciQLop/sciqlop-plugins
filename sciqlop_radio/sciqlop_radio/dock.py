@@ -193,10 +193,13 @@ class RadioSpectraDock(QWidget):
 
     def _plot_paths(self, paths: list[Path], source_key: str):
         """Convert each spectrogram → SpeasyVariable, register as a virtual
-        product, then push onto a fresh main-timeline panel."""
+        product, then push onto a fresh main-timeline panel. The panel's
+        time range is set to span all loaded variables — otherwise it
+        defaults to "now" and the data looks empty."""
         errors: list[tuple[str, str]] = []
         plotted = 0
         try:
+            from SciQLop.core import TimeRange
             from SciQLop.user_api.plot import create_plot_panel
             from SciQLop.user_api.virtual_products import (
                 create_virtual_product, VirtualProductType,
@@ -206,6 +209,8 @@ class RadioSpectraDock(QWidget):
             return
 
         panel = None
+        t_min: float | None = None
+        t_max: float | None = None
         for path in paths:
             try:
                 spec = open_spectrogram(path)
@@ -231,8 +236,18 @@ class RadioSpectraDock(QWidget):
             try:
                 panel.plot(vp)
                 plotted += 1
+                v_t0, v_t1 = _variable_time_bounds(variable)
+                if v_t0 is not None and v_t1 is not None:
+                    t_min = v_t0 if t_min is None else min(t_min, v_t0)
+                    t_max = v_t1 if t_max is None else max(t_max, v_t1)
             except Exception as e:  # noqa: BLE001
                 errors.append((path.name, f"plot: {type(e).__name__}: {e}"))
+
+        if panel is not None and t_min is not None and t_max is not None:
+            try:
+                panel.time_range = TimeRange(t_min, t_max)
+            except Exception as e:  # noqa: BLE001
+                errors.append(("<panel time range>", f"set_time_range: {type(e).__name__}: {e}"))
 
         if errors and plotted == 0:
             detail = "\n\n".join(f"{name}:\n  {err}" for name, err in errors)
@@ -266,3 +281,16 @@ def _build_static_callback(variable):
     def _callback(start, stop):  # noqa: ARG001
         return variable
     return _callback
+
+
+def _variable_time_bounds(variable) -> tuple[float | None, float | None]:
+    """Return (start_epoch, stop_epoch) seconds of a SpeasyVariable, or
+    (None, None) if it has no time data."""
+    try:
+        time = variable.time
+        if time is None or len(time) == 0:
+            return None, None
+        t_ns = time.astype("datetime64[ns]").astype("int64")
+        return float(t_ns[0]) / 1e9, float(t_ns[-1]) / 1e9
+    except Exception:  # noqa: BLE001
+        return None, None
