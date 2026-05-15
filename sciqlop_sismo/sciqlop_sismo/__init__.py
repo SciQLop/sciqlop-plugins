@@ -5,7 +5,7 @@ from typing import Any
 
 __version__ = "0.1.0"
 
-_LOADED: dict[int, Any] = {}
+_LOADED_PANELS: dict[int, Any] = {}
 
 
 def _import_qtads():
@@ -15,54 +15,38 @@ def _import_qtads():
 
 
 def load(main_window):
-    """SciQLop entry point.
-
-    Follows SciQLop's plot-panel pattern (`new_native_plot_panel`): the
-    dock is NOT created at load time. `load()` only constructs the
-    long-lived data layer (the Speasy provider, which auto-registers
-    virtual products as channels are added) and registers a tools-menu
-    action that builds a fresh dock on demand. Each dock is added via
-    `addWidgetIntoDock(..., delete_on_close=True)` so it tabs into
-    welcome's area and is fully reaped when the user closes it.
-    """
+    """SciQLop entry point. Registers the dock + toolbar action (idempotent)."""
     key = id(main_window)
-    if key in _LOADED:
-        return _LOADED[key]
+    if key in _LOADED_PANELS:
+        return _LOADED_PANELS[key]
 
+    from PySide6.QtGui import QIcon
+
+    from .dock import SismoBrowserDock
     from .provider import SismoProvider
 
+    QtAds = _import_qtads()
+
     provider = SismoProvider()
-    state: dict[str, Any] = {"dock": None}
+    dock = SismoBrowserDock(provider=provider)
+    dock.setWindowTitle("Sismo")
 
-    def _open_dock():
-        existing = state["dock"]
-        if existing is not None:
-            dm = getattr(main_window, "dock_manager", None)
-            if dm is not None:
-                for cdw in dm.dockWidgets():
-                    try:
-                        if cdw.widget() is existing:
-                            cdw.toggleView(True)
-                            cdw.raise_()
-                            return
-                    except RuntimeError:
-                        continue
-            state["dock"] = None  # stale ref
+    main_window.addWidgetIntoDock(QtAds.DockWidgetArea.TopDockWidgetArea, dock)
 
-        from .dock import SismoBrowserDock
-        QtAds = _import_qtads()
-        dock = SismoBrowserDock(provider=provider)
-        dock.setWindowTitle("Sismo")
-        main_window.addWidgetIntoDock(
-            QtAds.DockWidgetArea.TopDockWidgetArea,
-            dock,
-            delete_on_close=True,
-        )
-        state["dock"] = dock
-        dock.destroyed.connect(lambda *_: state.update(dock=None))
+    dock_widget = main_window.dock_manager.findDockWidget("Sismo")
+    if dock_widget is not None:
+        dock_widget.toggleView(False)
+        toggle_action = dock_widget.toggleViewAction()
+        toggle_action.setIcon(QIcon.fromTheme("applications-science"))
+        # Same QtAds-managed action for both toolbar and tools menu so the
+        # dock toggles back to its tabbed-with-welcome state (calling
+        # `panel.show()` on the inner widget OR `toggleView()` ourselves
+        # bypasses QtAds and the dock pops in a new area on top).
+        main_window.toolBar.addAction(toggle_action)
+        main_window.toolsMenu.addAction(toggle_action)
+    else:
+        main_window.toolsMenu.addAction("Sismo", dock.show)
 
-    main_window.toolsMenu.addAction("Sismo", _open_dock)
-
-    handle = (provider, state)
-    _LOADED[key] = handle
+    handle = (provider, dock)
+    _LOADED_PANELS[key] = handle
     return handle

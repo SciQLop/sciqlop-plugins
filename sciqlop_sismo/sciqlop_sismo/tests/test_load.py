@@ -18,12 +18,13 @@ def test_entry_point_resolves():
 
 @contextmanager
 def _patch_load_deps():
-    """Patch every Qt/heavy dep imported inside load() and the on-demand dock factory."""
+    """Patch every Qt/heavy dep imported inside load()."""
     with (
         patch("sciqlop_sismo._import_qtads", return_value=MagicMock()),
         patch.dict(
             "sys.modules",
             {
+                "PySide6.QtGui": MagicMock(),
                 "sciqlop_sismo.dock": MagicMock(),
                 "sciqlop_sismo.provider": MagicMock(),
             },
@@ -32,38 +33,20 @@ def _patch_load_deps():
         yield
 
 
-def test_load_registers_menu_only():
-    """load() must NOT create the dock — it only wires the tools-menu entry.
-    Matches SciQLop's plot-panel pattern: docks are built on demand."""
+def test_load_registers_dock_and_returns_handle():
     main_window = MagicMock()
     with _patch_load_deps():
         handle = sciqlop_sismo.load(main_window)
     assert handle is not None
-    main_window.toolsMenu.addAction.assert_called_once()
-    main_window.addWidgetIntoDock.assert_not_called()
-
-
-def test_menu_action_creates_dock_lazily():
-    """Triggering the menu action calls addWidgetIntoDock with
-    delete_on_close=True so the dock tabs into welcome's area and is
-    properly reaped when closed."""
-    sciqlop_sismo._LOADED.clear()
-    main_window = MagicMock()
-    with _patch_load_deps():
-        sciqlop_sismo.load(main_window)
-        args, _ = main_window.toolsMenu.addAction.call_args
-        action_callback = args[1]
-        action_callback()
     main_window.addWidgetIntoDock.assert_called_once()
-    _args, kwargs = main_window.addWidgetIntoDock.call_args
-    assert kwargs.get("delete_on_close") is True
+    main_window.toolsMenu.addAction.assert_called_once()
 
 
 def test_load_idempotent():
-    sciqlop_sismo._LOADED.clear()
+    sciqlop_sismo._LOADED_PANELS.clear()
     main_window = MagicMock()
     with _patch_load_deps():
         h1 = sciqlop_sismo.load(main_window)
         h2 = sciqlop_sismo.load(main_window)
     assert h1 is h2
-    main_window.toolsMenu.addAction.assert_called_once()
+    main_window.addWidgetIntoDock.assert_called_once()
