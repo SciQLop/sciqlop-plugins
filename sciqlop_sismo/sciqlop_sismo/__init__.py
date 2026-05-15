@@ -39,15 +39,26 @@ def load(main_window):
         toggle_action = dock_widget.toggleViewAction()
         toggle_action.setIcon(QIcon.fromTheme("applications-science"))
         main_window.toolBar.addAction(toggle_action)
-        # Tools-menu action MUST act on the CDockWidget (toggleView), not on
-        # the inner QWidget — `dock.show()` on the inner widget makes QtAds
-        # re-dock it in a fresh area on top of welcome instead of restoring
-        # the original tabbed location.
-        main_window.toolsMenu.addAction(
-            "Sismo", lambda: dock_widget.toggleView(True)
-        )
-    else:
-        main_window.toolsMenu.addAction("Sismo", dock.show)
+
+    def _reveal():
+        # Mirrors SciQLop's own `_reveal_agent_dock` pattern: find the
+        # wrapping CDockWidget by inner-widget identity (more robust than
+        # by title), toggle it visible, then raise_() so it actually
+        # comes to the front of the tab stack (otherwise the welcome tab
+        # stays in front and the dock appears to "open above" it).
+        dm = getattr(main_window, "dock_manager", None)
+        if dm is not None:
+            for cdw in dm.dockWidgets():
+                try:
+                    if cdw.widget() is dock:
+                        cdw.toggleView(True)
+                        cdw.raise_()
+                        return
+                except RuntimeError:
+                    continue
+        dock.show()
+
+    main_window.toolsMenu.addAction("Sismo", _reveal)
 
     handle = (provider, dock)
     _LOADED_PANELS[key] = handle
