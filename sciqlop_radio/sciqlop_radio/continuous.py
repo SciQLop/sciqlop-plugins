@@ -200,30 +200,47 @@ def _build_callback(
     will invoke when the user pans/zooms over this product's time range.
     """
 
-    def _callback(start, stop):  # noqa: ARG001
+    def _callback(start, stop, **kwargs):  # noqa: ARG001 — accept knobs for SciQLop fwd-compat
         t0 = datetime.fromtimestamp(float(start), tz=timezone.utc)
         t1 = datetime.fromtimestamp(float(stop), tz=timezone.utc)
         t_search = time.monotonic()
+        log.warning(  # WARNING so it shows up in SciQLop's log widget by default
+            "continuous(%s): callback fired for [%s .. %s]",
+            source.vp_path, t0.isoformat(), t1.isoformat(),
+        )
         try:
             rows = _fido_search(t0, t1, source)
         except Exception as exc:  # noqa: BLE001
             log.exception("continuous(%s): Fido.search failed: %s", source.vp_path, exc)
             return None
-        log.info(
-            "continuous(%s): %d row(s) for [%s..%s] in %.1fs",
-            source.vp_path, len(rows), t0.isoformat(), t1.isoformat(),
-            time.monotonic() - t_search,
+        log.warning(
+            "continuous(%s): Fido.search returned %d row(s) in %.1fs",
+            source.vp_path, len(rows), time.monotonic() - t_search,
         )
         if not rows:
             return None
+
+        # Cap: if the user's visible range covers more files than we'll
+        # download in one go, return None and tell them to zoom in. Silent
+        # truncation would only show data at one end of the range — confusing.
         if len(rows) > source.max_files:
             log.warning(
-                "continuous(%s): %d rows > max_files=%d; truncating",
-                source.vp_path, len(rows), source.max_files,
+                "continuous(%s): %d rows for [%s..%s] exceeds max_files=%d. "
+                "Zoom in to a window that covers fewer files (or raise "
+                "ContinuousSource.max_files).",
+                source.vp_path, len(rows), t0.isoformat(), t1.isoformat(),
+                source.max_files,
             )
-            rows = rows[: source.max_files]
+            return None
 
+        t_fetch = time.monotonic()
         paths = _fetch_paths(rows, cache_dir)
+        log.warning(
+            "continuous(%s): fetched %d/%d file(s) in %.1fs",
+            source.vp_path, len(paths), len(rows), time.monotonic() - t_fetch,
+        )
+
+        t_parse = time.monotonic()
         variables = []
         for p in paths:
             try:
@@ -234,7 +251,20 @@ def _build_callback(
                 continue
             if v is not None:
                 variables.append(v)
-        return _concat_spectrograms(variables)
+        log.warning(
+            "continuous(%s): parsed %d/%d file(s) in %.1fs",
+            source.vp_path, len(variables), len(paths), time.monotonic() - t_parse,
+        )
+
+        out = _concat_spectrograms(variables)
+        if out is None:
+            log.warning("continuous(%s): no usable data after concat", source.vp_path)
+        else:
+            log.warning(
+                "continuous(%s): returning SpeasyVariable shape=%s",
+                source.vp_path, tuple(out.values.shape),
+            )
+        return out
 
     return _callback
 
