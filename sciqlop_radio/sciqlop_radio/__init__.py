@@ -29,27 +29,14 @@ def load(main_window):
         dock_widget.toggleView(False)
         toggle_action = dock_widget.toggleViewAction()
         toggle_action.setIcon(QIcon.fromTheme("network-wireless"))
+        # Same QtAds-managed action for both toolbar and tools menu so the
+        # dock toggles back to its tabbed-with-welcome state (calling
+        # `panel.show()` on the inner widget OR `toggleView()` ourselves
+        # bypasses QtAds and the dock pops in a new area on top).
         main_window.toolBar.addAction(toggle_action)
-
-    def _reveal():
-        # Mirrors SciQLop's own `_reveal_agent_dock` pattern: find the
-        # wrapping CDockWidget by inner-widget identity, toggle it
-        # visible, then raise_() so it comes to the front of the tab
-        # stack (otherwise welcome's tab stays in front and the panel
-        # appears to "open above" instead of being tabbed).
-        dm = getattr(main_window, "dock_manager", None)
-        if dm is not None:
-            for cdw in dm.dockWidgets():
-                try:
-                    if cdw.widget() is panel:
-                        cdw.toggleView(True)
-                        cdw.raise_()
-                        return
-                except RuntimeError:
-                    continue
-        panel.show()
-
-    main_window.toolsMenu.addAction("Radio Spectra", _reveal)
+        main_window.toolsMenu.addAction(toggle_action)
+    else:
+        main_window.toolsMenu.addAction("Radio Spectra", panel.show)
 
     _LOADED_PANELS[key] = panel
     return panel
