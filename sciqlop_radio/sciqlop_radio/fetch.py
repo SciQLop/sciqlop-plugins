@@ -89,17 +89,20 @@ def _cache_path_for(row: Any, cache_dir: Path) -> Path:
 
 
 class _SearchTask(QRunnable):
-    def __init__(self, svc: "RadioFetchService", source, t_start, t_end):
+    def __init__(self, svc: "RadioFetchService", source, t_start, t_end, cache_key=None):
         super().__init__()
         self._svc = svc
         self._source = source
         self._t_start = t_start
         self._t_end = t_end
+        self._cache_key = cache_key
 
     def run(self):
         svc = self._svc
         try:
             rows = _do_search(self._source, self._t_start, self._t_end)
+            if self._cache_key is not None:
+                svc._search_cache_store(self._cache_key, rows)
             svc.searchCompleted.emit(rows)
         except Exception as e:
             svc.searchFailed.emit(f"{type(e).__name__}: {e}")
@@ -152,6 +155,12 @@ class RadioFetchService(QObject):
     The settings page exposes a `download_timeout_s` field, but the current
     implementation does not pass it to Fido (Fido.fetch has no timeout
     parameter). Plumb it through a custom parfive.Downloader when needed.
+
+    In-memory search cache: repeat `search(source, t0, t1)` calls within
+    `search_cache_ttl_s` skip Fido.search and re-emit the previous rows.
+    Lives in-process only (FidoRow objects aren't picklable, so a disk
+    cache isn't practical for the search path — for the spectrogram side
+    Speasy's `@CacheCall` does survive restarts).
     """
 
     searchCompleted = Signal(list)            # list[FidoRow]
@@ -160,7 +169,11 @@ class RadioFetchService(QObject):
     fetchCompleted = Signal(list, list)       # list[Path], list[(row, msg)]
     fetchFailed = Signal(str)
 
-    def __init__(self, cache_dir: Path, timeout_s: int = 60, parent: QObject | None = None):
+    def __init__(
+        self, cache_dir: Path, timeout_s: int = 60,
+        search_cache_ttl_s: int = 600,
+        parent: QObject | None = None,
+    ):
         super().__init__(parent)
         self._cache_dir = Path(cache_dir)
         self._timeout_s = int(timeout_s)
@@ -168,10 +181,43 @@ class RadioFetchService(QObject):
         self._pool = QThreadPool.globalInstance()
         self._inflight = threading.Event()
         self._inflight.set()  # initially idle (set = no work)
+        self._search_cache_ttl_s = int(search_cache_ttl_s)
+        self._search_cache: dict[tuple, tuple[float, list]] = {}
+
+    @staticmethod
+    def _search_cache_key(source, t_start: datetime, t_end: datetime) -> tuple:
+        return (source.key, _format_time_for_fido(t_start), _format_time_for_fido(t_end))
+
+    def _search_cache_hit(self, key: tuple) -> list | None:
+        entry = self._search_cache.get(key)
+        if entry is None:
+            return None
+        ts, rows = entry
+        import time as _time
+        if _time.monotonic() - ts > self._search_cache_ttl_s:
+            self._search_cache.pop(key, None)
+            return None
+        return rows
+
+    def _search_cache_store(self, key: tuple, rows: list) -> None:
+        import time as _time
+        self._search_cache[key] = (_time.monotonic(), rows)
 
     def search(self, source, t_start: datetime, t_end: datetime) -> None:
+        key = self._search_cache_key(source, t_start, t_end)
+        cached = self._search_cache_hit(key)
+        if cached is not None:
+            # Re-emit on the next event-loop tick so listeners see the same
+            # ordering as a real async search.
+            self._inflight.clear()
+            from PySide6.QtCore import QTimer
+            def _emit():
+                self.searchCompleted.emit(list(cached))
+                self._mark_finished()
+            QTimer.singleShot(0, _emit)
+            return
         self._inflight.clear()
-        self._pool.start(_SearchTask(self, source, t_start, t_end))
+        self._pool.start(_SearchTask(self, source, t_start, t_end, cache_key=key))
 
     def fetch(self, rows: list[Any]) -> None:
         self._inflight.clear()

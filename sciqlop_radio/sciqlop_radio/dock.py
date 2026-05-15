@@ -25,6 +25,46 @@ from .settings import RadioSettings
 from .sources import SOURCES, RadioSource
 
 
+def _file_signature(path: Path) -> tuple[str, int, int]:
+    """Stable cache key for a file on disk: (abs path, mtime_ns, size)."""
+    stat = path.stat()
+    return (str(path.resolve()), int(stat.st_mtime_ns), int(stat.st_size))
+
+
+def _open_and_convert_uncached(sig):  # noqa: ARG001 — sig is the cache key only
+    """Inner worker for the cached open+convert step."""
+    return spectrogram_to_speasy_variable(open_spectrogram(Path(sig[0])))
+
+
+def _make_cached_open_and_convert():
+    from datetime import timedelta
+    from speasy.core.cache import CacheCall
+
+    @CacheCall(cache_retention=timedelta(days=30), is_pure=True)
+    def _cached(sig):  # noqa: ARG001
+        return _open_and_convert_uncached(sig)
+
+    return _cached
+
+
+_cached_open_and_convert = None
+
+
+def _open_and_convert(path: Path):
+    """Open a file and convert to SpeasyVariable, hitting Speasy's disk
+    cache when possible. Cross-session: re-plotting an already-seen file
+    skips both the radiospectra parse and the numpy reshape. Falls back
+    to a direct parse if Speasy's cache layer isn't importable."""
+    global _cached_open_and_convert
+    sig = _file_signature(path)
+    try:
+        if _cached_open_and_convert is None:
+            _cached_open_and_convert = _make_cached_open_and_convert()
+        return _cached_open_and_convert(sig)
+    except Exception:  # noqa: BLE001 — Speasy cache may be unavailable in tests
+        return _open_and_convert_uncached(sig)
+
+
 # Extensions radiospectra has a parser for. Anything else Fido returns
 # (e.g. STEREO/SWAVES TDS-max .txt summaries, which are peak-amplitude
 # time series rather than dynamic spectra) is dropped from the results
@@ -213,8 +253,7 @@ class RadioSpectraDock(QWidget):
         t_max: float | None = None
         for path in paths:
             try:
-                spec = open_spectrogram(path)
-                variable = spectrogram_to_speasy_variable(spec)
+                variable = _open_and_convert(path)
             except RadioPlotError as e:
                 errors.append((path.name, str(e)))
                 continue
