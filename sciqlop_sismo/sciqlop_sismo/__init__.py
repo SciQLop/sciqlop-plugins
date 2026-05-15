@@ -39,8 +39,15 @@ def load(main_window):
         toggle_action = dock_widget.toggleViewAction()
         toggle_action.setIcon(QIcon.fromTheme("applications-science"))
         main_window.toolBar.addAction(toggle_action)
-
-    main_window.toolsMenu.addAction("Sismo", dock.show)
+        # Tools-menu action MUST act on the CDockWidget (toggleView), not on
+        # the inner QWidget — `dock.show()` on the inner widget makes QtAds
+        # re-dock it in a fresh area on top of welcome instead of restoring
+        # the original tabbed location.
+        main_window.toolsMenu.addAction(
+            "Sismo", lambda: dock_widget.toggleView(True)
+        )
+    else:
+        main_window.toolsMenu.addAction("Sismo", dock.show)
 
     handle = (provider, dock)
     _LOADED_PANELS[key] = handle
