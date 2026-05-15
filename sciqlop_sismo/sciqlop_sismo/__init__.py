@@ -14,6 +14,26 @@ def _import_qtads():
     return QtAds
 
 
+def _find_central_area(main_window):
+    """Return the CDockAreaWidget our dock should tab into.
+
+    `addWidgetIntoDock(area=None)` defaults to `main_window._find_biggest_area()`,
+    which gates on `area.isVisible()`. At plugin load time welcome's area has
+    been added but not yet laid out, so the visibility check returns False
+    and the new dock lands in a fresh area above welcome. Resolve the target
+    ourselves and pass it explicitly to side-step that timing.
+    """
+    biggest = getattr(main_window, "_find_biggest_area", lambda: None)()
+    if biggest is not None:
+        return biggest
+    dm = getattr(main_window, "dock_manager", None)
+    if dm is not None:
+        welcome = dm.findDockWidget("Welcome")
+        if welcome is not None:
+            return welcome.dockAreaWidget()
+    return None
+
+
 def load(main_window):
     """SciQLop entry point. Registers the dock + toolbar action (idempotent)."""
     key = id(main_window)
@@ -31,7 +51,10 @@ def load(main_window):
     dock = SismoBrowserDock(provider=provider)
     dock.setWindowTitle("Sismo")
 
-    main_window.addWidgetIntoDock(QtAds.DockWidgetArea.TopDockWidgetArea, dock)
+    main_window.addWidgetIntoDock(
+        QtAds.DockWidgetArea.TopDockWidgetArea, dock,
+        area=_find_central_area(main_window),
+    )
 
     dock_widget = main_window.dock_manager.findDockWidget("Sismo")
     if dock_widget is not None:
