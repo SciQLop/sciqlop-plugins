@@ -59,5 +59,18 @@ def load(main_window):
     else:
         main_window.toolsMenu.addAction("Radio Spectra", panel.show)
 
-    _LOADED_PANELS[key] = panel
-    return panel
+    # Register the continuous per-source-channel virtual products so the
+    # user can drag, e.g., "radio/psp_rfs_lfr" onto any panel and pan/zoom
+    # freely — the callback fetches whatever files cover the visible
+    # window on demand.
+    from .continuous import register_continuous_products
+    from .dock import _open_and_convert
+    from .settings import RadioSettings as _Settings
+    _cont = register_continuous_products(
+        cache_dir=_Settings().cache_dir,
+        open_and_convert=_open_and_convert,
+    )
+
+    handle = (panel, _cont)
+    _LOADED_PANELS[key] = handle
+    return handle
