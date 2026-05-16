@@ -16,4 +16,4 @@ sciqlop_opencode = "sciqlop_opencode"
 include = ["sciqlop_opencode*"]
 
 [tool.setuptools.package-data]
-sciqlop_opencode = ["plugin.json"]
+sciqlop_opencode = ["plugin.json", "resources/*"]
