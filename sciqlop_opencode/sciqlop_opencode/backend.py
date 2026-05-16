@@ -8,12 +8,7 @@ from typing import Callable, List, Optional
 
 from SciQLop.components.agents import BackendContext, SessionEntry
 from SciQLop.components.agents.backend import StreamBlock
-from SciQLop.components.agents.chat import (
-    ChatMessage,
-    ImageBlock,
-    TextBlock,
-    write_b64_image,
-)
+from SciQLop.components.agents.chat import ChatMessage, TextBlock
 
 from . import sessions as _sessions
 
@@ -195,6 +190,7 @@ class OpencodeBackend:
             allowed_tools=allowed,
             hooks=hooks_cfg,
             model=self._model or "",
+            provider_id="",  # let opencode pick the provider from its auth state
             resume=self._resume,
             cwd=str(_sessions.current_workspace_dir()),
             # server_url left empty -> subprocess mode (spawns `opencode acp`)
