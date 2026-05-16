@@ -10,7 +10,7 @@ def test_plugin_json_parses_and_has_required_fields():
     data = json.loads((_PLUGIN_DIR / "plugin.json").read_text())
     assert data["name"]
     assert data["version"]
-    assert "opencode-agent-sdk" in data["python_dependencies"]
+    assert any("opencode-agent-sdk" in dep for dep in data["python_dependencies"])
     assert data["disabled"] is False
 
 
