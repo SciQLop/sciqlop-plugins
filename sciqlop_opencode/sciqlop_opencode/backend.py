@@ -133,3 +133,50 @@ def fetch_models(timeout: float = 10.0) -> List[tuple[str, Optional[str]]]:
     configured.
     """
     return list(_DEFAULT_MODEL_CHOICES)
+
+
+class OpencodeBackend:
+    display_name = "Opencode"
+    model_choices: List[tuple[str, Optional[str]]] = list(_DEFAULT_MODEL_CHOICES)
+    supports_sessions = True
+
+    # __init__, _ensure_client, ask, lifecycle methods land in Task 8.
+
+    async def _pre_tool_use_hook(self, input_data, tool_use_id, context):
+        """Decide whether to allow a tool call.
+
+        Called by opencode-agent-sdk's PreToolUse hook chain.
+        Returns:
+          - None to allow (no opinion)
+          - {"permissionDecision": "deny", "permissionDecisionReason": ...} to deny
+          - {"permissionDecision": "allow", "permissionDecisionReason": ...} to explicitly allow
+
+        Three-branch logic:
+          1. tool not gated → return None (no opinion, allow)
+          2. gated + writes disabled → deny with explanation
+          3. gated + writes allowed → ask the user via confirm_cb (await directly)
+        """
+        tool_name = input_data.get("tool_name", "")
+        short = tool_name.split("__")[-1]
+        if short not in self._gated_names:
+            return None
+        if not self._allow_writes:
+            return {
+                "permissionDecision": "deny",
+                "permissionDecisionReason": (
+                    "write actions are disabled — toggle 'Allow write actions' "
+                    "in the SciQLop chat dock"
+                ),
+            }
+        tool_input = input_data.get("tool_input") or {}
+        try:
+            allowed = await self._confirm_cb(short, tool_input)
+        except Exception as e:
+            return {
+                "permissionDecision": "deny",
+                "permissionDecisionReason": f"approval callback failed: {e}",
+            }
+        return {
+            "permissionDecision": "allow" if allowed else "deny",
+            "permissionDecisionReason": "user approval" if allowed else "user denied",
+        }
