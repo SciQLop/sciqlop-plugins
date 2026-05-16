@@ -1,7 +1,12 @@
 from __future__ import annotations
 import logging
 import multiprocessing
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Optional
 import numpy as np
+
+if TYPE_CHECKING:
+    from SciQLop.core.plot_hints import PlotHints
 from PySide6.QtCore import Qt, QThread, QTimer, Signal, QObject, QSortFilterProxyModel
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QSplitter, QTreeView, QLineEdit, QMenu,
@@ -23,6 +28,102 @@ SPARKLINE_SIZE_LIMIT = 100 * 1024 * 1024
 # Above this threshold the plot becomes unusable and freezes the UI (e.g. CDFs
 # where axis-1 is samples-per-record, not components).
 MAX_LINE_COMPONENTS = 32
+
+
+@dataclass(frozen=True)
+class PlotBundle:
+    """Everything needed to render a CDF variable, in any of the 3 sinks."""
+    x: np.ndarray
+    values: np.ndarray
+    depend_1: Optional[np.ndarray]
+    hints: "PlotHints"
+    is_time_axis: bool
+
+    @property
+    def is_spectrogram(self) -> bool:
+        return self.hints.display_type == "spectrogram" and self.values.ndim == 2
+
+
+def _make_ascending(depend_1: Optional[np.ndarray],
+                    values: np.ndarray) -> tuple[Optional[np.ndarray], np.ndarray]:
+    """Flip both axes when DEPEND_1 channels are stored high-to-low.
+
+    Returns C-contiguous arrays — `arr[..., ::-1]` is a strided view, and
+    SciQLop's PyBuffer wrapper assumes contiguous memory; a non-contiguous
+    float64 array passes user_api's `ensure_arrays_of_double` (dtype check
+    only) and then segfaults / SystemErrors inside the Shiboken binding.
+    """
+    if depend_1 is None or depend_1.size <= 1:
+        return depend_1, values
+    ref = depend_1.ravel() if depend_1.ndim == 1 else depend_1[0, :]
+    finite = ref[np.isfinite(ref)]
+    if len(finite) >= 2 and finite[0] > finite[-1]:
+        return (np.ascontiguousarray(depend_1[..., ::-1]),
+                np.ascontiguousarray(values[..., ::-1]))
+    return depend_1, values
+
+
+def _replace_fill(values: np.ndarray, fill_value) -> np.ndarray:
+    if fill_value is None:
+        return values
+    typed = np.array(fill_value, dtype=values.dtype)
+    return np.where(values == typed, np.nan, values.astype(float))
+
+
+def _hints_from(info: VariableInfo, depend_1_meta: Optional[dict],
+                labels: list[str]):
+    from SciQLop.core.istp_hints import istp_metadata_to_hints
+    meta = dict(info.all_attributes)
+    if depend_1_meta is not None:
+        meta["_depend_1"] = depend_1_meta
+    hints = istp_metadata_to_hints(meta)
+    if labels:
+        hints = hints.model_copy(update={"component_labels": labels})
+    return hints
+
+
+def _fit_zoom(panel, x: np.ndarray) -> None:
+    if len(x) < 2:
+        return
+    span = float(x.max() - x.min())
+    if 0 < panel.zoom_limit_seconds < span:
+        panel.zoom_limit_seconds = span
+
+
+def _apply_data_time_range(panel, x: np.ndarray) -> None:
+    from SciQLop.user_api.plot import TimeRange
+    if len(x) >= 2:
+        panel.time_range = TimeRange(float(x.min()), float(x.max()))
+
+
+def _send_line(panel, bundle: PlotBundle):
+    plot, _ = panel.plot_data(bundle.x, bundle.values)
+    return plot
+
+
+def _send_spectrogram(panel, bundle: PlotBundle):
+    y = (bundle.depend_1 if bundle.depend_1 is not None
+         else np.arange(bundle.values.shape[1], dtype=np.float64))
+    plot, _ = panel.plot_data(bundle.x, y, bundle.values)
+    return plot
+
+
+def _cdf_attrs_to_dict(var) -> dict:
+    """Extract a CDF variable's attributes as a plain {name: list} dict.
+
+    pycdfpp's `VariableAttribute` is indexable (``__getitem__`` / ``__len__``)
+    but not iterable (``hasattr(v, "__iter__")`` is False), and ``str(v)``
+    returns the dump format ``'SCALETYP: "log"\\n'`` — not the value. Always
+    materialize via index iteration so downstream (`istp_metadata_to_hints`)
+    sees a flat list of scalars.
+    """
+    out: dict = {}
+    for name, attr in var.attributes.items():
+        try:
+            out[name] = [attr[i] for i in range(len(attr))]
+        except Exception:
+            out[name] = []
+    return out
 
 
 class AnalysisWorker(QObject):
@@ -62,17 +163,21 @@ class AnalysisWorker(QObject):
                 )
                 self.quality_ready.emit(name, report)
 
-                # Sparkline: downsample to ~60 points
+                # Sparkline: one value per time record, downsampled to ~60.
+                # Collapse every non-record axis with nansum so 1D, 2D and
+                # higher-rank variables all become a per-record series. A flat
+                # ravel() would interleave time and channels into a fake time
+                # series (a 1×N burst variable would show its energy spectrum
+                # instead of its time evolution).
                 if estimated_size < SPARKLINE_SIZE_LIMIT:
-                    flat = values.ravel()
+                    arr = values.astype(float, copy=False)
                     if info.fill_value is not None:
-                        typed_fill = np.array(info.fill_value, dtype=flat.dtype)
-                        flat = flat[flat != typed_fill]
-                    flat = flat.astype(float)
-                    if len(flat) > 60:
-                        indices = np.linspace(0, len(flat) - 1, 60, dtype=int)
-                        flat = flat[indices]
-                    samples = [float(v) for v in flat if np.isfinite(v)]
+                        arr = np.where(arr == float(info.fill_value), np.nan, arr)
+                    per_record = np.nansum(arr.reshape(len(arr), -1), axis=1)
+                    if len(per_record) > 60:
+                        indices = np.linspace(0, len(per_record) - 1, 60, dtype=int)
+                        per_record = per_record[indices]
+                    samples = [float(v) for v in per_record if np.isfinite(v)]
                     if samples:
                         self.sparkline_ready.emit(name, samples)
             except Exception:
@@ -249,55 +354,36 @@ class CdfFileView(QWidget):
 
         return None, False
 
+    def _read_depend_1(self, info: VariableInfo) -> tuple[Optional[np.ndarray], Optional[dict]]:
+        if not (info.depend_1 and info.depend_1 in self._cdf):
+            return None, None
+        d1 = self._cdf[info.depend_1]
+        return d1.values.astype(np.float64), _cdf_attrs_to_dict(d1)
+
+    def _read_bundle(self, info: VariableInfo) -> PlotBundle:
+        raw_values = self._cdf[info.name].values
+        depend_1, depend_1_meta = self._read_depend_1(info)
+        depend_1, values = _make_ascending(depend_1, raw_values)
+        values = _replace_fill(values, info.fill_value)
+        epochs, is_time_axis = self._resolve_epochs(info, values)
+        x = (epochs if epochs is not None
+             else np.arange(values.shape[0], dtype=np.float64))
+        hints = _hints_from(info, depend_1_meta, self._resolve_labels(info))
+        return PlotBundle(x=x, values=values, depend_1=depend_1,
+                          hints=hints, is_time_axis=is_time_axis)
+
     def _update_preview(self, info: VariableInfo):
         if not _is_plottable(info):
             self._preview.clear()
             return
         try:
-            from SciQLop.core.istp_hints import istp_metadata_to_hints
-
-            var = self._cdf[info.name]
-            values = var.values
-            epochs, is_time_axis = self._resolve_epochs(info, values)
-
-            depend_1 = None
-            depend_1_meta: dict | None = None
-            if info.depend_1 and info.depend_1 in self._cdf:
-                d1_var = self._cdf[info.depend_1]
-                depend_1 = d1_var.values.astype(np.float64)
-                depend_1_meta = {
-                    k: list(v) if hasattr(v, "__iter__") and not isinstance(v, str) else v
-                    for k, v in d1_var.attributes.items()
-                }
-
-            # Ensure DEPEND_1 channels are ascending (some CDF files
-            # store energy channels high-to-low); flip both axes together.
-            if depend_1 is not None and depend_1.size > 1:
-                ref = depend_1.ravel() if depend_1.ndim == 1 else depend_1[0, :]
-                finite = ref[np.isfinite(ref)]
-                if len(finite) >= 2 and finite[0] > finite[-1]:
-                    depend_1 = depend_1[..., ::-1]
-                    values = values[..., ::-1]
-
-            if info.fill_value is not None:
-                typed_fill = np.array(info.fill_value, dtype=values.dtype)
-                values = np.where(values == typed_fill, np.nan, values.astype(float))
-
-            meta = dict(info.all_attributes)
-            if depend_1_meta is not None:
-                meta["_depend_1"] = depend_1_meta
-            hints = istp_metadata_to_hints(meta)
-
-            resolved_labels = self._resolve_labels(info)
-            if resolved_labels:
-                hints = hints.model_copy(update={"component_labels": resolved_labels})
-
+            bundle = self._read_bundle(info)
             self._preview.plot_variable(
-                values=values,
-                epochs=epochs,
-                depend_1=depend_1,
-                hints=hints,
-                is_time_axis=is_time_axis,
+                values=bundle.values,
+                epochs=bundle.x if bundle.is_time_axis else None,
+                depend_1=bundle.depend_1,
+                hints=bundle.hints,
+                is_time_axis=bundle.is_time_axis,
             )
         except Exception:
             logger.debug("Preview failed for %s", info.name, exc_info=True)
@@ -314,47 +400,54 @@ class CdfFileView(QWidget):
                     self._tree_view.setCurrentIndex(proxy_idx)
                     return
 
+    def _render(self, panel, info: VariableInfo, frame_to_data: bool):
+        from SciQLop.core.plot_hints import apply_plot_hints
+        bundle = self._read_bundle(info)
+        if frame_to_data and bundle.is_time_axis:
+            _fit_zoom(panel, bundle.x)
+        plot = (_send_spectrogram(panel, bundle) if bundle.is_spectrogram
+                else _send_line(panel, bundle))
+        # Time range must be set BEFORE rescale_axes — for line plots,
+        # rescale_axes only fits y over the visible x window. If x is still
+        # the panel's default (epoch ~1970) at rescale time, y has no data in
+        # range and stays at [0, 5] regardless of the real data.
+        if frame_to_data and bundle.is_time_axis:
+            _apply_data_time_range(panel, bundle.x)
+        if plot is not None:
+            plot_impl = getattr(plot, "_impl", plot)
+            apply_plot_hints(plot_impl, bundle.hints)
+            plot_impl.rescale_axes()
+
     def _plot_new_panel(self, var_name: str):
-        if self._main_window is None:
+        info = self._lookup_plottable(var_name)
+        if info is None:
             return
         try:
-            from SciQLop.user_api.plot import create_plot_panel, TimeRange
-            from speasy.core import datetime64_to_epoch
-            from speasy.core.codecs import get_codec
-
-            codec = get_codec('application/x-cdf')
-            speasy_var = codec.load_variable(variable=var_name, file=self._source)
-            panel = create_plot_panel()
-            if speasy_var is not None:
-                panel.plot_data(speasy_var)
-                x = datetime64_to_epoch(speasy_var.time)
-                if len(x) >= 2:
-                    panel.time_range = TimeRange(float(x.min()), float(x.max()))
-            else:
-                var = self._cdf[var_name]
-                panel.plot_data(np.arange(var.shape[0]), var.values.astype(float))
+            from SciQLop.user_api.plot import create_plot_panel
+            self._render(create_plot_panel(), info, frame_to_data=True)
         except Exception:
             logger.warning("Failed to plot %s", var_name, exc_info=True)
 
     def _plot_to_panel(self, var_name: str, panel_name: str):
-        if self._main_window is None:
+        info = self._lookup_plottable(var_name)
+        if info is None:
             return
         try:
             from SciQLop.user_api.plot import plot_panel
-            from speasy.core.codecs import get_codec
-
             panel = plot_panel(panel_name)
             if panel is None:
                 return
-            codec = get_codec('application/x-cdf')
-            speasy_var = codec.load_variable(variable=var_name, file=self._source)
-            if speasy_var is not None:
-                panel.plot_data(speasy_var)
-            else:
-                var = self._cdf[var_name]
-                panel.plot_data(np.arange(var.shape[0]), var.values.astype(float))
+            self._render(panel, info, frame_to_data=False)
         except Exception:
             logger.warning("Failed to plot %s to panel %s", var_name, panel_name, exc_info=True)
+
+    def _lookup_plottable(self, var_name: str) -> Optional[VariableInfo]:
+        if self._main_window is None:
+            return None
+        info = self._tree_model.variable_info(var_name)
+        if info is None or not _is_plottable(info):
+            return None
+        return info
 
     def _show_context_menu(self, pos):
         index = self._tree_view.indexAt(pos)

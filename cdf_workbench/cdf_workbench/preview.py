@@ -121,7 +121,15 @@ class CdfPreviewWidget(QWidget):
                 self._graphs[key].set_name(name)
             apply_plot_hints(plot, hints)
             if is_time_axis:
-                plot.x_axis().set_range(SciQLopPlotRange(float(x[0]), float(x[-1])))
+                t0, t1 = float(x[0]), float(x[-1])
+                if t0 == t1:
+                    # Single-record variable (e.g. THEMIS burst). A zero-width
+                    # range is silently rejected by SciQLopPlots and rescale_axes
+                    # doesn't refit either, so the x-axis would stay on the
+                    # previous variable's span and the lone cell would be
+                    # rendered stretched across that whole width.
+                    t0, t1 = t0 - 0.5, t1 + 0.5
+                plot.x_axis().set_range(SciQLopPlotRange(t0, t1))
             plot.rescale_axes()
             # y_axis (left) has no plottables for colormaps — hide it so only
             # y2_axis (right, where the colormap data lives) is shown
@@ -141,7 +149,15 @@ class CdfPreviewWidget(QWidget):
             self._graphs[key] = plot.line(x, v, labels=labels)
             apply_plot_hints(plot, hints)
             if is_time_axis:
-                plot.x_axis().set_range(SciQLopPlotRange(float(x[0]), float(x[-1])))
+                t0, t1 = float(x[0]), float(x[-1])
+                if t0 == t1:
+                    # Single-record variable (e.g. THEMIS burst). A zero-width
+                    # range is silently rejected by SciQLopPlots and rescale_axes
+                    # doesn't refit either, so the x-axis would stay on the
+                    # previous variable's span and the lone cell would be
+                    # rendered stretched across that whole width.
+                    t0, t1 = t0 - 0.5, t1 + 0.5
+                plot.x_axis().set_range(SciQLopPlotRange(t0, t1))
             plot.rescale_axes()
             plot.replot()
 
