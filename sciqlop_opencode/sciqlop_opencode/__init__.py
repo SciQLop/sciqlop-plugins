@@ -3,6 +3,10 @@
 Registers `OpencodeBackend` with the shared agent registry and makes
 sure the chat dock exists. The dock itself lives in SciQLop core and
 is shared with any other agent backend plugins that get installed.
+
+Qt and SciQLop imports are kept inside `load()` so the package can be
+imported in environments where those deps aren't installed (e.g. the
+test suite running against MagicMock stubs).
 """
 from pathlib import Path
 
