@@ -1,0 +1,16 @@
+{
+  "name": "Opencode Chat",
+  "version": "0.1.0",
+  "description": "Embedded opencode chat dock for SciQLop. Delegates auth to the opencode CLI (run `opencode auth login` once).",
+  "authors": [
+    {
+      "name": "Alexis Jeandet",
+      "email": "alexis.jeandet@member.fsf.org",
+      "organization": "LPP"
+    }
+  ],
+  "license": "MIT",
+  "python_dependencies": ["opencode-agent-sdk"],
+  "dependencies": [],
+  "disabled": false
+}

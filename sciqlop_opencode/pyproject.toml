@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sciqlop-opencode"
+version = "0.1.0"
+description = "Opencode chat dock for SciQLop (powered by the opencode CLI via opencode-agent-sdk)"
+requires-python = ">=3.10"
+dependencies = ["SciQLop>=0.12.0", "opencode-agent-sdk>=0.4.0"]
+
+[project.entry-points."sciqlop.plugins"]
+sciqlop_opencode = "sciqlop_opencode"
+
+[tool.setuptools.packages.find]
+include = ["sciqlop_opencode*"]
+
+[tool.setuptools.package-data]
+sciqlop_opencode = ["plugin.json"]
