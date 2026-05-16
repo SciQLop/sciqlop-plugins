@@ -207,7 +207,7 @@ If `get_server_info()` doesn't return models (depends on SDK surface), fall back
 |---|---|
 | `opencode` CLI missing | `OpencodeBackend.__init__` raises `RuntimeError("opencode CLI not found — install from opencode.ai")`; backend marked unavailable in the dock |
 | `opencode-agent-sdk` not importable | Raise in `__init__`; `sdk_available()` exposed for the dock to query at registration |
-| Provider auth missing | First `ask()` SDK error caught in stream loop; emits a `TextBlock` with "run `opencode auth login`" hint, keeps the chat usable |
+| Provider auth missing | SDK error propagates out of `ask()`; dock surface renders it as a chat-visible error (same shape as Claude plugin). User reads the message and runs `opencode auth login` |
 | Subprocess crash mid-stream | Exception propagates from `ask()`; on next call `_ensure_client` rebuilds the connection |
 | `resume=<id>` references stale/missing session | Catch in `_ensure_client`, log warning, clear `_resume`, start fresh |
 | Permission hook deadlock (sync hook + async confirm_cb) | Caught at design time — see Open Risk above |
