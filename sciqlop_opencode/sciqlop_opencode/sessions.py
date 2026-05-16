@@ -58,10 +58,18 @@ def list_sessions(limit: int = 50) -> List[SessionEntry]:
         return []
 
     entries: List[SessionEntry] = []
-    for project_dir in root.iterdir():
+    try:
+        project_dirs = list(root.iterdir())
+    except OSError:
+        return []
+    for project_dir in project_dirs:
         if not project_dir.is_dir():
             continue
-        for path in project_dir.iterdir():
+        try:
+            paths = list(project_dir.iterdir())
+        except OSError:
+            continue
+        for path in paths:
             if path.suffix != ".json" or not path.is_file():
                 continue
             entry = _read_session_entry(path, workspace)

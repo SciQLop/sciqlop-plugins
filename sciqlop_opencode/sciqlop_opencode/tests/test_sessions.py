@@ -1,8 +1,7 @@
 """Tests for opencode session storage walker."""
 import json
+import os
 from pathlib import Path
-
-import pytest
 
 from sciqlop_opencode import sessions as sess
 
@@ -13,7 +12,6 @@ def _write_session(storage: Path, project_hash: str, sid: str, *, cwd: str, labe
     p = sdir / f"{sid}.json"
     p.write_text(json.dumps({"id": sid, "cwd": cwd, "label": label}))
     if mtime is not None:
-        import os
         os.utime(p, (mtime, mtime))
     return p
 
