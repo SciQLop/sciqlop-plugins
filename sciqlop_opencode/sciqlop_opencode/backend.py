@@ -119,3 +119,17 @@ def _wrap_tool(tool: dict):
         return {"content": [{"type": "text", "text": str(result)}]}
 
     return _impl
+
+
+def fetch_models(timeout: float = 10.0) -> List[tuple[str, Optional[str]]]:
+    """Return the model dropdown choices for the SciQLop chat dock.
+
+    opencode-agent-sdk 0.4.x has no API to enumerate available models —
+    `SDKClient` exposes only `connect`/`disconnect`/`query`/`receive_response`,
+    and `ModelRegistry` is user-populated (empty by default). The opencode CLI
+    selects the model based on its own config (`~/.config/opencode/config.json`
+    and `opencode auth login` state). So we ship "Default (opencode)" only;
+    `AgentOptions.model=None` lets opencode pick whichever model the user
+    configured.
+    """
+    return list(_DEFAULT_MODEL_CHOICES)
