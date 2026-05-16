@@ -110,3 +110,86 @@ def _shorten(text: str, max_len: int = 80) -> str:
     if len(collapsed) > max_len:
         return collapsed[: max_len - 1] + "…"
     return collapsed
+
+
+def load_session_messages(
+    session_id: str,
+    image_tempdir: Optional[Path] = None,
+):
+    """Replay a session's message files into a list of `ChatMessage`."""
+    from SciQLop.components.agents.chat import ChatMessage, ImageBlock, TextBlock, write_b64_image
+
+    msg_dir = _storage_root() / "message" / session_id
+    if not msg_dir.is_dir():
+        return []
+
+    tempdir = Path(image_tempdir) if image_tempdir else None
+    if tempdir is not None:
+        tempdir.mkdir(parents=True, exist_ok=True)
+
+    try:
+        files = sorted(p for p in msg_dir.iterdir() if p.suffix == ".json" and p.is_file())
+    except OSError:
+        return []
+
+    messages: list = []
+    for path in files:
+        record = _read_message_record(path)
+        if record is None:
+            continue
+        role = record.get("role")
+        if role not in ("user", "assistant"):
+            continue
+        blocks = _render_blocks(record.get("content"), tempdir, TextBlock, ImageBlock, write_b64_image)
+        if not blocks:
+            continue
+        if messages and messages[-1].role == role:
+            messages[-1].blocks.extend(blocks)
+        else:
+            messages.append(ChatMessage(role=role, blocks=blocks, done=True))
+    return messages
+
+
+def _read_message_record(path: Path) -> Optional[dict]:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8", errors="replace"))
+    except (ValueError, OSError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _render_blocks(content, tempdir, TextBlock, ImageBlock, write_b64_image):
+    if isinstance(content, str):
+        return [TextBlock(text=content)] if content.strip() else []
+    if not isinstance(content, list):
+        return []
+    out = []
+    for block in content:
+        if not isinstance(block, dict):
+            continue
+        btype = block.get("type")
+        if btype == "text":
+            text = block.get("text") or ""
+            if text.strip():
+                out.append(TextBlock(text=text))
+        elif btype == "image":
+            path = _decode_image(block, tempdir, write_b64_image)
+            if path:
+                out.append(ImageBlock(path=path))
+        elif btype == "tool_result":
+            inner = block.get("content")
+            if isinstance(inner, list):
+                for item in inner:
+                    if isinstance(item, dict) and item.get("type") == "image":
+                        p = _decode_image(item, tempdir, write_b64_image)
+                        if p:
+                            out.append(ImageBlock(path=p))
+    return out
+
+
+def _decode_image(block: dict, tempdir, write_b64_image) -> Optional[str]:
+    if tempdir is None:
+        return None
+    source = block.get("source") if isinstance(block.get("source"), dict) else block
+    mime = source.get("mediaType") or source.get("media_type") or source.get("mimeType") or "image/png"
+    return write_b64_image(source.get("data"), mime, tempdir, prefix="replay")
