@@ -137,15 +137,49 @@ def _wrap_tool(tool: dict):
 def fetch_models(timeout: float = 10.0) -> List[tuple[str, Optional[str]]]:
     """Return the model dropdown choices for the SciQLop chat dock.
 
-    opencode-agent-sdk 0.4.x has no API to enumerate available models —
-    `SDKClient` exposes only `connect`/`disconnect`/`query`/`receive_response`,
-    and `ModelRegistry` is user-populated (empty by default). The opencode CLI
-    selects the model based on its own config (`~/.config/opencode/config.json`
-    and `opencode auth login` state). So we ship "Default (opencode)" only;
-    `AgentOptions.model=""` lets opencode pick whichever model the user
-    configured.
+    opencode-agent-sdk 0.4.x has no API to enumerate available models, but
+    opencode itself records every (provider, model) pair the user has run
+    in its sessions table. We surface those alongside a "Default (opencode)"
+    entry that lets opencode fall back to whatever its own config picks.
+
+    The dropdown value is the fully-qualified ``"<provider>/<model>"`` string;
+    ``_ensure_client`` splits it back into ``provider_id`` and ``model`` for
+    ``AgentOptions``.
     """
-    return list(_DEFAULT_MODEL_CHOICES)
+    from . import sessions as _sessions
+
+    choices: List[tuple[str, Optional[str]]] = list(_DEFAULT_MODEL_CHOICES)
+    try:
+        specs = _sessions.known_session_models()
+    except Exception:
+        return choices
+    for spec in specs:
+        provider = spec.get("providerID")
+        model_id = spec.get("id")
+        if not provider or not model_id:
+            continue
+        label = f"{_pretty_model(model_id)} ({provider})"
+        value = f"{provider}/{model_id}"
+        choices.append((label, value))
+    return choices
+
+
+def _pretty_model(model_id: str) -> str:
+    """Turn a kebab/snake model id into a Title Cased display label."""
+    return " ".join(part.capitalize() for part in model_id.replace("_", "-").split("-"))
+
+
+def _split_provider_model(value: Optional[str]) -> tuple[str, str]:
+    """Split a dropdown value back into (provider_id, model_id) for AgentOptions.
+
+    The dropdown encodes selections as ``"<provider>/<model>"``. The "Default
+    (opencode)" entry has value None — empty strings make opencode-agent-sdk
+    fall through to opencode's own defaults.
+    """
+    if not value:
+        return "", ""
+    provider, _, model_id = value.partition("/")
+    return provider, model_id
 
 
 class OpencodeBackend:
@@ -184,13 +218,14 @@ class OpencodeBackend:
                 HookMatcher(matcher=None, hooks=[self._pre_tool_use_hook]),
             ],
         } if self._confirm_cb else {}
+        provider_id, model_id = _split_provider_model(self._model)
         options = AgentOptions(
             system_prompt=SYSTEM_PROMPT,
             mcp_servers={_MCP_SERVER_NAME: server},
             allowed_tools=allowed,
             hooks=hooks_cfg,
-            model=self._model or "",
-            provider_id="",  # let opencode pick the provider from its auth state
+            model=model_id,
+            provider_id=provider_id,
             resume=self._resume,
             cwd=str(_sessions.current_workspace_dir()),
             # server_url left empty -> subprocess mode (spawns `opencode acp`)
