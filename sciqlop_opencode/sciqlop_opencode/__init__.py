@@ -3,12 +3,16 @@
 Registers `OpencodeBackend` with the shared agent registry and makes
 sure the chat dock exists. The dock itself lives in SciQLop core and
 is shared with any other agent backend plugins that get installed.
-
-Qt and SciQLop imports are kept inside `load()` so the package can be
-imported in environments where those deps aren't installed (e.g. the
-test suite running against MagicMock stubs).
 """
 from pathlib import Path
+
+import PySide6QtAds as QtAds
+from PySide6.QtGui import QIcon
+
+from SciQLop.components.agents import ensure_agent_dock, register_agent_backend
+from SciQLop.components.theming.icons import register_icon, theme_adapted_icon
+
+from .backend import OpencodeBackend, fetch_models
 
 _ICON_NAME = "sciqlop_opencode_chat"
 _ICON_PATH = str(Path(__file__).parent / "resources" / "chat.svg")
@@ -16,14 +20,6 @@ _DOCK_TITLE = "Agents"
 
 
 def load(main_window):
-    import PySide6QtAds as QtAds
-    from PySide6.QtGui import QIcon
-
-    from SciQLop.components.agents import ensure_agent_dock, register_agent_backend
-    from SciQLop.components.theming.icons import register_icon, theme_adapted_icon
-
-    from .backend import OpencodeBackend, fetch_models
-
     register_icon(_ICON_NAME, lambda: QIcon(_ICON_PATH))
     icon = theme_adapted_icon(_ICON_NAME)
 

@@ -1,10 +1,10 @@
-"""Stub Qt and SciQLop modules so the package can be imported in a test env.
+"""Root conftest for the sciqlop_opencode plugin.
 
-`sciqlop_opencode/__init__.py` does module-level `import PySide6QtAds` and
-`from SciQLop.components... import ...` to match the convention used by the
-other plugin packages. Those modules aren't installed in CI, so we slot
-MagicMocks into ``sys.modules`` here, before pytest collects any test that
-imports the package.
+Stubs Qt and SciQLop modules in ``sys.modules`` before pytest imports
+the ``sciqlop_opencode`` package, so module-level imports in
+``__init__.py`` (which match the convention of the other agent plugins)
+don't break collection in an environment where those modules aren't
+installed.
 """
 import importlib
 import sys
