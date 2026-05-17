@@ -119,7 +119,7 @@ def _wrap_tool(tool: dict):
     """Wrap a SciQLop tool dict as an in-process opencode SDK tool."""
     name = tool["name"]
     description = tool["description"]
-    schema = tool["input_schema"]
+    schema = _reorder_required_first(tool["input_schema"])
     handler: Callable = tool["handler"]
 
     @sdk_tool(name, description, schema)
@@ -132,6 +132,29 @@ def _wrap_tool(tool: dict):
         return {"content": [{"type": "text", "text": str(result)}]}
 
     return _impl
+
+
+def _reorder_required_first(schema: dict) -> dict:
+    """Reorder a JSON-schema's ``properties`` so required ones come first.
+
+    opencode-agent-sdk's MCP bridge (``_mcp_bridge._make_wrapper``) iterates
+    properties in insertion order to build an ``inspect.Signature``. Required
+    properties become positional parameters with no default; optional ones get
+    a default. If a required property appears after an optional one, Python
+    raises ``ValueError: non-default argument follows default argument`` when
+    the signature is constructed. We sort properties so all required keys
+    precede the rest, preserving the relative order within each group.
+    """
+    if not isinstance(schema, dict):
+        return schema
+    properties = schema.get("properties")
+    required = schema.get("required") or []
+    if not isinstance(properties, dict) or not required:
+        return schema
+    required_set = set(required)
+    ordered = {k: properties[k] for k in properties if k in required_set}
+    ordered.update({k: properties[k] for k in properties if k not in required_set})
+    return {**schema, "properties": ordered}
 
 
 def fetch_models(timeout: float = 10.0) -> List[tuple[str, Optional[str]]]:

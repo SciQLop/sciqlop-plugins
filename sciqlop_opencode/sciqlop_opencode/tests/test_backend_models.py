@@ -42,6 +42,48 @@ def test_fetch_models_appends_known_specs(monkeypatch):
     ]
 
 
+def test_reorder_required_first_moves_required_props_up():
+    schema = {
+        "type": "object",
+        "properties": {
+            "name": {"type": "string"},
+            "plot_index": {"type": "integer"},
+        },
+        "required": ["plot_index"],
+    }
+    out = bk._reorder_required_first(schema)
+    assert list(out["properties"].keys()) == ["plot_index", "name"]
+    assert out["required"] == ["plot_index"]
+
+
+def test_reorder_required_first_preserves_intra_group_order():
+    schema = {
+        "type": "object",
+        "properties": {"a": {}, "b": {}, "c": {}, "d": {}},
+        "required": ["c", "a"],
+    }
+    out = bk._reorder_required_first(schema)
+    # required keys in their original relative order, then non-required in
+    # their original relative order
+    assert list(out["properties"].keys()) == ["a", "c", "b", "d"]
+
+
+def test_reorder_required_first_noop_when_already_correct():
+    schema = {
+        "type": "object",
+        "properties": {"plot_index": {"type": "integer"}, "name": {"type": "string"}},
+        "required": ["plot_index"],
+    }
+    out = bk._reorder_required_first(schema)
+    assert list(out["properties"].keys()) == ["plot_index", "name"]
+
+
+def test_reorder_required_first_passes_through_when_no_required():
+    schema = {"type": "object", "properties": {"name": {"type": "string"}}, "required": []}
+    out = bk._reorder_required_first(schema)
+    assert out is schema  # untouched
+
+
 def test_fetch_models_falls_back_on_db_error(monkeypatch):
     monkeypatch.setattr(bk, "_DEFAULT_MODEL_CHOICES", [("Default (opencode)", None)])
     def boom():
