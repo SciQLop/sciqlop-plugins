@@ -46,3 +46,41 @@ def test_labels_required_for_non_spectrogram():
         path="A/B", speasy_id="amda/x", type="vector", labels=["x", "y", "z"]
     )
     assert ok.labels == ["x", "y", "z"]
+
+
+def test_load_catalog_parses_valid_yaml(tmp_path):
+    from sciqlop_radio.catalog import load_catalog
+    f = tmp_path / "cat.yaml"
+    f.write_text(
+        "- path: Wind/WAVES/RAD1\n"
+        "  speasy_id: amda/wnd_swaves_rad1\n"
+        "- path: STEREO-A/SWAVES/HFR\n"
+        "  speasy_id: cda/STA_L3_WAV_HFR/avg_intens_ahead\n"
+    )
+    entries = load_catalog(f)
+    assert [e.path for e in entries] == ["Wind/WAVES/RAD1", "STEREO-A/SWAVES/HFR"]
+
+
+def test_load_catalog_skips_malformed_entry_keeps_rest(tmp_path):
+    from sciqlop_radio.catalog import load_catalog
+    f = tmp_path / "cat.yaml"
+    f.write_text(
+        "- path: Good/One\n"
+        "  speasy_id: amda/ok\n"
+        "- path: Bad/One\n"
+        "  speasy_id: missing_slash\n"
+    )
+    entries = load_catalog(f)
+    assert [e.path for e in entries] == ["Good/One"]
+
+
+def test_load_catalog_missing_file_returns_empty(tmp_path):
+    from sciqlop_radio.catalog import load_catalog
+    assert load_catalog(tmp_path / "nope.yaml") == []
+
+
+def test_load_catalog_non_list_returns_empty(tmp_path):
+    from sciqlop_radio.catalog import load_catalog
+    f = tmp_path / "cat.yaml"
+    f.write_text("key: value\n")
+    assert load_catalog(f) == []

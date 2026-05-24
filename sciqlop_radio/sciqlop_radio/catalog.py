@@ -9,7 +9,8 @@ Spectrogram styling is inherited from the returned SpeasyVariable's metadata.
 from __future__ import annotations
 
 import logging
-from typing import Literal, Optional
+from pathlib import Path
+from typing import Literal, Optional, Union
 
 from pydantic import BaseModel, field_validator, model_validator
 
@@ -52,3 +53,29 @@ class CuratedRadioProduct(BaseModel):
         if self.label is None:
             self.label = self.path
         return self
+
+
+def load_catalog(path: Union[str, Path]) -> list[CuratedRadioProduct]:
+    """Read + validate the YAML catalog. Fail-soft: missing file or top-level
+    parse error -> []; a malformed entry is logged and skipped, others kept."""
+    p = Path(path)
+    if not p.exists():
+        return []
+    import yaml
+
+    try:
+        raw = yaml.safe_load(p.read_text()) or []
+    except yaml.YAMLError as exc:
+        log.error("catalog: failed to parse %s: %s", p, exc)
+        return []
+    if not isinstance(raw, list):
+        log.error("catalog: %s must be a YAML list, got %s", p, type(raw).__name__)
+        return []
+
+    out: list[CuratedRadioProduct] = []
+    for i, item in enumerate(raw):
+        try:
+            out.append(CuratedRadioProduct(**item))
+        except Exception as exc:  # noqa: BLE001 — ValidationError or bad mapping
+            log.warning("catalog: skipping entry %d (%r): %s", i, item, exc)
+    return out
