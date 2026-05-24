@@ -84,3 +84,65 @@ def test_load_catalog_non_list_returns_empty(tmp_path):
     f = tmp_path / "cat.yaml"
     f.write_text("key: value\n")
     assert load_catalog(f) == []
+
+
+
+from types import SimpleNamespace
+
+
+def _fake_speasy(parameters_by_provider, get_data_return="VAR"):
+    """SimpleNamespace mimicking the bits of `speasy` the catalog touches:
+    `.inventories.flat_inventories.<provider>.parameters` (a dict) and
+    `.get_data(id, t0, t1)`."""
+    providers = {
+        prov: SimpleNamespace(parameters=params)
+        for prov, params in parameters_by_provider.items()
+    }
+    flat = SimpleNamespace(**providers)
+    calls = []
+
+    def get_data(pid, t0, t1):
+        calls.append((pid, t0, t1))
+        return get_data_return
+
+    sp = SimpleNamespace(
+        inventories=SimpleNamespace(flat_inventories=flat),
+        get_data=get_data,
+    )
+    sp.calls = calls
+    return sp
+
+
+def test_resolves_true_when_uid_in_inventory():
+    from sciqlop_radio.catalog import _resolves
+    sp = _fake_speasy({"amda": {"wnd_swaves_rad1": object()}})
+    assert _resolves("amda/wnd_swaves_rad1", sp) is True
+
+
+def test_resolves_false_when_uid_missing_or_provider_absent():
+    from sciqlop_radio.catalog import _resolves
+    sp = _fake_speasy({"amda": {"other": object()}})
+    assert _resolves("amda/wnd_swaves_rad1", sp) is False
+    assert _resolves("cda/anything", sp) is False
+
+
+def test_callback_fetches_via_speasy_get_data():
+    from sciqlop_radio.catalog import CuratedRadioProduct, _build_callback
+    sp = _fake_speasy({}, get_data_return="SPECVAR")
+    e = CuratedRadioProduct(path="A/B", speasy_id="amda/x")
+    cb = _build_callback(e, sp)
+    out = cb(1_700_000_000.0, 1_700_000_900.0)
+    assert out == "SPECVAR"
+    assert sp.calls and sp.calls[0][0] == "amda/x"
+
+
+def test_callback_swallows_get_data_error_returns_none():
+    from sciqlop_radio.catalog import CuratedRadioProduct, _build_callback
+
+    def boom(pid, t0, t1):
+        raise RuntimeError("upstream down")
+
+    sp = SimpleNamespace(get_data=boom)
+    e = CuratedRadioProduct(path="A/B", speasy_id="amda/x")
+    cb = _build_callback(e, sp)
+    assert cb(1_700_000_000.0, 1_700_000_900.0) is None

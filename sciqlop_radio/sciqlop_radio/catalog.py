@@ -9,6 +9,7 @@ Spectrogram styling is inherited from the returned SpeasyVariable's metadata.
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal, Optional, Union
 
@@ -79,3 +80,46 @@ def load_catalog(path: Union[str, Path]) -> list[CuratedRadioProduct]:
         except Exception as exc:  # noqa: BLE001 — ValidationError or bad mapping
             log.warning("catalog: skipping entry %d (%r): %s", i, item, exc)
     return out
+
+
+
+_TYPE_TO_VP = {
+    "spectrogram": "Spectrogram",
+    "vector": "Vector",
+    "scalar": "Scalar",
+    "multicomponent": "MultiComponent",
+}
+
+
+def _resolves(speasy_id: str, speasy_module) -> bool:
+    """True if `<provider>/<uid>` is present in the in-memory Speasy inventory.
+
+    SciQLop's speasy_provider builds the inventories at startup (before our
+    load() runs), so this is a dict lookup, not a network call."""
+    provider, _, uid = speasy_id.partition("/")
+    flat = getattr(speasy_module.inventories.flat_inventories, provider, None)
+    if flat is None:
+        return False
+    params = getattr(flat, "parameters", None) or {}
+    return uid in params
+
+
+def _vp_type_for(entry_type: str, vp_types):
+    """Map a catalog `type` string to a SciQLop VirtualProductType member."""
+    return getattr(vp_types, _TYPE_TO_VP[entry_type])
+
+
+def _build_callback(entry: "CuratedRadioProduct", speasy_module):
+    """Return SciQLop's `(start, stop, **kwargs) -> SpeasyVariable | None`
+    callback. Never raises into SciQLop's data thread."""
+
+    def _cb(start, stop, **kwargs):  # noqa: ARG001 — accept SciQLop knobs
+        t0 = datetime.fromtimestamp(float(start), tz=timezone.utc)
+        t1 = datetime.fromtimestamp(float(stop), tz=timezone.utc)
+        try:
+            return speasy_module.get_data(entry.speasy_id, t0, t1)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("catalog(%s): get_data failed: %s", entry.path, exc)
+            return None
+
+    return _cb
