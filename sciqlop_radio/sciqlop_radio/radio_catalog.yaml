@@ -1,0 +1,5 @@
+# radio_catalog.yaml — curated space-mission radio dynamic spectra (data from Speasy).
+# Entries absent from the installed Speasy inventory are skipped-with-log.
+# Curation rule: do NOT duplicate radio/psp_rfs_lfr, radio/psp_rfs_hfr,
+# radio/eovsa, radio/ilofar (already provided by continuous.py).
+[]

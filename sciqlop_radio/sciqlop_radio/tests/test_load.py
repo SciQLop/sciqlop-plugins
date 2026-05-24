@@ -41,3 +41,25 @@ def test_load_is_idempotent():
 
         load(main)
         assert main.toolsMenu.addAction.call_count == first_call_count
+
+
+def test_load_invokes_catalog_registration(monkeypatch):
+    """load() must register the curated catalog YAML alongside the continuous VPs."""
+    import sciqlop_radio
+    from pathlib import Path
+    from sciqlop_radio.catalog import CatalogRegistration
+
+    calls: list[Path] = []
+
+    def fake_register(path, **kw):
+        calls.append(Path(path))
+        return CatalogRegistration()
+
+    monkeypatch.setattr("sciqlop_radio.catalog.register_catalog_products", fake_register)
+
+    main = MagicMock()
+    with patch("sciqlop_radio.dock.RadioSpectraDock"):
+        sciqlop_radio.load(main)
+
+    expected = Path(sciqlop_radio.__file__).parent / "radio_catalog.yaml"
+    assert expected in calls

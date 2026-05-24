@@ -20,6 +20,7 @@ dependencies = [
     "numpy>=1.24",
     "pydantic>=2.0",
     "speasy>=1.7",
+    "pyyaml",
 ]
 
 [project.optional-dependencies]
@@ -32,4 +33,4 @@ sciqlop_radio = "sciqlop_radio"
 include = ["sciqlop_radio*"]
 
 [tool.setuptools.package-data]
-sciqlop_radio = ["plugin.json"]
+sciqlop_radio = ["plugin.json", "radio_catalog.yaml"]
