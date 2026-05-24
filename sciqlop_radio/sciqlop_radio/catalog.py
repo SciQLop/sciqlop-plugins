@@ -9,9 +9,10 @@ Spectrogram styling is inherited from the returned SpeasyVariable's metadata.
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Literal, Optional, Union
+from typing import Any, Callable, Literal, Optional, Union
 
 from pydantic import BaseModel, field_validator, model_validator
 
@@ -123,3 +124,60 @@ def _build_callback(entry: "CuratedRadioProduct", speasy_module):
             return None
 
     return _cb
+
+
+@dataclass
+class CatalogRegistration:
+    """Live handle on the registered catalog VPs — keeps them alive vs GC."""
+
+    vps: dict[str, Any] = field(default_factory=dict)
+
+
+def _register_entries(
+    entries: list["CuratedRadioProduct"],
+    create_vp: Callable[..., Any],
+    vp_types,
+    speasy_module,
+) -> CatalogRegistration:
+    reg = CatalogRegistration()
+    for e in entries:
+        if not _resolves(e.speasy_id, speasy_module):
+            log.info("catalog: skip %s — %s not in Speasy inventory", e.path, e.speasy_id)
+            continue
+        vptype = _vp_type_for(e.type, vp_types)
+        cb = _build_callback(e, speasy_module)
+        path = f"radio/{e.path}"
+        try:
+            if e.type == "spectrogram":
+                vp = create_vp(path, cb, vptype)
+            else:
+                vp = create_vp(path, cb, vptype, labels=e.labels)
+        except Exception as exc:  # noqa: BLE001
+            log.exception("catalog: create_virtual_product failed for %s: %s", path, exc)
+            continue
+        reg.vps[path] = vp
+    return reg
+
+
+def register_catalog_products(
+    catalog_path: Union[str, Path], *, speasy_module=None
+) -> Optional[CatalogRegistration]:
+    """Read the catalog and register one virtual product per resolvable entry.
+
+    Returns an empty `CatalogRegistration` when the catalog is empty/missing,
+    and `None` when SciQLop's virtual-products API isn't importable (headless
+    tests) — mirroring `continuous.register_continuous_products`."""
+    entries = load_catalog(catalog_path)
+    if not entries:
+        return CatalogRegistration()
+    try:
+        from SciQLop.user_api.virtual_products import (
+            create_virtual_product,
+            VirtualProductType,
+        )
+    except ImportError as exc:
+        log.warning("catalog: SciQLop user_api unavailable: %s", exc)
+        return None
+    if speasy_module is None:
+        import speasy as speasy_module  # noqa: PLW0127
+    return _register_entries(entries, create_virtual_product, VirtualProductType, speasy_module)

@@ -146,3 +146,80 @@ def test_callback_swallows_get_data_error_returns_none():
     e = CuratedRadioProduct(path="A/B", speasy_id="amda/x")
     cb = _build_callback(e, sp)
     assert cb(1_700_000_000.0, 1_700_000_900.0) is None
+
+
+def _fake_vp_types():
+    return SimpleNamespace(
+        Spectrogram="SPEC", Vector="VEC", Scalar="SCA", MultiComponent="MC"
+    )
+
+
+def test_register_entries_registers_resolvable_skips_unresolvable():
+    from sciqlop_radio.catalog import CuratedRadioProduct, _register_entries
+    sp = _fake_speasy({"amda": {"ok": object()}})
+    entries = [
+        CuratedRadioProduct(path="Wind/WAVES/RAD1", speasy_id="amda/ok"),
+        CuratedRadioProduct(path="Gone/Product", speasy_id="amda/missing"),
+    ]
+    created = []
+
+    def create_vp(path, cb, vptype, **kw):
+        created.append((path, vptype, kw))
+        return f"VP[{path}]"
+
+    reg = _register_entries(entries, create_vp, _fake_vp_types(), sp)
+    assert [c[0] for c in created] == ["radio/Wind/WAVES/RAD1"]
+    assert created[0][1] == "SPEC"
+    assert reg.vps == {"radio/Wind/WAVES/RAD1": "VP[radio/Wind/WAVES/RAD1]"}
+
+
+def test_register_entries_passes_labels_for_non_spectrogram():
+    from sciqlop_radio.catalog import CuratedRadioProduct, _register_entries
+    sp = _fake_speasy({"amda": {"v": object()}})
+    entries = [
+        CuratedRadioProduct(
+            path="X/Vec", speasy_id="amda/v", type="vector", labels=["a", "b", "c"]
+        )
+    ]
+    created = []
+
+    def create_vp(path, cb, vptype, **kw):
+        created.append((path, vptype, kw))
+        return path
+
+    _register_entries(entries, create_vp, _fake_vp_types(), sp)
+    assert created[0][1] == "VEC"
+    assert created[0][2] == {"labels": ["a", "b", "c"]}
+
+
+def test_register_entries_continues_when_create_vp_raises():
+    from sciqlop_radio.catalog import CuratedRadioProduct, _register_entries
+    sp = _fake_speasy({"amda": {"a": object(), "b": object()}})
+    entries = [
+        CuratedRadioProduct(path="One", speasy_id="amda/a"),
+        CuratedRadioProduct(path="Two", speasy_id="amda/b"),
+    ]
+
+    def create_vp(path, cb, vptype, **kw):
+        if path == "radio/One":
+            raise RuntimeError("boom")
+        return path
+
+    reg = _register_entries(entries, create_vp, _fake_vp_types(), sp)
+    assert list(reg.vps) == ["radio/Two"]
+
+
+def test_register_catalog_products_returns_none_when_sciqlop_missing(tmp_path, monkeypatch):
+    import sys
+    monkeypatch.setitem(sys.modules, "SciQLop.user_api.virtual_products", None)
+    f = tmp_path / "cat.yaml"
+    f.write_text("- path: A/B\n  speasy_id: amda/x\n")
+    from sciqlop_radio.catalog import register_catalog_products
+    assert register_catalog_products(f) is None
+
+
+def test_register_catalog_products_empty_catalog_returns_empty_registration(tmp_path):
+    from sciqlop_radio.catalog import register_catalog_products, CatalogRegistration
+    reg = register_catalog_products(tmp_path / "missing.yaml")
+    assert isinstance(reg, CatalogRegistration)
+    assert reg.vps == {}
