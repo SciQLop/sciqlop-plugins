@@ -44,12 +44,20 @@ class ContinuousSource:
     which we add per call) — lazy because sunpy/radiospectra imports are
     slow and should only fire when SciQLop actually drags a product onto
     a panel.
+
+    `static_meta` is the ISTP-ish metadata dict surfaced on the product-
+    tree node and used by RichEasySpectrogram.plot_hints (pre-fetch).
+    Frequency-axis and color-axis units typically come from the parsed
+    SpeasyVariable via plot_hints_from_variable (post-fetch), so this is
+    intentionally minimal: just DISPLAY_TYPE, SCALETYP, description, and
+    a provider tag for tooltips.
     """
 
     vp_path: str
     label: str
     attrs_factory: Callable[[], list]
     max_files: int = MAX_FILES_PER_CALL
+    static_meta: dict = field(default_factory=dict)
 
 
 def _format_time_for_fido(t: datetime) -> str:
@@ -73,16 +81,33 @@ def _attrs_ilofar() -> list:
 # with a real frequency axis, strictly better than the raw radiospectra
 # files we'd fetch here. Don't add a continuous PSP RFS VP back without
 # also dropping the catalog entry.
+
+_EOVSA_META = {
+    "DISPLAY_TYPE": "spectrogram",
+    "SCALETYP": "log",
+    "description": "EOVSA solar microwave dynamic spectrum (1-18 GHz)",
+    "provider": "radiospectra",
+}
+
+_ILOFAR_META = {
+    "DISPLAY_TYPE": "spectrogram",
+    "SCALETYP": "log",
+    "description": "ILOFAR mode 357 BST dynamic spectrum (10-240 MHz)",
+    "provider": "radiospectra",
+}
+
 CONTINUOUS_SOURCES: list[ContinuousSource] = [
     ContinuousSource(
         vp_path="radio/eovsa",
         label="EOVSA",
         attrs_factory=_attrs_eovsa,
+        static_meta=_EOVSA_META,
     ),
     ContinuousSource(
         vp_path="radio/ilofar",
         label="ILOFAR (mode 357 BST)",
         attrs_factory=_attrs_ilofar,
+        static_meta=_ILOFAR_META,
     ),
 ]
 
@@ -262,24 +287,33 @@ class ContinuousRegistration:
 def register_continuous_products(
     cache_dir: Path,
     open_and_convert: Callable[[Path], Any],
+    *,
+    vp_factory: Optional[Callable[..., Any]] = None,
 ) -> Optional[ContinuousRegistration]:
     """Register one VP per `ContinuousSource`. Returns None when SciQLop's
-    virtual-products API isn't importable (headless tests)."""
+    virtual-products API isn't importable (headless tests).
+
+    `vp_factory` defaults to `sciqlop_radio.hints.make_rich_vp` so the VPs
+    carry the same plot-hints overrides as the catalog. Tests can inject
+    a fake."""
     try:
-        from SciQLop.user_api.virtual_products import (
-            create_virtual_product, VirtualProductType,
-        )
+        from SciQLop.user_api.virtual_products import VirtualProductType
     except ImportError as exc:
         log.warning("continuous: SciQLop user_api unavailable: %s", exc)
         return None
+
+    if vp_factory is None:
+        from .hints import make_rich_vp
+        vp_factory = make_rich_vp
 
     reg = ContinuousRegistration()
     for src in CONTINUOUS_SOURCES:
         cb = _build_callback(src, cache_dir, open_and_convert)
         try:
-            vp = create_virtual_product(src.vp_path, cb, VirtualProductType.Spectrogram)
+            vp = vp_factory(src.vp_path, cb, VirtualProductType.Spectrogram,
+                             metadata=src.static_meta)
         except Exception as exc:  # noqa: BLE001
-            log.exception("continuous: create_virtual_product failed for %s: %s",
+            log.exception("continuous: vp_factory failed for %s: %s",
                           src.vp_path, exc)
             continue
         reg.vps[src.vp_path] = vp
