@@ -96,7 +96,8 @@
   speasy_id: cda/SOLO_L3_RPW-TNR-SURV-FLUX/PSD_SFU
   label: Solar Orbiter/RPW TNR (SFU)
 
-# Juno/Waves — E-field spectrograms during orbital phase (AMDA), no SFU variant
+# Juno/Waves — E + B field spectrograms (AMDA), no SFU variant
+# Orbit phase = Jovian system, 2016+; cruise phase = Earth → Jupiter, 2011–2016.
 - path: Juno/Waves/E-HFR-hi (orbit)
   speasy_id: amda/juno_wav_e_orb_hfrhi
   label: Juno/Waves E HFR-hi (orbit)
@@ -112,3 +113,66 @@
 - path: Juno/Waves/E-LFR-lo (orbit)
   speasy_id: amda/juno_wav_e_orb_lfrlo
   label: Juno/Waves E LFR-lo (orbit)
+
+- path: Juno/Waves/B-LFR-lo (orbit)
+  speasy_id: amda/juno_wav_b_orb_lfrlo
+  label: Juno/Waves B LFR-lo (orbit)
+
+- path: Juno/Waves/E-HFR-hi (cruise)
+  speasy_id: amda/juno_wav_e_cru_hfrhi
+  label: Juno/Waves E HFR-hi (cruise)
+
+- path: Juno/Waves/E-HFR-lo (cruise)
+  speasy_id: amda/juno_wav_e_cru_hfrlo
+  label: Juno/Waves E HFR-lo (cruise)
+
+- path: Juno/Waves/E-LFR-hi (cruise)
+  speasy_id: amda/juno_wav_e_cru_lfrhi
+  label: Juno/Waves E LFR-hi (cruise)
+
+- path: Juno/Waves/E-LFR-lo (cruise)
+  speasy_id: amda/juno_wav_e_cru_lfrlo
+  label: Juno/Waves E LFR-lo (cruise)
+
+- path: Juno/Waves/B-LFR-lo (cruise)
+  speasy_id: amda/juno_wav_b_cru_lfrlo
+  label: Juno/Waves B LFR-lo (cruise)
+
+# Cassini / RPWS — Saturn Kilometric Radiation (AMDA), goniopolarimetric polarizations
+- path: Cassini/RPWS/SKR/RH
+  speasy_id: amda/skr_rh
+  label: Cassini/RPWS SKR right-hand polarization
+
+- path: Cassini/RPWS/SKR/LH
+  speasy_id: amda/skr_lh
+  label: Cassini/RPWS SKR left-hand polarization
+
+- path: Cassini/RPWS/SKR/V
+  speasy_id: amda/skr_v
+  label: Cassini/RPWS SKR Stokes V
+
+# Galileo / PWS — Plasma Wave Subsystem at Jupiter, 1996–2003 (AMDA)
+- path: Galileo/PWS/E (summary)
+  speasy_id: amda/gll_pws_sumelec
+  label: Galileo/PWS electric (summary)
+
+- path: Galileo/PWS/B (summary)
+  speasy_id: amda/gll_pws_summag
+  label: Galileo/PWS magnetic (summary)
+
+- path: Galileo/PWS/E (high-rate)
+  speasy_id: amda/gll_pwshr_elec
+  label: Galileo/PWS electric (high-rate)
+
+- path: Galileo/PWS/B (high-rate)
+  speasy_id: amda/gll_pwshr_mag
+  label: Galileo/PWS magnetic (high-rate)
+
+# Voyager 1/2 / PWS — Plasma Wave Subsystem Low-Rate (CDAWeb), outer heliosphere
+- path: Voyager-1/PWS/LR
+  speasy_id: cda/VG1_PWS_LR/electric_field
+  label: Voyager-1/PWS Low-Rate electric field
+
+- path: Voyager-2/PWS/LR
+  speasy_id: cda/VG2_PWS_LR/electric_field
+  label: Voyager-2/PWS Low-Rate electric field
