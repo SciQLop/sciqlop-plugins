@@ -2,10 +2,12 @@
 # Entries absent from the installed Speasy inventory are skipped-with-log.
 #
 # Catalog paths use nested title-case `radio/<Mission>/<Instrument>/<Band>/<Unit>`;
-# continuous.py registers separately under flat lowercase `radio/psp_rfs_lfr`,
-# `radio/psp_rfs_hfr`, `radio/eovsa`, `radio/ilofar`. The two are
-# structurally disjoint by convention — never reuse those exact flat paths
-# here (the shipped-file test enforces this).
+# continuous.py registers separately under flat lowercase `radio/eovsa` and
+# `radio/ilofar` (ground-based receivers with no calibrated Speasy
+# equivalent). The two are structurally disjoint by convention — never
+# reuse those exact flat paths here (the shipped-file test enforces this).
+# PSP/RFS used to be a continuous VP too, but is now served exclusively
+# via the curated PSP/FIELDS/RFS_* entries below (CDA L3 calibrated).
 # Where the same product ships both flux-density and solar-flux-unit forms
 # (PSP RFS L3, STEREO SWAVES L3, Solar Orbiter RPW L3), both are exposed
 # side by side: SFU is the convention in solar radio astronomy

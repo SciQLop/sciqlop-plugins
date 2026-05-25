@@ -58,18 +58,6 @@ def _format_time_for_fido(t: datetime) -> str:
     return t.isoformat(sep="T", timespec="seconds")
 
 
-def _attrs_psp_rfs_lfr() -> list:
-    import astropy.units as u
-    from sunpy.net import attrs as a
-    return [a.Instrument("RFS"), a.Wavelength(10 * u.kHz, 1.7 * u.MHz)]
-
-
-def _attrs_psp_rfs_hfr() -> list:
-    import astropy.units as u
-    from sunpy.net import attrs as a
-    return [a.Instrument("RFS"), a.Wavelength(1.3 * u.MHz, 19.2 * u.MHz)]
-
-
 def _attrs_eovsa() -> list:
     from sunpy.net import attrs as a
     return [a.Instrument("EOVSA")]
@@ -80,17 +68,12 @@ def _attrs_ilofar() -> list:
     return [a.Instrument("ILOFAR")]
 
 
+# PSP/FIELDS RFS L3 (LFR + HFR) is served via the curated catalog
+# (radio/PSP/FIELDS/RFS_*/...) sourced from CDAWeb — calibrated PSD flux
+# with a real frequency axis, strictly better than the raw radiospectra
+# files we'd fetch here. Don't add a continuous PSP RFS VP back without
+# also dropping the catalog entry.
 CONTINUOUS_SOURCES: list[ContinuousSource] = [
-    ContinuousSource(
-        vp_path="radio/psp_rfs_lfr",
-        label="PSP/RFS LFR",
-        attrs_factory=_attrs_psp_rfs_lfr,
-    ),
-    ContinuousSource(
-        vp_path="radio/psp_rfs_hfr",
-        label="PSP/RFS HFR",
-        attrs_factory=_attrs_psp_rfs_hfr,
-    ),
     ContinuousSource(
         vp_path="radio/eovsa",
         label="EOVSA",

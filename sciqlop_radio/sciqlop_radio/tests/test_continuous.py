@@ -34,12 +34,12 @@ def speasy_variable_factory():
 
 
 def test_continuous_sources_registry_covers_known_channels():
+    """PSP/RFS used to live here but is now served via the curated catalog
+    (cda L3 PSD flux/SFU); only ground-based / mission-specific receivers
+    without a calibrated Speasy equivalent remain as continuous VPs."""
     from sciqlop_radio.continuous import CONTINUOUS_SOURCES
     paths = {s.vp_path for s in CONTINUOUS_SOURCES}
-    assert "radio/psp_rfs_lfr" in paths
-    assert "radio/psp_rfs_hfr" in paths
-    assert "radio/eovsa" in paths
-    assert "radio/ilofar" in paths
+    assert paths == {"radio/eovsa", "radio/ilofar"}
 
 
 def test_concat_returns_single_variable_unchanged(speasy_variable_factory):
