@@ -200,9 +200,9 @@ def _build_callback(
     will invoke when the user pans/zooms over this product's time range.
     """
 
-    def _callback(start, stop, **kwargs):  # noqa: ARG001 — accept knobs for SciQLop fwd-compat
-        t0 = datetime.fromtimestamp(float(start), tz=timezone.utc)
-        t1 = datetime.fromtimestamp(float(stop), tz=timezone.utc)
+    def _callback(start: float, stop: float):
+        t0 = datetime.fromtimestamp(start, tz=timezone.utc)
+        t1 = datetime.fromtimestamp(stop, tz=timezone.utc)
         t_search = time.monotonic()
         log.warning(  # WARNING so it shows up in SciQLop's log widget by default
             "continuous(%s): callback fired for [%s .. %s]",
