@@ -102,3 +102,18 @@ From the final whole-branch review and earlier per-task reviews:
 ## How to land this
 
 The finishing-skill prompt was paused on your choice — merge / PR / keep / discard. Tests pass; the whole branch has been spec-compliance-reviewed and code-quality-reviewed per task, plus a holistic final review approved it. Pick a verb and the existing skill flow will handle it.
+
+## Update 2026-05-25 — metadata + plot-hints parity
+
+Branch advanced from `b9e5082` to 53c74c4 with parity work:
+
+- New `sciqlop_radio/sciqlop_radio/hints.py` (~185 LOC): `extract_speasy_index_meta` (Speasy ParameterIndex -> flat metadata dict), four `RichEasy*` subclasses overriding `plot_hints` + `plot_hints_from_variable` exactly as `SciQLop.plugins.speasy_provider.SpeasyPlugin` does, `make_rich_vp` factory.
+- `catalog.py`: `_resolves` -> `_resolve_index` (returns the index); `_register_entries` extracts ISTP metadata and passes through `vp_factory` (kw-only signature: `(path, cb, vptype, *, metadata, labels=None)`); `register_catalog_products` defaults `vp_factory=hints.make_rich_vp`.
+- `continuous.py`: `ContinuousSource.static_meta` field + minimal hand-written meta per source; `register_continuous_products` uses the same factory.
+
+Net behaviour: every radio VP node carries the same ISTP-flavoured metadata its `speasy/...` sibling would (when one exists); on plot, the z (colour) axis label/unit/log-scale appear immediately from the node metadata; the y2 (frequency) axis appears on first fetch from the SpeasyVariable's axes meta. Identical UX to native Speasy products.
+
+Test count moved from 74 passed baseline to 83 passed; 4 dispatch tests skip under headless conftest (the conftest pre-stubs `easy_provider` as MagicMock to dodge a QCoreApplication SIGABRT, so `RichEasy*` subclasses fall back to `object` parents in tests via an `isinstance(x, type)` guard in `hints.py`; the factory dispatch needs real EasyProvider parents to construct). The 5 pre-existing `test_settings.py` failures unchanged.
+
+Spec: `docs/superpowers/specs/2026-05-25-radio-vp-metadata-and-plot-hints-design.md` (d3f343f).
+Plan: `docs/superpowers/plans/2026-05-25-radio-vp-metadata-and-plot-hints.md` (27c6d78).
