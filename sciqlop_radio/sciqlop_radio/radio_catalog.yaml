@@ -1,25 +1,36 @@
 # radio_catalog.yaml — curated space-mission radio dynamic spectra (data from Speasy).
 # Entries absent from the installed Speasy inventory are skipped-with-log.
 #
-# Catalog paths use nested title-case `radio/<Mission>/<Instrument>/<Product>`;
+# Catalog paths use nested title-case `radio/<Mission>/<Instrument>/<Band>/<Unit>`;
 # continuous.py registers separately under flat lowercase `radio/psp_rfs_lfr`,
 # `radio/psp_rfs_hfr`, `radio/eovsa`, `radio/ilofar`. The two are
 # structurally disjoint by convention — never reuse those exact flat paths
 # here (the shipped-file test enforces this).
-# It is fine to surface the same instrument via both sources when they
-# carry different processing levels (e.g. radiospectra raw LFR/HFR via
-# continuous.py vs CDAWeb L3 calibrated flux below).
+# Where the same product ships both flux-density and solar-flux-unit forms
+# (PSP RFS L3, STEREO SWAVES L3, Solar Orbiter RPW L3), both are exposed
+# side by side: SFU is the convention in solar radio astronomy
+# (1 SFU = 1e-22 W·m⁻²·Hz⁻¹), FLUX is the SI form preferred in fields/plasma
+# physics. Plot styling inherits the right colorbar units from each
+# variable's Speasy metadata.
 
-# PSP / FIELDS / RFS — L3 calibrated flux (CDAWeb)
-- path: PSP/FIELDS/RFS_LFR
+# PSP / FIELDS / RFS — L3 calibrated (CDAWeb)
+- path: PSP/FIELDS/RFS_LFR/FLUX
   speasy_id: cda/PSP_FLD_L3_RFS_LFR/psp_fld_l3_rfs_lfr_PSD_FLUX
-  label: PSP/FIELDS RFS LFR (L3 PSD flux)
+  label: PSP/FIELDS RFS LFR (PSD flux)
 
-- path: PSP/FIELDS/RFS_HFR
+- path: PSP/FIELDS/RFS_LFR/SFU
+  speasy_id: cda/PSP_FLD_L3_RFS_LFR/psp_fld_l3_rfs_lfr_PSD_SFU
+  label: PSP/FIELDS RFS LFR (PSD, SFU)
+
+- path: PSP/FIELDS/RFS_HFR/FLUX
   speasy_id: cda/PSP_FLD_L3_RFS_HFR/psp_fld_l3_rfs_hfr_PSD_FLUX
-  label: PSP/FIELDS RFS HFR (L3 PSD flux)
+  label: PSP/FIELDS RFS HFR (PSD flux)
 
-# Wind/WAVES — L2 power spectral density (CDAWeb)
+- path: PSP/FIELDS/RFS_HFR/SFU
+  speasy_id: cda/PSP_FLD_L3_RFS_HFR/psp_fld_l3_rfs_hfr_PSD_SFU
+  label: PSP/FIELDS RFS HFR (PSD, SFU)
+
+# Wind/WAVES — L2 power spectral density (CDAWeb) — no SFU variant
 - path: Wind/WAVES/RAD1
   speasy_id: cda/WI_L2_WAV_RAD1/PSD_V2_S
   label: Wind/WAVES RAD1 (20–1040 kHz)
@@ -32,34 +43,58 @@
   speasy_id: cda/WI_L2_WAV_TNR/PSD_V2
   label: Wind/WAVES TNR (4–245 kHz)
 
-# STEREO-A/SWAVES — L3 calibrated flux (CDAWeb)
-- path: STEREO-A/SWAVES/HFR
+# STEREO-A / SWAVES — L3 calibrated (CDAWeb)
+- path: STEREO-A/SWAVES/HFR/FLUX
   speasy_id: cda/STA_L3_WAV_HFR/PSD_FLUX
-  label: STEREO-A/SWAVES HFR
+  label: STEREO-A/SWAVES HFR (flux)
 
-- path: STEREO-A/SWAVES/LFR
+- path: STEREO-A/SWAVES/HFR/SFU
+  speasy_id: cda/STA_L3_WAV_HFR/PSD_SFU
+  label: STEREO-A/SWAVES HFR (SFU)
+
+- path: STEREO-A/SWAVES/LFR/FLUX
   speasy_id: cda/STA_L3_WAV_LFR/PSD_FLUX
-  label: STEREO-A/SWAVES LFR
+  label: STEREO-A/SWAVES LFR (flux)
 
-# STEREO-B/SWAVES — L3 calibrated flux (CDAWeb)
-- path: STEREO-B/SWAVES/HFR
+- path: STEREO-A/SWAVES/LFR/SFU
+  speasy_id: cda/STA_L3_WAV_LFR/PSD_SFU
+  label: STEREO-A/SWAVES LFR (SFU)
+
+# STEREO-B / SWAVES — L3 calibrated (CDAWeb), mission ended 2014
+- path: STEREO-B/SWAVES/HFR/FLUX
   speasy_id: cda/STB_L3_WAV_HFR/PSD_FLUX
-  label: STEREO-B/SWAVES HFR
+  label: STEREO-B/SWAVES HFR (flux)
 
-- path: STEREO-B/SWAVES/LFR
+- path: STEREO-B/SWAVES/HFR/SFU
+  speasy_id: cda/STB_L3_WAV_HFR/PSD_SFU
+  label: STEREO-B/SWAVES HFR (SFU)
+
+- path: STEREO-B/SWAVES/LFR/FLUX
   speasy_id: cda/STB_L3_WAV_LFR/PSD_FLUX
-  label: STEREO-B/SWAVES LFR
+  label: STEREO-B/SWAVES LFR (flux)
 
-# Solar Orbiter/RPW — L3 calibrated flux (CDAWeb)
-- path: Solar Orbiter/RPW/HFR
+- path: STEREO-B/SWAVES/LFR/SFU
+  speasy_id: cda/STB_L3_WAV_LFR/PSD_SFU
+  label: STEREO-B/SWAVES LFR (SFU)
+
+# Solar Orbiter / RPW — L3 calibrated (CDAWeb)
+- path: Solar Orbiter/RPW/HFR/FLUX
   speasy_id: cda/SOLO_L3_RPW-HFR-SURV-FLUX/PSD_FLUX
-  label: Solar Orbiter/RPW HFR
+  label: Solar Orbiter/RPW HFR (flux)
 
-- path: Solar Orbiter/RPW/TNR
+- path: Solar Orbiter/RPW/HFR/SFU
+  speasy_id: cda/SOLO_L3_RPW-HFR-SURV-FLUX/PSD_SFU
+  label: Solar Orbiter/RPW HFR (SFU)
+
+- path: Solar Orbiter/RPW/TNR/FLUX
   speasy_id: cda/SOLO_L3_RPW-TNR-SURV-FLUX/PSD_FLUX
-  label: Solar Orbiter/RPW TNR
+  label: Solar Orbiter/RPW TNR (flux)
 
-# Juno/Waves — E-field spectrograms during orbital phase (AMDA)
+- path: Solar Orbiter/RPW/TNR/SFU
+  speasy_id: cda/SOLO_L3_RPW-TNR-SURV-FLUX/PSD_SFU
+  label: Solar Orbiter/RPW TNR (SFU)
+
+# Juno/Waves — E-field spectrograms during orbital phase (AMDA), no SFU variant
 - path: Juno/Waves/E-HFR-hi (orbit)
   speasy_id: amda/juno_wav_e_orb_hfrhi
   label: Juno/Waves E HFR-hi (orbit)
