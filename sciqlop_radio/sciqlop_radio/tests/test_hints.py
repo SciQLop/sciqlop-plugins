@@ -113,6 +113,9 @@ from unittest.mock import MagicMock
 _SCIQLOP_REAL = not isinstance(
     sys.modules.get("SciQLop.core.plot_hints"), MagicMock
 )
+_EASY_PROVIDER_REAL = not isinstance(
+    sys.modules.get("SciQLop.components.plotting.backend.easy_provider"), MagicMock
+)
 
 
 def _fake_node_with_meta(meta):
@@ -213,3 +216,56 @@ def test_plot_hints_from_variable_returns_empty_on_exception():
     # not a SpeasyVariable -> variable_as_istp_meta raises
     hints = spec.plot_hints_from_variable(node, "not a variable")
     assert isinstance(hints, PlotHints)
+
+
+# ---------------------------------------------------------------------------
+# make_rich_vp dispatch
+# ---------------------------------------------------------------------------
+
+
+def _no_op_callback(start: float, stop: float):
+    return None
+
+
+@pytest.mark.skipif(not (_SCIQLOP_REAL and _EASY_PROVIDER_REAL),
+                    reason="requires real SciQLop install - EasyProvider subclasses cant init under MagicMock parents")
+def test_make_rich_vp_dispatches_to_spectrogram():
+    from sciqlop_radio.hints import make_rich_vp, RichEasySpectrogram
+    from SciQLop.user_api.virtual_products import VirtualProductType
+    vp = make_rich_vp("radio/test/spec", _no_op_callback,
+                       VirtualProductType.Spectrogram,
+                       metadata={"DISPLAY_TYPE": "spectrogram"})
+    assert isinstance(vp, RichEasySpectrogram)
+
+
+@pytest.mark.skipif(not (_SCIQLOP_REAL and _EASY_PROVIDER_REAL),
+                    reason="requires real SciQLop install")
+def test_make_rich_vp_dispatches_to_scalar_with_label():
+    from sciqlop_radio.hints import make_rich_vp, RichEasyScalar
+    from SciQLop.user_api.virtual_products import VirtualProductType
+    vp = make_rich_vp("radio/test/sca", _no_op_callback,
+                       VirtualProductType.Scalar,
+                       metadata={"UNITS": "K"}, labels=["temp"])
+    assert isinstance(vp, RichEasyScalar)
+
+
+@pytest.mark.skipif(not (_SCIQLOP_REAL and _EASY_PROVIDER_REAL),
+                    reason="requires real SciQLop install")
+def test_make_rich_vp_dispatches_to_vector_with_labels():
+    from sciqlop_radio.hints import make_rich_vp, RichEasyVector
+    from SciQLop.user_api.virtual_products import VirtualProductType
+    vp = make_rich_vp("radio/test/vec", _no_op_callback,
+                       VirtualProductType.Vector,
+                       metadata={"UNITS": "nT"}, labels=["Bx", "By", "Bz"])
+    assert isinstance(vp, RichEasyVector)
+
+
+@pytest.mark.skipif(not (_SCIQLOP_REAL and _EASY_PROVIDER_REAL),
+                    reason="requires real SciQLop install")
+def test_make_rich_vp_dispatches_to_multicomponent_with_labels():
+    from sciqlop_radio.hints import make_rich_vp, RichEasyMultiComponent
+    from SciQLop.user_api.virtual_products import VirtualProductType
+    vp = make_rich_vp("radio/test/mc", _no_op_callback,
+                       VirtualProductType.MultiComponent,
+                       metadata={"UNITS": "1"}, labels=["a", "b", "c", "d", "e"])
+    assert isinstance(vp, RichEasyMultiComponent)
