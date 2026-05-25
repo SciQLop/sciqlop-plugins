@@ -117,3 +117,7 @@ Test count moved from 74 passed baseline to 83 passed; 4 dispatch tests skip und
 
 Spec: `docs/superpowers/specs/2026-05-25-radio-vp-metadata-and-plot-hints-design.md` (d3f343f).
 Plan: `docs/superpowers/plans/2026-05-25-radio-vp-metadata-and-plot-hints.md` (27c6d78).
+
+### Known limitations (carry-over from upstream)
+
+- **`EasyProvider.__init__` overwrites `description` and `stable_id`** on the metadata dict before forwarding to `ProductsModelNode`. The auto-generated `description = "Virtual {parameter_type} product built from Python function: {name}"` always wins over anything we put in `static_meta` or extract from the Speasy inventory. `stable_id` is replaced with the VP path (e.g. `radio/eovsa`) instead of the speasy_id we set. This is pre-existing upstream behaviour and equally affects every plugin using `EasyProvider`/`create_virtual_product`. Net user impact is small (the VP path is itself a fine stable identifier, and the auto-description is informative), but if richer descriptions are desired, the fix is either upstream (`{**metadata, "description": ..., "stable_id": ...}` instead of `metadata.update(...)`) or pre-applying our values inside the RichEasy* subclass's own `__init__` overrides.

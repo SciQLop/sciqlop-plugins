@@ -269,3 +269,60 @@ def test_make_rich_vp_dispatches_to_multicomponent_with_labels():
                        VirtualProductType.MultiComponent,
                        metadata={"UNITS": "1"}, labels=["a", "b", "c", "d", "e"])
     assert isinstance(vp, RichEasyMultiComponent)
+
+
+# ---------------------------------------------------------------------------
+# make_rich_vp validation - pure-Python ValueError paths (no SciQLop needed)
+# ---------------------------------------------------------------------------
+
+
+def _fake_vp_type(name):
+    """A unique sentinel that compares equal only to itself - mimics the
+    VirtualProductType enum members without importing them."""
+    return SimpleNamespace(name=name)
+
+
+def _patched_vp_types(monkeypatch):
+    """Replace SciQLop.user_api.virtual_products with a SimpleNamespace whose
+    VirtualProductType has fake sentinel members for each parameter type."""
+    import sys
+    fake_types = SimpleNamespace(
+        Spectrogram=_fake_vp_type("Spectrogram"),
+        Scalar=_fake_vp_type("Scalar"),
+        Vector=_fake_vp_type("Vector"),
+        MultiComponent=_fake_vp_type("MultiComponent"),
+    )
+    fake_module = SimpleNamespace(VirtualProductType=fake_types)
+    monkeypatch.setitem(sys.modules, "SciQLop.user_api.virtual_products", fake_module)
+    return fake_types
+
+
+def test_make_rich_vp_scalar_without_labels_raises(monkeypatch):
+    from sciqlop_radio.hints import make_rich_vp
+    types = _patched_vp_types(monkeypatch)
+    with pytest.raises(ValueError, match="Scalar requires labels"):
+        make_rich_vp("radio/x", _no_op_callback, types.Scalar, metadata={})
+
+
+def test_make_rich_vp_vector_with_wrong_label_count_raises(monkeypatch):
+    from sciqlop_radio.hints import make_rich_vp
+    types = _patched_vp_types(monkeypatch)
+    with pytest.raises(ValueError, match="Vector requires labels"):
+        make_rich_vp("radio/x", _no_op_callback, types.Vector,
+                      metadata={}, labels=["x", "y"])  # 2, not 3
+
+
+def test_make_rich_vp_multicomponent_without_labels_raises(monkeypatch):
+    from sciqlop_radio.hints import make_rich_vp
+    types = _patched_vp_types(monkeypatch)
+    with pytest.raises(ValueError, match="MultiComponent requires non-empty labels"):
+        make_rich_vp("radio/x", _no_op_callback, types.MultiComponent,
+                      metadata={}, labels=[])
+
+
+def test_make_rich_vp_unknown_type_raises(monkeypatch):
+    from sciqlop_radio.hints import make_rich_vp
+    _patched_vp_types(monkeypatch)
+    with pytest.raises(ValueError, match="unknown VirtualProductType"):
+        make_rich_vp("radio/x", _no_op_callback, _fake_vp_type("BogusType"),
+                      metadata={})
