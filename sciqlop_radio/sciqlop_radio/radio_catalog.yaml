@@ -1,7 +1,23 @@
 # radio_catalog.yaml — curated space-mission radio dynamic spectra (data from Speasy).
 # Entries absent from the installed Speasy inventory are skipped-with-log.
-# Curation rule: do NOT duplicate radio/psp_rfs_lfr, radio/psp_rfs_hfr,
-# radio/eovsa, radio/ilofar (already provided by continuous.py).
+#
+# Catalog paths use nested title-case `radio/<Mission>/<Instrument>/<Product>`;
+# continuous.py registers separately under flat lowercase `radio/psp_rfs_lfr`,
+# `radio/psp_rfs_hfr`, `radio/eovsa`, `radio/ilofar`. The two are
+# structurally disjoint by convention — never reuse those exact flat paths
+# here (the shipped-file test enforces this).
+# It is fine to surface the same instrument via both sources when they
+# carry different processing levels (e.g. radiospectra raw LFR/HFR via
+# continuous.py vs CDAWeb L3 calibrated flux below).
+
+# PSP / FIELDS / RFS — L3 calibrated flux (CDAWeb)
+- path: PSP/FIELDS/RFS_LFR
+  speasy_id: cda/PSP_FLD_L3_RFS_LFR/psp_fld_l3_rfs_lfr_PSD_FLUX
+  label: PSP/FIELDS RFS LFR (L3 PSD flux)
+
+- path: PSP/FIELDS/RFS_HFR
+  speasy_id: cda/PSP_FLD_L3_RFS_HFR/psp_fld_l3_rfs_hfr_PSD_FLUX
+  label: PSP/FIELDS RFS HFR (L3 PSD flux)
 
 # Wind/WAVES — L2 power spectral density (CDAWeb)
 - path: Wind/WAVES/RAD1
