@@ -2,4 +2,60 @@
 # Entries absent from the installed Speasy inventory are skipped-with-log.
 # Curation rule: do NOT duplicate radio/psp_rfs_lfr, radio/psp_rfs_hfr,
 # radio/eovsa, radio/ilofar (already provided by continuous.py).
-[]
+
+# Wind/WAVES — L2 power spectral density (CDAWeb)
+- path: Wind/WAVES/RAD1
+  speasy_id: cda/WI_L2_WAV_RAD1/PSD_V2_S
+  label: Wind/WAVES RAD1 (20–1040 kHz)
+
+- path: Wind/WAVES/RAD2
+  speasy_id: cda/WI_L2_WAV_RAD2/PSD_V2_S
+  label: Wind/WAVES RAD2 (1.075–13.825 MHz)
+
+- path: Wind/WAVES/TNR
+  speasy_id: cda/WI_L2_WAV_TNR/PSD_V2
+  label: Wind/WAVES TNR (4–245 kHz)
+
+# STEREO-A/SWAVES — L3 calibrated flux (CDAWeb)
+- path: STEREO-A/SWAVES/HFR
+  speasy_id: cda/STA_L3_WAV_HFR/PSD_FLUX
+  label: STEREO-A/SWAVES HFR
+
+- path: STEREO-A/SWAVES/LFR
+  speasy_id: cda/STA_L3_WAV_LFR/PSD_FLUX
+  label: STEREO-A/SWAVES LFR
+
+# STEREO-B/SWAVES — L3 calibrated flux (CDAWeb)
+- path: STEREO-B/SWAVES/HFR
+  speasy_id: cda/STB_L3_WAV_HFR/PSD_FLUX
+  label: STEREO-B/SWAVES HFR
+
+- path: STEREO-B/SWAVES/LFR
+  speasy_id: cda/STB_L3_WAV_LFR/PSD_FLUX
+  label: STEREO-B/SWAVES LFR
+
+# Solar Orbiter/RPW — L3 calibrated flux (CDAWeb)
+- path: Solar Orbiter/RPW/HFR
+  speasy_id: cda/SOLO_L3_RPW-HFR-SURV-FLUX/PSD_FLUX
+  label: Solar Orbiter/RPW HFR
+
+- path: Solar Orbiter/RPW/TNR
+  speasy_id: cda/SOLO_L3_RPW-TNR-SURV-FLUX/PSD_FLUX
+  label: Solar Orbiter/RPW TNR
+
+# Juno/Waves — E-field spectrograms during orbital phase (AMDA)
+- path: Juno/Waves/E-HFR-hi (orbit)
+  speasy_id: amda/juno_wav_e_orb_hfrhi
+  label: Juno/Waves E HFR-hi (orbit)
+
+- path: Juno/Waves/E-HFR-lo (orbit)
+  speasy_id: amda/juno_wav_e_orb_hfrlo
+  label: Juno/Waves E HFR-lo (orbit)
+
+- path: Juno/Waves/E-LFR-hi (orbit)
+  speasy_id: amda/juno_wav_e_orb_lfrhi
+  label: Juno/Waves E LFR-hi (orbit)
+
+- path: Juno/Waves/E-LFR-lo (orbit)
+  speasy_id: amda/juno_wav_e_orb_lfrlo
+  label: Juno/Waves E LFR-lo (orbit)

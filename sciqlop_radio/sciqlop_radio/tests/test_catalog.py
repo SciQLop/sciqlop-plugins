@@ -223,3 +223,26 @@ def test_register_catalog_products_empty_catalog_returns_empty_registration(tmp_
     reg = register_catalog_products(tmp_path / "missing.yaml")
     assert isinstance(reg, CatalogRegistration)
     assert reg.vps == {}
+
+
+def test_shipped_catalog_loads_and_validates():
+    """The bundled radio_catalog.yaml must parse and every entry must pass
+    schema validation strictly (load_catalog skips invalid entries — so we
+    re-validate the raw file strictly here to catch typos before release).
+
+    Also enforces the curation rule: no entry may duplicate the continuous
+    VP paths registered by `continuous.py`."""
+    from pathlib import Path
+    import yaml
+    import sciqlop_radio
+    from sciqlop_radio.catalog import CuratedRadioProduct
+
+    f = Path(sciqlop_radio.__file__).parent / "radio_catalog.yaml"
+    raw = yaml.safe_load(f.read_text()) or []
+    assert isinstance(raw, list)
+    validated = [CuratedRadioProduct(**i) for i in raw]   # raises on any invalid entry
+
+    from sciqlop_radio.continuous import CONTINUOUS_SOURCES
+    cont = {s.vp_path for s in CONTINUOUS_SOURCES}
+    paths = {f"radio/{e.path}" for e in validated}
+    assert paths.isdisjoint(cont), f"catalog duplicates continuous VPs: {paths & cont}"
