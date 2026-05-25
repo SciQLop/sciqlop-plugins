@@ -23,11 +23,29 @@ _OPTIONAL = [
     "SciQLop.components.settings",
     "SciQLop.components.settings.backend",
     "SciQLop.components.theming",
+    "SciQLop.components.plotting",
+    "SciQLop.components.plotting.backend",
+    "SciQLop.components.plotting.backend.easy_provider",
     "SciQLop.core",
     "SciQLop.core.plot_hints",
+    "SciQLop.core.istp_hints",
+    "SciQLop.core.speasy_hints",
+    "SciQLop.core.enums",
     "SciQLopPlots",
 ]
+# Pre-stub modules that require QCoreApplication and cause SIGABRT before
+# Python can catch the exception. easy_provider in particular initializes global
+# Qt state (ProductsModel static) that needs a QCoreApplication.
+_REQUIRES_QAPP = {
+    "SciQLop.components.plotting.backend.easy_provider",
+}
+for name in _REQUIRES_QAPP:
+    if name not in sys.modules:
+        sys.modules[name] = MagicMock()
+
 for name in _OPTIONAL:
+    if name in _REQUIRES_QAPP:
+        continue
     if name in sys.modules:
         continue
     try:
