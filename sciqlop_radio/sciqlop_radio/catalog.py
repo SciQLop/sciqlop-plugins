@@ -92,17 +92,18 @@ _TYPE_TO_VP = {
 }
 
 
-def _resolves(speasy_id: str, speasy_module) -> bool:
-    """True if `<provider>/<uid>` is present in the in-memory Speasy inventory.
+def _resolve_index(speasy_id: str, speasy_module):
+    """Return the Speasy `ParameterIndex` for `<provider>/<uid>` if present
+    in the in-memory inventory, else None.
 
     SciQLop's speasy_provider builds the inventories at startup (before our
     load() runs), so this is a dict lookup, not a network call."""
     provider, _, uid = speasy_id.partition("/")
     flat = getattr(speasy_module.inventories.flat_inventories, provider, None)
     if flat is None:
-        return False
+        return None
     params = getattr(flat, "parameters", None) or {}
-    return uid in params
+    return params.get(uid)
 
 
 def _vp_type_for(entry_type: str, vp_types):
@@ -147,7 +148,8 @@ def _register_entries(
 ) -> CatalogRegistration:
     reg = CatalogRegistration()
     for e in entries:
-        if not _resolves(e.speasy_id, speasy_module):
+        index = _resolve_index(e.speasy_id, speasy_module)
+        if index is None:
             log.info("catalog: skip %s — %s not in Speasy inventory", e.path, e.speasy_id)
             continue
         vptype = _vp_type_for(e.type, vp_types)

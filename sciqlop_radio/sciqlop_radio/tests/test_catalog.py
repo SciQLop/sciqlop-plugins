@@ -113,17 +113,18 @@ def _fake_speasy(parameters_by_provider, get_data_return="VAR"):
     return sp
 
 
-def test_resolves_true_when_uid_in_inventory():
-    from sciqlop_radio.catalog import _resolves
-    sp = _fake_speasy({"amda": {"wnd_swaves_rad1": object()}})
-    assert _resolves("amda/wnd_swaves_rad1", sp) is True
+def test_resolve_index_returns_index_when_found():
+    from sciqlop_radio.catalog import _resolve_index
+    sentinel = object()
+    sp = _fake_speasy({"amda": {"wnd_swaves_rad1": sentinel}})
+    assert _resolve_index("amda/wnd_swaves_rad1", sp) is sentinel
 
 
-def test_resolves_false_when_uid_missing_or_provider_absent():
-    from sciqlop_radio.catalog import _resolves
+def test_resolve_index_returns_none_when_uid_missing_or_provider_absent():
+    from sciqlop_radio.catalog import _resolve_index
     sp = _fake_speasy({"amda": {"other": object()}})
-    assert _resolves("amda/wnd_swaves_rad1", sp) is False
-    assert _resolves("cda/anything", sp) is False
+    assert _resolve_index("amda/wnd_swaves_rad1", sp) is None
+    assert _resolve_index("cda/anything", sp) is None
 
 
 def test_callback_fetches_via_speasy_get_data():
