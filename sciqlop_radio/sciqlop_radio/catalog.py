@@ -142,33 +142,44 @@ class CatalogRegistration:
 
 def _register_entries(
     entries: list["CuratedRadioProduct"],
-    create_vp: Callable[..., Any],
+    vp_factory: Callable[..., Any],
     vp_types,
     speasy_module,
 ) -> CatalogRegistration:
+    from .hints import extract_speasy_index_meta
+
     reg = CatalogRegistration()
     for e in entries:
         index = _resolve_index(e.speasy_id, speasy_module)
         if index is None:
             log.info("catalog: skip %s — %s not in Speasy inventory", e.path, e.speasy_id)
             continue
+        try:
+            meta = extract_speasy_index_meta(index, components=e.labels)
+        except Exception as exc:  # noqa: BLE001
+            log.warning(
+                "catalog: metadata extraction failed for %s: %s — falling back to minimal meta",
+                e.path, exc,
+            )
+            provider, _, uid = e.speasy_id.partition("/")
+            meta = {"speasy_id": e.speasy_id, "stable_id": e.speasy_id,
+                    "provider": provider,
+                    "components": e.labels or [uid]}
         vptype = _vp_type_for(e.type, vp_types)
         cb = _build_callback(e, speasy_module)
         path = f"radio/{e.path}"
         try:
-            if e.type == "spectrogram":
-                vp = create_vp(path, cb, vptype)
-            else:
-                vp = create_vp(path, cb, vptype, labels=e.labels)
+            vp = vp_factory(path, cb, vptype, metadata=meta, labels=e.labels)
         except Exception as exc:  # noqa: BLE001
-            log.exception("catalog: create_virtual_product failed for %s: %s", path, exc)
+            log.exception("catalog: vp_factory failed for %s: %s", path, exc)
             continue
         reg.vps[path] = vp
     return reg
 
 
 def register_catalog_products(
-    catalog_path: Union[str, Path], *, speasy_module=None
+    catalog_path: Union[str, Path], *, speasy_module=None,
+    vp_factory: Optional[Callable[..., Any]] = None,
 ) -> Optional[CatalogRegistration]:
     """Read the catalog and register one virtual product per resolvable entry.
 
@@ -179,13 +190,13 @@ def register_catalog_products(
     if not entries:
         return CatalogRegistration()
     try:
-        from SciQLop.user_api.virtual_products import (
-            create_virtual_product,
-            VirtualProductType,
-        )
+        from SciQLop.user_api.virtual_products import VirtualProductType
     except ImportError as exc:
         log.warning("catalog: SciQLop user_api unavailable: %s", exc)
         return None
     if speasy_module is None:
         import speasy as speasy_module  # noqa: PLW0127
-    return _register_entries(entries, create_virtual_product, VirtualProductType, speasy_module)
+    if vp_factory is None:
+        from .hints import make_rich_vp
+        vp_factory = make_rich_vp
+    return _register_entries(entries, vp_factory, VirtualProductType, speasy_module)

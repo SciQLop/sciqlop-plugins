@@ -90,6 +90,15 @@ def test_load_catalog_non_list_returns_empty(tmp_path):
 from types import SimpleNamespace
 
 
+def _fake_index(uid: str, provider: str, attrs: dict | None = None):
+    """Mimic the bits of a Speasy ParameterIndex extract_speasy_index_meta
+    touches: attrs land in __dict__, plus spz_uid() / spz_provider()."""
+    ns = SimpleNamespace(**(attrs or {}))
+    ns.spz_uid = lambda: uid
+    ns.spz_provider = lambda: provider
+    return ns
+
+
 def _fake_speasy(parameters_by_provider, get_data_return="VAR"):
     """SimpleNamespace mimicking the bits of `speasy` the catalog touches:
     `.inventories.flat_inventories.<provider>.parameters` (a dict) and
@@ -157,26 +166,29 @@ def _fake_vp_types():
 
 def test_register_entries_registers_resolvable_skips_unresolvable():
     from sciqlop_radio.catalog import CuratedRadioProduct, _register_entries
-    sp = _fake_speasy({"amda": {"ok": object()}})
+    sp = _fake_speasy({"amda": {"ok": _fake_index("ok", "amda",
+                                                   {"UNITS": "dB"})}})
     entries = [
         CuratedRadioProduct(path="Wind/WAVES/RAD1", speasy_id="amda/ok"),
         CuratedRadioProduct(path="Gone/Product", speasy_id="amda/missing"),
     ]
     created = []
 
-    def create_vp(path, cb, vptype, **kw):
-        created.append((path, vptype, kw))
+    def vp_factory(path, cb, vptype, *, metadata, labels=None):
+        created.append((path, vptype, metadata, labels))
         return f"VP[{path}]"
 
-    reg = _register_entries(entries, create_vp, _fake_vp_types(), sp)
+    reg = _register_entries(entries, vp_factory, _fake_vp_types(), sp)
     assert [c[0] for c in created] == ["radio/Wind/WAVES/RAD1"]
     assert created[0][1] == "SPEC"
+    assert created[0][2]["speasy_id"] == "amda/ok"
+    assert created[0][2]["UNITS"] == "dB"
     assert reg.vps == {"radio/Wind/WAVES/RAD1": "VP[radio/Wind/WAVES/RAD1]"}
 
 
 def test_register_entries_passes_labels_for_non_spectrogram():
     from sciqlop_radio.catalog import CuratedRadioProduct, _register_entries
-    sp = _fake_speasy({"amda": {"v": object()}})
+    sp = _fake_speasy({"amda": {"v": _fake_index("v", "amda", {"UNITS": "nT"})}})
     entries = [
         CuratedRadioProduct(
             path="X/Vec", speasy_id="amda/v", type="vector", labels=["a", "b", "c"]
@@ -184,30 +196,60 @@ def test_register_entries_passes_labels_for_non_spectrogram():
     ]
     created = []
 
-    def create_vp(path, cb, vptype, **kw):
-        created.append((path, vptype, kw))
+    def vp_factory(path, cb, vptype, *, metadata, labels=None):
+        created.append((path, vptype, metadata, labels))
         return path
 
-    _register_entries(entries, create_vp, _fake_vp_types(), sp)
+    _register_entries(entries, vp_factory, _fake_vp_types(), sp)
     assert created[0][1] == "VEC"
-    assert created[0][2] == {"labels": ["a", "b", "c"]}
+    assert created[0][3] == ["a", "b", "c"]
+    # explicit labels override the index-derived components
+    assert created[0][2]["components"] == ["a", "b", "c"]
 
 
 def test_register_entries_continues_when_create_vp_raises():
     from sciqlop_radio.catalog import CuratedRadioProduct, _register_entries
-    sp = _fake_speasy({"amda": {"a": object(), "b": object()}})
+    sp = _fake_speasy({"amda": {
+        "a": _fake_index("a", "amda"),
+        "b": _fake_index("b", "amda"),
+    }})
     entries = [
         CuratedRadioProduct(path="One", speasy_id="amda/a"),
         CuratedRadioProduct(path="Two", speasy_id="amda/b"),
     ]
 
-    def create_vp(path, cb, vptype, **kw):
+    def vp_factory(path, cb, vptype, *, metadata, labels=None):
         if path == "radio/One":
             raise RuntimeError("boom")
         return path
 
-    reg = _register_entries(entries, create_vp, _fake_vp_types(), sp)
+    reg = _register_entries(entries, vp_factory, _fake_vp_types(), sp)
     assert list(reg.vps) == ["radio/Two"]
+
+
+def test_register_entries_falls_back_to_minimal_meta_when_extraction_raises(caplog):
+    """When extract_speasy_index_meta raises (e.g. index missing spz_uid),
+    the entry still registers - just with minimal metadata."""
+    from sciqlop_radio.catalog import CuratedRadioProduct, _register_entries
+    # Index without spz_uid -> extract_speasy_index_meta will AttributeError
+    bad = SimpleNamespace(UNITS="dB", spz_provider=lambda: "amda")
+    sp = _fake_speasy({"amda": {"bad": bad}})
+    entries = [CuratedRadioProduct(path="Bad/One", speasy_id="amda/bad")]
+    created = []
+
+    def vp_factory(path, cb, vptype, *, metadata, labels=None):
+        created.append((path, metadata))
+        return path
+
+    with caplog.at_level("WARNING"):
+        _register_entries(entries, vp_factory, _fake_vp_types(), sp)
+    assert created and created[0][0] == "radio/Bad/One"
+    # minimal fallback: speasy_id + stable_id + provider
+    meta = created[0][1]
+    assert meta["speasy_id"] == "amda/bad"
+    assert meta["stable_id"] == "amda/bad"
+    assert meta["provider"] == "amda"
+    assert any("metadata extraction failed" in r.message for r in caplog.records)
 
 
 def test_register_catalog_products_returns_none_when_sciqlop_missing(tmp_path, monkeypatch):
