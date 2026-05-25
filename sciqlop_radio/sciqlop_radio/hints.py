@@ -104,3 +104,81 @@ def extract_speasy_index_meta(
     meta["stable_id"] = speasy_id
     meta["components"] = components or _components_from_index(index) or [uid]
     return meta
+
+
+# ---------------------------------------------------------------------------
+# RichEasy* subclasses - override plot_hints + plot_hints_from_variable
+# exactly as SciQLop.plugins.speasy_provider.SpeasyPlugin does.
+# ---------------------------------------------------------------------------
+
+from SciQLop.components.plotting.backend.easy_provider import (  # noqa: E402
+    EasyScalar as _EasyScalarRaw,
+    EasyVector as _EasyVectorRaw,
+    EasyMultiComponent as _EasyMultiComponentRaw,
+    EasySpectrogram as _EasySpectrogramRaw,
+)
+
+# When the test conftest pre-stubs easy_provider as MagicMock the imported
+# names are MagicMock instances (not classes). Inheriting from a MagicMock
+# causes MagicMock.__new__ to fail with "issubclass() arg 1 must be a class".
+# Fall back to `object` so the RichEasy* classes remain ordinary Python classes
+# that can be instantiated via __new__ in tests.
+_EasyScalar = _EasyScalarRaw if isinstance(_EasyScalarRaw, type) else object
+_EasyVector = _EasyVectorRaw if isinstance(_EasyVectorRaw, type) else object
+_EasyMultiComponent = _EasyMultiComponentRaw if isinstance(_EasyMultiComponentRaw, type) else object
+_EasySpectrogram = _EasySpectrogramRaw if isinstance(_EasySpectrogramRaw, type) else object
+from SciQLop.core.plot_hints import PlotHints  # noqa: E402
+from SciQLop.core.istp_hints import istp_metadata_to_hints  # noqa: E402
+from SciQLop.core.speasy_hints import variable_as_istp_meta  # noqa: E402
+from SciQLop.core.enums import GraphType  # noqa: E402
+
+
+def _plot_hints_from_node(node) -> PlotHints:
+    try:
+        return istp_metadata_to_hints(node.metadata())
+    except Exception:
+        log.debug("plot_hints failed for %s", node, exc_info=True)
+        return PlotHints()
+
+
+def _plot_hints_from_variable(self, node, variable) -> PlotHints:
+    try:
+        meta = variable_as_istp_meta(variable)
+        if self.graph_type(node) == GraphType.ColorMap:
+            meta.setdefault("DISPLAY_TYPE", "spectrogram")
+        return istp_metadata_to_hints(meta)
+    except Exception:
+        log.debug("plot_hints_from_variable failed for %s", node, exc_info=True)
+        return PlotHints()
+
+
+class RichEasyScalar(_EasyScalar):
+    def plot_hints(self, node) -> PlotHints:
+        return _plot_hints_from_node(node)
+
+    def plot_hints_from_variable(self, node, variable) -> PlotHints:
+        return _plot_hints_from_variable(self, node, variable)
+
+
+class RichEasyVector(_EasyVector):
+    def plot_hints(self, node) -> PlotHints:
+        return _plot_hints_from_node(node)
+
+    def plot_hints_from_variable(self, node, variable) -> PlotHints:
+        return _plot_hints_from_variable(self, node, variable)
+
+
+class RichEasyMultiComponent(_EasyMultiComponent):
+    def plot_hints(self, node) -> PlotHints:
+        return _plot_hints_from_node(node)
+
+    def plot_hints_from_variable(self, node, variable) -> PlotHints:
+        return _plot_hints_from_variable(self, node, variable)
+
+
+class RichEasySpectrogram(_EasySpectrogram):
+    def plot_hints(self, node) -> PlotHints:
+        return _plot_hints_from_node(node)
+
+    def plot_hints_from_variable(self, node, variable) -> PlotHints:
+        return _plot_hints_from_variable(self, node, variable)

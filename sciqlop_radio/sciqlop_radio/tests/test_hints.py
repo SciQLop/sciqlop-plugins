@@ -101,3 +101,115 @@ def test_extract_propagates_missing_spz_uid_as_attributeerror():
     idx = SimpleNamespace(UNITS="dB", spz_provider=lambda: "amda")
     with pytest.raises(AttributeError):
         extract_speasy_index_meta(idx)
+
+
+# ---------------------------------------------------------------------------
+# RichEasySpectrogram overrides
+# ---------------------------------------------------------------------------
+
+import sys
+from unittest.mock import MagicMock
+
+_SCIQLOP_REAL = not isinstance(
+    sys.modules.get("SciQLop.core.plot_hints"), MagicMock
+)
+
+
+def _fake_node_with_meta(meta):
+    """Mimic the bits of ProductsModelNode the hooks actually call."""
+    return SimpleNamespace(metadata=lambda: meta)
+
+
+def test_plot_hints_translates_node_metadata_to_z_axis():
+    if not _SCIQLOP_REAL:
+        pytest.skip("requires real SciQLop install - PlotHints is a MagicMock under headless conftest")
+    from sciqlop_radio.hints import RichEasySpectrogram
+    from SciQLop.core.plot_hints import PlotHints
+
+    spec = RichEasySpectrogram.__new__(RichEasySpectrogram)
+    node = _fake_node_with_meta({
+        "DISPLAY_TYPE": "spectrogram",
+        "UNITS": "dB/Hz",
+        "LABLAXIS": "PSD",
+        "SCALETYP": "log",
+    })
+    hints = spec.plot_hints(node)
+    assert isinstance(hints, PlotHints)
+    assert hints.display_type == "spectrogram"
+    assert hints.z.unit == "dB/Hz"
+    assert hints.z.label == "PSD"
+    assert hints.z.scale == "log"
+
+
+def test_plot_hints_returns_empty_on_metadata_exception():
+    if not _SCIQLOP_REAL:
+        pytest.skip("requires real SciQLop install")
+    from sciqlop_radio.hints import RichEasySpectrogram
+    from SciQLop.core.plot_hints import PlotHints
+
+    spec = RichEasySpectrogram.__new__(RichEasySpectrogram)
+
+    def broken_metadata():
+        raise RuntimeError("node gone")
+
+    node = SimpleNamespace(metadata=broken_metadata)
+    hints = spec.plot_hints(node)
+    assert isinstance(hints, PlotHints)
+    # Empty PlotHints - no axis info populated
+    assert hints.z.label is None and hints.z.unit is None
+
+
+def _fake_speasy_variable(z_meta, freq_meta, freq=None):
+    """Mimic the bits of SpeasyVariable variable_as_istp_meta touches."""
+    from speasy.core.data_containers import DataContainer, VariableAxis, VariableTimeAxis
+    from speasy.products.variable import SpeasyVariable
+    import numpy as np
+
+    if freq is None:
+        freq = np.array([10.0, 20.0, 30.0], dtype=np.float64)
+    times = np.array(["2024-01-01T00:00:00", "2024-01-01T00:00:01"],
+                     dtype="datetime64[ns]")
+    time_axis = VariableTimeAxis(values=times)
+    freq_axis = VariableAxis(name=freq_meta.get("LABLAXIS", ""),
+                             values=freq, meta=freq_meta)
+    data = np.zeros((2, 3), dtype=np.float64)
+    values = DataContainer(values=data, meta=z_meta,
+                           name=z_meta.get("LABLAXIS", "test"))
+    return SpeasyVariable(axes=[time_axis, freq_axis], values=values,
+                          columns=["test"])
+
+
+def test_plot_hints_from_variable_populates_y2_from_freq_axis():
+    if not _SCIQLOP_REAL:
+        pytest.skip("requires real SciQLop install")
+    from sciqlop_radio.hints import RichEasySpectrogram
+    from SciQLop.core.enums import GraphType
+    from SciQLop.core.plot_hints import PlotHints
+
+    spec = RichEasySpectrogram.__new__(RichEasySpectrogram)
+    # graph_type returns ColorMap -> variable_as_istp_meta sets DISPLAY_TYPE
+    spec.graph_type = lambda node: GraphType.ColorMap
+    node = _fake_node_with_meta({})
+    var = _fake_speasy_variable(
+        z_meta={"UNITS": "dB", "LABLAXIS": "PSD", "SCALETYP": "log"},
+        freq_meta={"UNITS": "Hz", "LABLAXIS": "Frequency", "SCALETYP": "log"},
+    )
+    hints = spec.plot_hints_from_variable(node, var)
+    assert isinstance(hints, PlotHints)
+    assert hints.y2.unit == "Hz"
+    assert hints.y2.label == "Frequency"
+    assert hints.y2.scale == "log"
+
+
+def test_plot_hints_from_variable_returns_empty_on_exception():
+    if not _SCIQLOP_REAL:
+        pytest.skip("requires real SciQLop install")
+    from sciqlop_radio.hints import RichEasySpectrogram
+    from SciQLop.core.plot_hints import PlotHints
+
+    spec = RichEasySpectrogram.__new__(RichEasySpectrogram)
+    spec.graph_type = lambda node: None
+    node = _fake_node_with_meta({})
+    # not a SpeasyVariable -> variable_as_istp_meta raises
+    hints = spec.plot_hints_from_variable(node, "not a variable")
+    assert isinstance(hints, PlotHints)
