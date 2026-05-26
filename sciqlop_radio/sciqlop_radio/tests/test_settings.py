@@ -35,7 +35,13 @@ def test_parallel_clamps_zero():
     assert s.parallel_downloads == 1
 
 
-def test_non_numeric_strings_pass_through_to_pydantic_validation():
+def test_non_numeric_strings_fall_back_to_defaults():
+    """Real `ConfigEntry.__init__` (SciQLop entry.py:172-177) catches any
+    `ValidationError` from pydantic and silently re-constructs with defaults,
+    so a corrupt YAML on disk never crashes the settings panel. That swallow
+    also applies to programmatic construction: an invalid kwarg yields the
+    default, not an exception. Test pins that observable behaviour so we
+    notice if upstream stops swallowing."""
     from sciqlop_radio.settings import RadioSettings
-    with pytest.raises(Exception):
-        RadioSettings(download_timeout_s="not-a-number")
+    s = RadioSettings(download_timeout_s="not-a-number")
+    assert s.download_timeout_s == 60   # default, NOT raised
