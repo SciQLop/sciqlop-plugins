@@ -1,6 +1,8 @@
 """sciqlop_radio — heliospheric radio dynamic-spectra browser for SciQLop."""
 from __future__ import annotations
 
+from . import catalog
+
 __version__ = "0.1.0"
 
 _LOADED_PANELS: dict[int, object] = {}
@@ -71,6 +73,9 @@ def load(main_window):
         open_and_convert=_open_and_convert,
     )
 
-    handle = (panel, _cont)
+    from pathlib import Path
+    _cat = catalog.register_catalog_products(Path(__file__).parent / "radio_catalog.yaml")
+
+    handle = (panel, _cont, _cat)
     _LOADED_PANELS[key] = handle
     return handle

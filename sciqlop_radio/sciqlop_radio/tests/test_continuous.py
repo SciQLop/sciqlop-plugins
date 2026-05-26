@@ -34,12 +34,12 @@ def speasy_variable_factory():
 
 
 def test_continuous_sources_registry_covers_known_channels():
+    """PSP/RFS used to live here but is now served via the curated catalog
+    (cda L3 PSD flux/SFU); only ground-based / mission-specific receivers
+    without a calibrated Speasy equivalent remain as continuous VPs."""
     from sciqlop_radio.continuous import CONTINUOUS_SOURCES
     paths = {s.vp_path for s in CONTINUOUS_SOURCES}
-    assert "radio/psp_rfs_lfr" in paths
-    assert "radio/psp_rfs_hfr" in paths
-    assert "radio/eovsa" in paths
-    assert "radio/ilofar" in paths
+    assert paths == {"radio/eovsa", "radio/ilofar"}
 
 
 def test_concat_returns_single_variable_unchanged(speasy_variable_factory):
@@ -83,3 +83,50 @@ def test_register_continuous_products_returns_none_when_sciqlop_missing(monkeypa
         open_and_convert=lambda p: None,
     )
     assert out is None
+
+
+# ---------------------------------------------------------------------------
+# static_meta + vp_factory injection
+# ---------------------------------------------------------------------------
+
+
+def test_continuous_sources_have_minimal_static_meta():
+    """Both continuous sources must carry the minimum needed for plot hints:
+    DISPLAY_TYPE=spectrogram, SCALETYP=log, a description, a provider tag."""
+    from sciqlop_radio.continuous import CONTINUOUS_SOURCES
+    for src in CONTINUOUS_SOURCES:
+        meta = src.static_meta
+        assert meta.get("DISPLAY_TYPE") == "spectrogram", src.vp_path
+        assert meta.get("SCALETYP") == "log", src.vp_path
+        assert "description" in meta, src.vp_path
+        assert meta.get("provider") == "radiospectra", src.vp_path
+
+
+def test_register_continuous_products_passes_static_meta_to_factory(tmp_path, monkeypatch):
+    """register_continuous_products must forward each source's static_meta
+    through the injected vp_factory."""
+    import sys
+    from types import SimpleNamespace
+    fake_vp_module = SimpleNamespace(
+        VirtualProductType=SimpleNamespace(Spectrogram="SPEC"),
+    )
+    monkeypatch.setitem(sys.modules, "SciQLop.user_api.virtual_products", fake_vp_module)
+
+    from sciqlop_radio.continuous import register_continuous_products, CONTINUOUS_SOURCES
+    captured = []
+
+    def vp_factory(path, cb, vptype, *, metadata, labels=None):
+        captured.append((path, vptype, metadata))
+        return path
+
+    out = register_continuous_products(
+        cache_dir=tmp_path,
+        open_and_convert=lambda p: None,
+        vp_factory=vp_factory,
+    )
+    assert out is not None
+    assert len(captured) == len(CONTINUOUS_SOURCES)
+    for (path, vptype, metadata), src in zip(captured, CONTINUOUS_SOURCES):
+        assert path == src.vp_path
+        assert vptype == "SPEC"
+        assert metadata is src.static_meta
