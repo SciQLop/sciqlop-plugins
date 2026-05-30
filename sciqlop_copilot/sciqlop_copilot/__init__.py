@@ -1,13 +1,15 @@
-"""GitHub Copilot chat backend plugin for SciQLop's agent chat dock."""
+"""GitHub Copilot chat backend plugin for SciQLop's agent chat dock.
+
+Contributes only a backend; all chat UI (the docked panel, its toolbar button
+and icon, the Tools-menu entry) is owned by SciQLop core.
+"""
 import threading
 import time
-from pathlib import Path
 
 __version__ = "0.1.0"
 
-import PySide6QtAds as QtAds
 from PySide6.QtCore import QObject, Qt, QTimer, Signal
-from PySide6.QtGui import QDesktopServices, QIcon
+from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QApplication,
     QDialog,
@@ -18,15 +20,10 @@ from PySide6.QtWidgets import (
 )
 
 from SciQLop.components.agents import ensure_agent_dock, register_agent_backend
-from SciQLop.components.theming.icons import register_icon, theme_adapted_icon
 
 from .auth import DeviceFlowError, poll_access_token, request_device_code
 from .backend import CopilotBackend, fetch_models
 from .settings import load_github_token, save_github_token
-
-_ICON_NAME = "sciqlop_copilot_chat"
-_ICON_PATH = str(Path(__file__).parent / "resources" / "chat.svg")
-_DOCK_TITLE = "Agents"
 
 
 class _PollSignals(QObject):
@@ -163,9 +160,6 @@ CopilotBackend.on_activated = _backend_on_activated
 
 
 def load(main_window):
-    register_icon(_ICON_NAME, lambda: QIcon(_ICON_PATH))
-    icon = theme_adapted_icon(_ICON_NAME)
-
     if load_github_token():
         try:
             models = fetch_models()
@@ -175,23 +169,4 @@ def load(main_window):
             pass
 
     register_agent_backend(CopilotBackend)
-    dock = ensure_agent_dock(main_window)
-    dock.setWindowTitle(_DOCK_TITLE)
-    dock.setWindowIcon(icon)
-
-    dock_widget = main_window.dock_manager.findDockWidget(_DOCK_TITLE)
-    if dock_widget is None:
-        main_window.addWidgetIntoDock(QtAds.DockWidgetArea.RightDockWidgetArea, dock)
-        dock_widget = main_window.dock_manager.findDockWidget(_DOCK_TITLE)
-        if dock_widget:
-            dock_widget.setIcon(icon)
-            dock_widget.toggleView(False)
-            toggle_action = dock_widget.toggleViewAction()
-            toggle_action.setIcon(icon)
-            main_window.toolBar.addAction(toggle_action)
-
-    # The "Agent Chat" entry in the Tools menu is added by
-    # SciQLop.components.agents.ensure_agent_dock (idempotent) so multiple
-    # backend plugins don't produce duplicate entries.
-
-    return dock
+    return ensure_agent_dock(main_window)
