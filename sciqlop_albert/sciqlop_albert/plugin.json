@@ -10,7 +10,7 @@
     }
   ],
   "license": "MIT",
-  "python_dependencies": ["httpx"],
+  "python_dependencies": ["SciQLop>=0.12.0,<0.13.0", "httpx"],
   "dependencies": [],
   "disabled": false
 }

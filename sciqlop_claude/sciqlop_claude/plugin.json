@@ -10,7 +10,7 @@
     }
   ],
   "license": "MIT",
-  "python_dependencies": ["claude-agent-sdk"],
+  "python_dependencies": ["SciQLop>=0.12.0,<0.13.0", "claude-agent-sdk"],
   "dependencies": [],
   "disabled": false
 }
