@@ -76,6 +76,9 @@ def load(main_window):
     from pathlib import Path
     _cat = catalog.register_catalog_products(Path(__file__).parent / "radio_catalog.yaml")
 
-    handle = (panel, _cont, _cat)
+    from .lofar import register_lofar_product
+    _lofar = register_lofar_product(cache_dir=_Settings().cache_dir)
+
+    handle = (panel, _cont, _cat, _lofar)
     _LOADED_PANELS[key] = handle
     return handle
