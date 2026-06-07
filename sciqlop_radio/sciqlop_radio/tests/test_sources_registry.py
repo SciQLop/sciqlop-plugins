@@ -49,3 +49,19 @@ def test_source_is_reachable(source):
 def test_radio_source_rejects_blank_key():
     with pytest.raises(ValueError):
         RadioSource(key="", label="foo")
+
+
+def test_eovsa_is_marked_unavailable():
+    """EOVSA spectrogram FITS moved behind registration; it must stay visible
+    (so users find it) but not be a live Fido source."""
+    eovsa = next(s for s in SOURCES if s.key == "eovsa")
+    assert eovsa.fido_instrument is None
+    assert eovsa.unavailable_reason
+    assert "registration" in eovsa.unavailable_reason.lower()
+    assert eovsa.accepts_local is True
+
+
+def test_live_sources_have_example_range():
+    for s in SOURCES:
+        if s.fido_instrument:
+            assert s.example_range, f"{s.key} missing example_range"
