@@ -15,7 +15,7 @@ from typing import Optional
 from PySide6.QtCore import QDateTime, Qt, Signal
 from PySide6.QtWidgets import (
     QComboBox, QDateTimeEdit, QFileDialog, QHBoxLayout, QHeaderView, QLabel,
-    QAbstractItemView, QTableWidget, QTableWidgetItem,
+    QAbstractItemView, QLineEdit, QTableWidget, QTableWidgetItem,
     QMessageBox, QPushButton, QVBoxLayout, QWidget,
 )
 
@@ -147,6 +147,20 @@ class RadioSpectraDock(QWidget):
         times.addWidget(self.fetch_button)
         root.addLayout(times)
 
+        filters = QHBoxLayout()
+        self.text_filter = QLineEdit()
+        self.text_filter.setPlaceholderText("Filter results…")
+        self.station_filter = QComboBox()
+        self.station_filter.addItem("All stations", "")
+        filters.addWidget(QLabel("Filter:"))
+        filters.addWidget(self.text_filter, 1)
+        filters.addWidget(QLabel("Station:"))
+        filters.addWidget(self.station_filter)
+        root.addLayout(filters)
+
+        self.text_filter.textChanged.connect(self._apply_filters)
+        self.station_filter.currentIndexChanged.connect(self._apply_filters)
+
         self.results_table = QTableWidget(0, 3)
         self.results_table.setHorizontalHeaderLabels(["Start Time", "Station", "File"])
         self.results_table.setSelectionBehavior(QAbstractItemView.SelectRows)
@@ -235,6 +249,8 @@ class RadioSpectraDock(QWidget):
             if skipped:
                 msg += f" ({skipped} non-spectrogram row(s) hidden)"
             self._set_status(msg)
+        self._refresh_station_filter()
+        self._apply_filters()
         self._results_changed.emit()
 
     def _empty_results_message(self) -> str:
@@ -251,6 +267,29 @@ class RadioSpectraDock(QWidget):
     def _table_station(self, rowidx: int) -> str:
         item = self.results_table.item(rowidx, 1)
         return item.text() if item else ""
+
+    def _refresh_station_filter(self):
+        stations = sorted({self._table_station(i)
+                           for i in range(self.results_table.rowCount())
+                           if self._table_station(i)})
+        self.station_filter.blockSignals(True)
+        self.station_filter.clear()
+        self.station_filter.addItem("All stations", "")
+        for s in stations:
+            self.station_filter.addItem(s, s)
+        self.station_filter.blockSignals(False)
+
+    def _apply_filters(self):
+        needle = self.text_filter.text().strip().lower()
+        station = self.station_filter.currentData() or ""
+        for i in range(self.results_table.rowCount()):
+            start_item = self.results_table.item(i, 0)
+            start_text = start_item.text().lower() if start_item else ""
+            text_hit = (needle in self._table_filename(i).lower()
+                        or needle in self._table_station(i).lower()
+                        or needle in start_text)
+            station_hit = (not station) or self._table_station(i) == station
+            self.results_table.setRowHidden(i, not (text_hit and station_hit))
 
     def _selected_rows(self) -> list:
         rows = []

@@ -180,6 +180,37 @@ def test_plot_selected_registers_virtual_product_and_plots_on_panel(dock, qtbot,
     panel.plot.assert_called_once_with(fake_vp)
 
 
+def test_station_filter_hides_other_stations(dock, qtbot):
+    w, svc = dock
+    rows = [
+        _erow("https://a/BIR_1.fit.gz", "BIR"),
+        _erow("https://a/ALMATY_1.fit.gz", "ALMATY"),
+        _erow("https://a/BIR_2.fit.gz", "BIR"),
+    ]
+    with qtbot.waitSignal(w._results_changed, timeout=1000):
+        svc.searchCompleted.emit(rows)
+    idx = w.station_filter.findText("ALMATY")
+    assert idx >= 0
+    w.station_filter.setCurrentIndex(idx)
+    visible = [i for i in range(w.results_table.rowCount())
+               if not w.results_table.isRowHidden(i)]
+    assert len(visible) == 1
+    assert w._table_station(visible[0]) == "ALMATY"
+
+
+def test_text_filter_matches_filename(dock, qtbot):
+    w, svc = dock
+    rows = [_erow("https://a/BIR_1.fit.gz", "BIR"),
+            _erow("https://a/ALMATY_1.fit.gz", "ALMATY")]
+    with qtbot.waitSignal(w._results_changed, timeout=1000):
+        svc.searchCompleted.emit(rows)
+    w.text_filter.setText("almaty")
+    visible = [i for i in range(w.results_table.rowCount())
+               if not w.results_table.isRowHidden(i)]
+    assert len(visible) == 1
+    assert "ALMATY" in w._table_filename(visible[0])
+
+
 def _qdt(y, m, d):
     from PySide6.QtCore import QDateTime
     return QDateTime(y, m, d, 0, 0, 0)
