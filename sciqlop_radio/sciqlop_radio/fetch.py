@@ -3,6 +3,14 @@
 All network calls run on QThreadPool workers. Signals are emitted via
 queued connections so they always land on the GUI thread. No asyncio /
 qasync — keeps us out of the cancel-scope bug class.
+
+CRITICAL: `import radiospectra.net` BEFORE any Fido.search call — that
+side-effect registers RFSClient / eCALLISTOClient / EOVSAClient /
+ILOFARClient / RSTNClient with sunpy's client registry. Without it Fido
+falls back to default clients (e.g. VSOClient for swaves, returning
+TDS-max .txt summaries instead of spectrograms). The import lives in
+`_build_attrs` and `_eval_raw_attrs`, both of which run before
+`_run_fido_search`, so the invariant is maintained.
 """
 from __future__ import annotations
 
@@ -27,31 +35,75 @@ def _format_time_for_fido(t: datetime) -> str:
     return t.isoformat(sep="T", timespec="seconds")
 
 
-def _do_search(source, t_start: datetime, t_end: datetime) -> list[Any]:
-    """Run Fido.search synchronously; return a flat list of result rows.
+def _row_field(row, name: str) -> str:
+    """Defensive column access for a Fido QueryResponseRow. Returns '' for a
+    missing column. Falls back to attribute access so plain test stubs work.
 
-    Isolated so tests can patch it without touching sunpy.
-
-    CRITICAL: `import radiospectra.net` BEFORE the Fido call — that's
-    what registers RFSClient / eCALLISTOClient / EOVSAClient /
-    ILOFARClient / RSTNClient with sunpy's client registry. Without it
-    Fido falls back to default clients (e.g. VSOClient for swaves,
-    which returns TDS-max .txt summaries instead of spectrograms).
-
-    Raises RuntimeError if Fido attached errors to the response (e.g.
-    upstream radiospectra/sunpy Scraper API mismatch) — otherwise those
-    errors would surface as a silent zero-rows result.
+    The column lookup is only trusted when it returns a plain str or None;
+    for anything else (e.g. a MagicMock from tests that don't restrict
+    __getitem__) we fall back to getattr so the attribute path wins.
     """
-    import radiospectra.net  # noqa: F401 — side-effect import registers Fido clients
-    from sunpy.net import Fido, attrs as a  # type: ignore
+    try:
+        val = row[name]
+        if not isinstance(val, (str, type(None))):
+            val = getattr(row, name, None)
+    except (KeyError, TypeError, IndexError):
+        val = getattr(row, name, None)
+    return "" if val is None else str(val)
 
-    if not source.fido_instrument:
-        raise RuntimeError(f"source {source.key!r} does not support Fido search")
 
-    response = Fido.search(
-        a.Time(_format_time_for_fido(t_start), _format_time_for_fido(t_end)),
-        a.Instrument(source.fido_instrument),
-    )
+def _row_url(row) -> str:
+    return _row_field(row, "url")
+
+
+def _build_attrs(query) -> list:
+    """Structured attrs from a RadioQuery. Imports radiospectra.net for the
+    side-effect that registers the Fido clients (see module docstring)."""
+    import radiospectra.net  # noqa: F401 — registers RFS/eCALLISTO/ILOFAR/RSTN clients
+    from sunpy.net import attrs as a  # type: ignore
+
+    attrs = [a.Time(_format_time_for_fido(query.t_start),
+                    _format_time_for_fido(query.t_end))]
+    if query.instrument:
+        attrs.append(a.Instrument(query.instrument))
+    if query.wavelength_min_mhz is not None and query.wavelength_max_mhz is not None:
+        import astropy.units as u
+        attrs.append(a.Wavelength(query.wavelength_min_mhz * u.MHz,
+                                  query.wavelength_max_mhz * u.MHz))
+    return attrs
+
+
+def _eval_raw_attrs(text: str) -> list:
+    """Evaluate a raw Fido query string in a restricted namespace.
+
+    Only the sunpy attrs module and common attr names are exposed; builtins
+    are removed. This is the user's own desktop tool (they can run arbitrary
+    Python via SciQLop's console), so the namespace guards footguns, not a
+    determined adversary.
+    """
+    import radiospectra.net  # noqa: F401
+    from sunpy.net import attrs as a  # type: ignore
+    import astropy.units as u
+
+    ns = {
+        "__builtins__": {},
+        "a": a, "u": u,
+        **{k: getattr(a, k) for k in ("Time", "Instrument", "Wavelength") if hasattr(a, k)},
+    }
+    try:
+        result = eval(text, ns)  # noqa: S307 — restricted namespace; see docstring
+    except Exception as e:  # noqa: BLE001
+        raise RuntimeError(f"Invalid raw Fido query: {type(e).__name__}: {e}") from e
+    return list(result) if isinstance(result, (list, tuple)) else [result]
+
+
+def _run_fido_search(attrs: list) -> list[Any]:
+    """Run Fido.search with a pre-built attrs list; return flat rows. Raises
+    if Fido attached errors and returned no rows (otherwise they'd surface as
+    a silent zero-rows result)."""
+    from sunpy.net import Fido  # type: ignore
+
+    response = Fido.search(*attrs)
     rows: list[Any] = []
     for table in response:
         for row in table:
@@ -62,6 +114,12 @@ def _do_search(source, t_start: datetime, t_end: datetime) -> list[Any]:
         details = "; ".join(f"{type(e).__name__}: {e}" for e in errors)
         raise RuntimeError(f"Fido client errors (no rows returned): {details}")
     return rows
+
+
+def _do_search(query) -> list[Any]:
+    """Build attrs from a RadioQuery (structured or raw) and run the search."""
+    attrs = _eval_raw_attrs(query.raw_attrs_text) if query.raw_attrs_text else _build_attrs(query)
+    return _run_fido_search(attrs)
 
 
 def _do_fetch(rows: Iterable[Any], cache_dir: Path) -> list[Path]:
@@ -82,29 +140,27 @@ def _do_fetch(rows: Iterable[Any], cache_dir: Path) -> list[Path]:
 
 
 def _cache_path_for(row: Any, cache_dir: Path) -> Path:
-    """Best-effort: derive expected cached filename from a row's url."""
-    url = getattr(row, "url", None) or ""
+    """Best-effort: derive expected cached filename from a row's url column."""
+    url = _row_url(row)
     name = url.rsplit("/", 1)[-1] if url else ""
     return cache_dir / name if name else cache_dir / "__unknown__"
 
 
 class _SearchTask(QRunnable):
-    def __init__(self, svc: "RadioFetchService", source, t_start, t_end, cache_key=None):
+    def __init__(self, svc: "RadioFetchService", query, cache_key=None):
         super().__init__()
         self._svc = svc
-        self._source = source
-        self._t_start = t_start
-        self._t_end = t_end
+        self._query = query
         self._cache_key = cache_key
 
     def run(self):
         svc = self._svc
         try:
-            rows = _do_search(self._source, self._t_start, self._t_end)
+            rows = _do_search(self._query)
             if self._cache_key is not None:
                 svc._search_cache_store(self._cache_key, rows)
             svc.searchCompleted.emit(rows)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             svc.searchFailed.emit(f"{type(e).__name__}: {e}")
         finally:
             svc._mark_finished()
@@ -156,7 +212,7 @@ class RadioFetchService(QObject):
     implementation does not pass it to Fido (Fido.fetch has no timeout
     parameter). Plumb it through a custom parfive.Downloader when needed.
 
-    In-memory search cache: repeat `search(source, t0, t1)` calls within
+    In-memory search cache: repeat `search(query)` calls within
     `search_cache_ttl_s` skip Fido.search and re-emit the previous rows.
     Lives in-process only (FidoRow objects aren't picklable, so a disk
     cache isn't practical for the search path — for the spectrogram side
@@ -185,8 +241,15 @@ class RadioFetchService(QObject):
         self._search_cache: dict[tuple, tuple[float, list]] = {}
 
     @staticmethod
-    def _search_cache_key(source, t_start: datetime, t_end: datetime) -> tuple:
-        return (source.key, _format_time_for_fido(t_start), _format_time_for_fido(t_end))
+    def _search_cache_key(query) -> tuple:
+        return (
+            query.instrument,
+            query.raw_attrs_text,
+            query.wavelength_min_mhz,
+            query.wavelength_max_mhz,
+            _format_time_for_fido(query.t_start),
+            _format_time_for_fido(query.t_end),
+        )
 
     def _search_cache_hit(self, key: tuple) -> list | None:
         entry = self._search_cache.get(key)
@@ -203,8 +266,8 @@ class RadioFetchService(QObject):
         import time as _time
         self._search_cache[key] = (_time.monotonic(), rows)
 
-    def search(self, source, t_start: datetime, t_end: datetime) -> None:
-        key = self._search_cache_key(source, t_start, t_end)
+    def search(self, query) -> None:
+        key = self._search_cache_key(query)
         cached = self._search_cache_hit(key)
         if cached is not None:
             # Re-emit on the next event-loop tick so listeners see the same
@@ -217,7 +280,7 @@ class RadioFetchService(QObject):
             QTimer.singleShot(0, _emit)
             return
         self._inflight.clear()
-        self._pool.start(_SearchTask(self, source, t_start, t_end, cache_key=key))
+        self._pool.start(_SearchTask(self, query, cache_key=key))
 
     def fetch(self, rows: list[Any]) -> None:
         self._inflight.clear()
