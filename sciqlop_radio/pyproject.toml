@@ -9,13 +9,14 @@ description = "Heliospheric radio dynamic-spectra browser for SciQLop (wraps sun
 requires-python = ">=3.12"
 dependencies = [
     "SciQLop>=0.12.0,<0.13.0",
-    # radiospectra `main` (0.6.2.dev) uses sunpy.net.scraper.Scraper(format=...),
-    # which only exists on sunpy >= 7. The previous released radiospectra 0.6.1
-    # used the legacy `Scraper(url, regex=True)` signature and needed sunpy < 7.
-    # The installed + tested combo is sunpy 7.x + radiospectra main. Swap the
-    # git URL for a version pin once radiospectra publishes the format= release.
+    # radiospectra 0.6.2.dev uses sunpy.net.scraper.Scraper(format=...), which
+    # only exists on sunpy >= 7. The previous released radiospectra 0.6.1 used
+    # the legacy `Scraper(url, regex=True)` signature and needed sunpy < 7. The
+    # combo below is exactly what was tested (all live Fido searches validated).
+    # Pinned to an immutable commit SHA rather than a moving `@main` ref; swap
+    # for a PyPI version pin once radiospectra publishes the format= release.
     "sunpy[net]>=7",
-    "radiospectra @ git+https://github.com/sunpy/radiospectra.git@main",
+    "radiospectra @ git+https://github.com/sunpy/radiospectra.git@9aa96e1d5befb1475682d6cab840fae6bbb9f156",
     "astropy",
     "numpy>=1.24",
     "pydantic>=2.0",
