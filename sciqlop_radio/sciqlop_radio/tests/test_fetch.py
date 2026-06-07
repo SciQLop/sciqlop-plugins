@@ -209,8 +209,9 @@ def test_fetch_uses_cache_hit(qapp, tmp_path):
     received = []
     svc.fetchCompleted.connect(lambda ok, failed: received.append((list(ok), list(failed))))
 
-    row = MagicMock()
-    row.url = "https://archive/example_0.cdf"
+    class DictRow(dict):
+        pass
+    row = DictRow({"url": "https://archive/example_0.cdf"})
 
     with patch("sciqlop_radio.fetch._do_fetch") as fido_fetch:
         svc.fetch([row])
@@ -222,3 +223,19 @@ def test_fetch_uses_cache_hit(qapp, tmp_path):
     ok, failed = received[0]
     assert cached in ok
     assert not failed
+
+
+def test_row_field_stringifies_non_str_column():
+    """Real Fido columns are often non-str (astropy Time, numpy scalars).
+    They must be stringified, not dropped."""
+    from sciqlop_radio.fetch import _row_field
+
+    class DictRow(dict):
+        pass
+
+    assert _row_field(DictRow({"Start Time": 12345}), "Start Time") == "12345"
+
+    class Stamp:
+        def __str__(self):
+            return "2011-06-07 06:15:00.000"
+    assert _row_field(DictRow({"Start Time": Stamp()}), "Start Time") == "2011-06-07 06:15:00.000"

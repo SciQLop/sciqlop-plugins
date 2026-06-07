@@ -37,16 +37,9 @@ def _format_time_for_fido(t: datetime) -> str:
 
 def _row_field(row, name: str) -> str:
     """Defensive column access for a Fido QueryResponseRow. Returns '' for a
-    missing column. Falls back to attribute access so plain test stubs work.
-
-    The column lookup is only trusted when it returns a plain str or None;
-    for anything else (e.g. a MagicMock from tests that don't restrict
-    __getitem__) we fall back to getattr so the attribute path wins.
-    """
+    missing column. Falls back to attribute access so plain test stubs work."""
     try:
         val = row[name]
-        if not isinstance(val, (str, type(None))):
-            val = getattr(row, name, None)
     except (KeyError, TypeError, IndexError):
         val = getattr(row, name, None)
     return "" if val is None else str(val)
