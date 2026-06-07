@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
 
 from .fetch import RadioFetchService
 from .plot import RadioPlotError, spectrogram_to_speasy_variable
+from .query import RadioQuery
 from .reader import open_spectrogram
 from .settings import RadioSettings
 from .sources import SOURCES, RadioSource
@@ -114,6 +115,8 @@ class RadioSpectraDock(QWidget):
         )
         # Keep VirtualProduct refs alive; SciQLop tree holds the callback weakly.
         self._virtual_products: dict[str, object] = {}
+        self._current_source: RadioSource | None = None
+        self._current_expect_spectrogram = True
 
         root = QVBoxLayout(self)
 
@@ -166,18 +169,22 @@ class RadioSpectraDock(QWidget):
 
     def _on_fetch_clicked(self):
         source: RadioSource = self.source_combo.currentData()
+        if source.unavailable_reason:
+            self._set_status(source.unavailable_reason)
+            return
+        if not source.fido_instrument:
+            self._set_status(f"{source.label} is local-only — use 'Open local…'")
+            return
         t0 = self.start_picker.dateTime().toPython().replace(tzinfo=timezone.utc)
         t1 = self.end_picker.dateTime().toPython().replace(tzinfo=timezone.utc)
         if t1 <= t0:
             self._set_status("End time must be after start time")
             return
-        if not source.fido_instrument:
-            self._set_status(f"{source.label} is local-only — use 'Open local…'")
-            return
+        self._current_source = source
+        self._current_expect_spectrogram = True
         self._set_status(f"Searching {source.label}…")
-        self.results_list.clear()
-        self._results_changed.emit()
-        self._svc.search(source, t0, t1)
+        self._clear_results()
+        self._svc.search(RadioQuery.from_source(source, t0, t1))
 
     def _on_open_local_clicked(self):
         paths, _ = QFileDialog.getOpenFileNames(
@@ -215,9 +222,8 @@ class RadioSpectraDock(QWidget):
         self._results_changed.emit()
 
     def _on_search_failed(self, message: str):
-        self.results_list.clear()
+        self._clear_results()
         self._set_status(f"Search failed: {message}")
-        self._results_changed.emit()
 
     def _on_fetch_completed(self, ok: list, failed: list):
         source: RadioSource = self.source_combo.currentData()
@@ -304,6 +310,10 @@ class RadioSpectraDock(QWidget):
             )
         elif plotted:
             self._set_status(f"Plotted {plotted} file(s)")
+
+    def _clear_results(self):
+        self.results_list.clear()
+        self._results_changed.emit()
 
     def _set_status(self, text: str):
         self.status_label.setText(text)

@@ -31,8 +31,8 @@ class FakeFetchService(QObject):
         self.fetch_calls: list = []
         self._cache_dir = Path("/tmp/sciqlop_radio_test_cache")
 
-    def search(self, source, t_start, t_end):
-        self.search_calls.append((source.key, t_start, t_end))
+    def search(self, query):
+        self.search_calls.append(query)
 
     def fetch(self, rows):
         self.fetch_calls.append(list(rows))
@@ -56,16 +56,30 @@ def test_source_dropdown_populated_from_registry(dock):
     assert w.source_combo.count() == len(SOURCES)
 
 
-def test_fetch_button_calls_fetch_service_search(dock):
+def test_fetch_button_builds_query_from_source(dock):
     w, svc = dock
-    w.start_picker.setDateTime(_qdt(2024, 5, 1))
-    w.end_picker.setDateTime(_qdt(2024, 5, 2))
-    w.source_combo.setCurrentIndex(0)
+    w.start_picker.setDateTime(_qdt(2021, 9, 1))
+    w.end_picker.setDateTime(_qdt(2021, 9, 2))
+    for i in range(w.source_combo.count()):
+        if w.source_combo.itemData(i).fido_instrument:
+            w.source_combo.setCurrentIndex(i)
+            break
     w.fetch_button.click()
     assert svc.search_calls, "fetch button did not trigger search"
-    key, t0, t1 = svc.search_calls[-1]
-    assert isinstance(key, str)
-    assert t0 < t1
+    q = svc.search_calls[-1]
+    assert q.instrument
+    assert q.t_start < q.t_end
+
+
+def test_selecting_eovsa_disables_fetch_and_shows_message(dock):
+    w, svc = dock
+    for i in range(w.source_combo.count()):
+        if w.source_combo.itemData(i).key == "eovsa":
+            w.source_combo.setCurrentIndex(i)
+            break
+    w.fetch_button.click()
+    assert not svc.search_calls, "EOVSA must not trigger a Fido search"
+    assert "registration" in w.status_label.text().lower()
 
 
 def test_search_results_populate_list(dock, qtbot):
