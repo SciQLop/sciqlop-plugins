@@ -14,7 +14,7 @@ from typing import Optional
 
 from PySide6.QtCore import QDateTime, Qt, Signal
 from PySide6.QtWidgets import (
-    QComboBox, QDateTimeEdit, QFileDialog, QHBoxLayout, QHeaderView, QLabel,
+    QComboBox, QDateTimeEdit, QFileDialog, QGroupBox, QHBoxLayout, QHeaderView, QLabel,
     QAbstractItemView, QLineEdit, QTableWidget, QTableWidgetItem,
     QMessageBox, QPushButton, QVBoxLayout, QWidget,
 )
@@ -94,6 +94,14 @@ def _safe_basename(path: Path) -> str:
     return name.replace("/", "_")
 
 
+def _parse_float(text: str) -> float | None:
+    text = (text or "").strip()
+    try:
+        return float(text) if text else None
+    except ValueError:
+        return None
+
+
 class RadioSpectraDock(QWidget):
     """Source picker + time range + result list. No embedded plots."""
 
@@ -147,6 +155,35 @@ class RadioSpectraDock(QWidget):
         times.addWidget(self.fetch_button)
         root.addLayout(times)
 
+        self.advanced_group = QGroupBox("Advanced")
+        self.advanced_group.setCheckable(True)
+        self.advanced_group.setChecked(False)
+        adv = QVBoxLayout(self.advanced_group)
+        adv_row1 = QHBoxLayout()
+        self.adv_instrument = QComboBox()
+        self.adv_instrument.setEditable(True)
+        for name in ("RFS", "eCALLISTO", "ILOFAR", "RSTN"):
+            self.adv_instrument.addItem(name)
+        self.adv_wl_min = QLineEdit()
+        self.adv_wl_min.setPlaceholderText("λ min")
+        self.adv_wl_max = QLineEdit()
+        self.adv_wl_max.setPlaceholderText("λ max")
+        adv_row1.addWidget(QLabel("Instrument:"))
+        adv_row1.addWidget(self.adv_instrument, 1)
+        adv_row1.addWidget(QLabel("λ (MHz):"))
+        adv_row1.addWidget(self.adv_wl_min)
+        adv_row1.addWidget(QLabel("–"))
+        adv_row1.addWidget(self.adv_wl_max)
+        adv.addLayout(adv_row1)
+        adv_row2 = QHBoxLayout()
+        self.adv_raw = QLineEdit()
+        self.adv_raw.setPlaceholderText("Raw Fido query, e.g. a.Time('…','…'), a.Instrument('…')")
+        adv_row2.addWidget(QLabel("Raw:"))
+        adv_row2.addWidget(self.adv_raw, 1)
+        adv.addLayout(adv_row2)
+        adv.addWidget(QLabel("⚠ Advanced/raw results may not be plottable spectrograms."))
+        root.addWidget(self.advanced_group)
+
         filters = QHBoxLayout()
         self.text_filter = QLineEdit()
         self.text_filter.setPlaceholderText("Filter results…")
@@ -189,23 +226,55 @@ class RadioSpectraDock(QWidget):
         self._svc.fetchFailed.connect(self._on_fetch_failed)
 
     def _on_fetch_clicked(self):
+        query = (self._build_advanced_query() if self.advanced_group.isChecked()
+                 else self._build_simple_query())
+        if query is None:
+            return
+        self._clear_results()
+        self._svc.search(query)
+
+    def _build_simple_query(self) -> "RadioQuery | None":
         source: RadioSource = self.source_combo.currentData()
         if source.unavailable_reason:
             self._set_status(source.unavailable_reason)
-            return
+            return None
         if not source.fido_instrument:
             self._set_status(f"{source.label} is local-only — use 'Open local…'")
-            return
-        t0 = self.start_picker.dateTime().toPython().replace(tzinfo=timezone.utc)
-        t1 = self.end_picker.dateTime().toPython().replace(tzinfo=timezone.utc)
+            return None
+        t0, t1 = self._time_range()
         if t1 <= t0:
             self._set_status("End time must be after start time")
-            return
+            return None
         self._current_source = source
         self._current_expect_spectrogram = True
         self._set_status(f"Searching {source.label}…")
-        self._clear_results()
-        self._svc.search(RadioQuery.from_source(source, t0, t1))
+        return RadioQuery.from_source(source, t0, t1)
+
+    def _build_advanced_query(self) -> "RadioQuery | None":
+        t0, t1 = self._time_range()
+        if t1 <= t0:
+            self._set_status("End time must be after start time")
+            return None
+        raw = self.adv_raw.text().strip()
+        self._current_source = None
+        if raw:
+            self._current_expect_spectrogram = False
+            self._set_status("Searching (raw query)…")
+            return RadioQuery(t_start=t0, t_end=t1, raw_attrs_text=raw,
+                              expect_spectrogram=False)
+        instrument = self.adv_instrument.currentText().strip() or None
+        wl_min = _parse_float(self.adv_wl_min.text())
+        wl_max = _parse_float(self.adv_wl_max.text())
+        self._current_expect_spectrogram = True
+        self._set_status(f"Searching {instrument or 'advanced'}…")
+        return RadioQuery(t_start=t0, t_end=t1, instrument=instrument,
+                          wavelength_min_mhz=wl_min, wavelength_max_mhz=wl_max,
+                          expect_spectrogram=True)
+
+    def _time_range(self):
+        t0 = self.start_picker.dateTime().toPython().replace(tzinfo=timezone.utc)
+        t1 = self.end_picker.dateTime().toPython().replace(tzinfo=timezone.utc)
+        return t0, t1
 
     def _on_open_local_clicked(self):
         paths, _ = QFileDialog.getOpenFileNames(

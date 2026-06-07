@@ -214,3 +214,29 @@ def test_text_filter_matches_filename(dock, qtbot):
 def _qdt(y, m, d):
     from PySide6.QtCore import QDateTime
     return QDateTime(y, m, d, 0, 0, 0)
+
+
+def test_advanced_structured_query(dock):
+    w, svc = dock
+    w.advanced_group.setChecked(True)
+    w.adv_instrument.setCurrentText("ILOFAR")
+    w.adv_wl_min.setText("20")
+    w.adv_wl_max.setText("100")
+    w.start_picker.setDateTime(_qdt(2021, 9, 1))
+    w.end_picker.setDateTime(_qdt(2021, 9, 10))
+    w.fetch_button.click()
+    q = svc.search_calls[-1]
+    assert q.instrument == "ILOFAR"
+    assert q.wavelength_min_mhz == 20.0
+    assert q.wavelength_max_mhz == 100.0
+    assert q.expect_spectrogram is True
+
+
+def test_advanced_raw_query_sets_raw_and_keeps_all_rows(dock):
+    w, svc = dock
+    w.advanced_group.setChecked(True)
+    w.adv_raw.setText("a.Time('2021-09-01','2021-09-10'), a.Instrument('ILOFAR')")
+    w.fetch_button.click()
+    q = svc.search_calls[-1]
+    assert q.raw_attrs_text.startswith("a.Time(")
+    assert q.expect_spectrogram is False
