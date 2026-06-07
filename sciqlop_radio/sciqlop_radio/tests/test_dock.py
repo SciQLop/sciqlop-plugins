@@ -18,6 +18,14 @@ pytest.importorskip("pytestqt")
 from PySide6.QtCore import QObject, Signal
 
 
+class FakeRow(dict):
+    """Dict-backed stand-in for a Fido QueryResponseRow (column access)."""
+
+
+def _erow(url, observatory="", start=""):
+    return FakeRow({"url": url, "Observatory": observatory, "Start Time": start})
+
+
 class FakeFetchService(QObject):
     searchCompleted = Signal(list)
     searchFailed = Signal(str)
@@ -82,34 +90,45 @@ def test_selecting_eovsa_disables_fetch_and_shows_message(dock):
     assert "registration" in w.status_label.text().lower()
 
 
-def test_search_results_populate_list(dock, qtbot):
+def test_search_results_populate_table(dock, qtbot):
     w, svc = dock
-    row = MagicMock()
-    row.url = "https://archive/example_0.cdf"
     with qtbot.waitSignal(w._results_changed, timeout=1000):
-        svc.searchCompleted.emit([row])
-    assert w.results_list.count() == 1
-    assert "example_0.cdf" in w.results_list.item(0).text()
+        svc.searchCompleted.emit([_erow("https://archive/example_0.cdf", "BIR", "2021-09-07 08:00")])
+    assert w.results_table.rowCount() == 1
+    assert "example_0.cdf" in w._table_filename(0)
+    assert w._table_station(0) == "BIR"
 
 
 def test_search_drops_non_spectrogram_results(dock, qtbot):
     w, svc = dock
-    rows = []
-    for url in (
-        "https://archive/swaves_tds_tdsmax_20240612.txt",      # not a spectrogram
-        "https://archive/psp_rfs_20240612.cdf",                # spectrogram
-        "https://archive/callisto_20240612.fit.gz",            # spectrogram
-        "https://archive/something_else.bin",                  # not a spectrogram
-    ):
-        r = MagicMock()
-        r.url = url
-        rows.append(r)
+    rows = [
+        _erow("https://archive/swaves_tds_tdsmax_20240612.txt"),
+        _erow("https://archive/psp_rfs_20240612.cdf"),
+        _erow("https://archive/callisto_20240612.fit.gz"),
+        _erow("https://archive/something_else.bin"),
+    ]
     with qtbot.waitSignal(w._results_changed, timeout=1000):
         svc.searchCompleted.emit(rows)
-    assert w.results_list.count() == 2
-    names = [w.results_list.item(i).text() for i in range(w.results_list.count())]
+    assert w.results_table.rowCount() == 2
+    names = [w._table_filename(i) for i in range(w.results_table.rowCount())]
     assert not any(n.endswith(".txt") or n.endswith(".bin") for n in names)
     assert "2 non-spectrogram" in w.status_label.text()
+
+
+def test_empty_results_shows_coverage_hint(dock, qtbot):
+    w, svc = dock
+    # pick the ILOFAR source so _current_source has an example_range
+    for i in range(w.source_combo.count()):
+        if w.source_combo.itemData(i).key == "ilofar":
+            w.source_combo.setCurrentIndex(i)
+            break
+    w.start_picker.setDateTime(_qdt(2017, 9, 6))
+    w.end_picker.setDateTime(_qdt(2017, 9, 7))
+    w.fetch_button.click()        # sets _current_source = ILOFAR
+    with qtbot.waitSignal(w._results_changed, timeout=1000):
+        svc.searchCompleted.emit([])   # zero rows, no error
+    assert w.results_table.rowCount() == 0
+    assert "2021-09-07" in w.status_label.text()
 
 
 def test_search_failure_shows_status(dock, qtbot):

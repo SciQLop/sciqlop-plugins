@@ -14,8 +14,9 @@ from typing import Optional
 
 from PySide6.QtCore import QDateTime, Qt, Signal
 from PySide6.QtWidgets import (
-    QComboBox, QDateTimeEdit, QFileDialog, QHBoxLayout, QLabel,
-    QListWidget, QListWidgetItem, QMessageBox, QPushButton, QVBoxLayout, QWidget,
+    QComboBox, QDateTimeEdit, QFileDialog, QHBoxLayout, QHeaderView, QLabel,
+    QAbstractItemView, QTableWidget, QTableWidgetItem,
+    QMessageBox, QPushButton, QVBoxLayout, QWidget,
 )
 
 from .fetch import RadioFetchService
@@ -146,9 +147,15 @@ class RadioSpectraDock(QWidget):
         times.addWidget(self.fetch_button)
         root.addLayout(times)
 
-        self.results_list = QListWidget()
-        self.results_list.setSelectionMode(QListWidget.ExtendedSelection)
-        root.addWidget(self.results_list, 1)
+        self.results_table = QTableWidget(0, 3)
+        self.results_table.setHorizontalHeaderLabels(["Start Time", "Station", "File"])
+        self.results_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.results_table.setSelectionMode(QAbstractItemView.ExtendedSelection)
+        self.results_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.results_table.setSortingEnabled(True)
+        self.results_table.horizontalHeader().setStretchLastSection(True)
+        self.results_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        root.addWidget(self.results_table, 1)
         self.plot_button = QPushButton("Plot selected")
         root.addWidget(self.plot_button)
 
@@ -194,9 +201,7 @@ class RadioSpectraDock(QWidget):
             self._plot_paths([Path(p) for p in paths], source_key="local")
 
     def _on_plot_selected_clicked(self):
-        rows = [self.results_list.item(i).data(Qt.UserRole)
-                for i in range(self.results_list.count())
-                if self.results_list.item(i).isSelected()]
+        rows = self._selected_rows()
         if not rows:
             self._set_status("No rows selected")
             return
@@ -204,22 +209,56 @@ class RadioSpectraDock(QWidget):
         self._svc.fetch(rows)
 
     def _on_search_completed(self, rows: list):
-        self.results_list.clear()
+        from .fetch import _row_url, _row_field
+        self.results_table.setSortingEnabled(False)
+        self.results_table.setRowCount(0)
         skipped = 0
         for row in rows:
-            url = getattr(row, "url", None) or ""
+            url = _row_url(row)
             name = url.rsplit("/", 1)[-1] if url else repr(row)
-            if not _is_supported_filename(name):
+            if self._current_expect_spectrogram and not _is_supported_filename(name):
                 skipped += 1
                 continue
-            item = QListWidgetItem(name)
-            item.setData(Qt.UserRole, row)
-            self.results_list.addItem(item)
-        msg = f"Found {self.results_list.count()} spectrogram file(s)"
-        if skipped:
-            msg += f" ({skipped} non-spectrogram row(s) hidden)"
-        self._set_status(msg)
+            r = self.results_table.rowCount()
+            self.results_table.insertRow(r)
+            start_item = QTableWidgetItem(_row_field(row, "Start Time"))
+            start_item.setData(Qt.UserRole, row)
+            self.results_table.setItem(r, 0, start_item)
+            self.results_table.setItem(r, 1, QTableWidgetItem(_row_field(row, "Observatory")))
+            self.results_table.setItem(r, 2, QTableWidgetItem(name))
+        self.results_table.setSortingEnabled(True)
+        count = self.results_table.rowCount()
+        if count == 0 and not skipped:
+            self._set_status(self._empty_results_message())
+        else:
+            msg = f"Found {count} spectrogram file(s)"
+            if skipped:
+                msg += f" ({skipped} non-spectrogram row(s) hidden)"
+            self._set_status(msg)
         self._results_changed.emit()
+
+    def _empty_results_message(self) -> str:
+        src = self._current_source
+        if src is not None and src.example_range:
+            return (f"No data for {src.label} in this range. "
+                    f"Coverage may be sparse; try e.g. {src.example_range}.")
+        return "No spectrogram files found in this range."
+
+    def _table_filename(self, rowidx: int) -> str:
+        item = self.results_table.item(rowidx, 2)
+        return item.text() if item else ""
+
+    def _table_station(self, rowidx: int) -> str:
+        item = self.results_table.item(rowidx, 1)
+        return item.text() if item else ""
+
+    def _selected_rows(self) -> list:
+        rows = []
+        for idx in self.results_table.selectionModel().selectedRows():
+            item = self.results_table.item(idx.row(), 0)
+            if item is not None:
+                rows.append(item.data(Qt.UserRole))
+        return rows
 
     def _on_search_failed(self, message: str):
         self._clear_results()
@@ -312,7 +351,7 @@ class RadioSpectraDock(QWidget):
             self._set_status(f"Plotted {plotted} file(s)")
 
     def _clear_results(self):
-        self.results_list.clear()
+        self.results_table.setRowCount(0)
         self._results_changed.emit()
 
     def _set_status(self, text: str):
