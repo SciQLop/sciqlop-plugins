@@ -6,16 +6,16 @@ build-backend = "setuptools.build_meta"
 name = "sciqlop-radio"
 version = "0.1.0"
 description = "Heliospheric radio dynamic-spectra browser for SciQLop (wraps sunpy.radiospectra)"
-requires-python = ">=3.10"
+requires-python = ">=3.12"
 dependencies = [
     "SciQLop>=0.12.0,<0.13.0",
-    # radiospectra 0.6.1 calls sunpy.net.scraper.Scraper with the legacy
-    # `url, regex=True` signature; sunpy 7.x made `format` a required
-    # positional arg, so radiospectra's Fido clients (RFS, eCALLISTO,
-    # ILOFAR, RSTN, EOVSA) silently return zero rows on sunpy >= 7. Pin
-    # to 6.x until radiospectra catches up.
-    "sunpy[net]>=6.0,<7",
-    "radiospectra>=0.6,<1.0",
+    # radiospectra `main` (0.6.2.dev) uses sunpy.net.scraper.Scraper(format=...),
+    # which only exists on sunpy >= 7. The previous released radiospectra 0.6.1
+    # used the legacy `Scraper(url, regex=True)` signature and needed sunpy < 7.
+    # The installed + tested combo is sunpy 7.x + radiospectra main. Swap the
+    # git URL for a version pin once radiospectra publishes the format= release.
+    "sunpy[net]>=7",
+    "radiospectra @ git+https://github.com/sunpy/radiospectra.git@main",
     "astropy",
     "numpy>=1.24",
     "pydantic>=2.0",
