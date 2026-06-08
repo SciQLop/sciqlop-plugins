@@ -239,3 +239,27 @@ def test_row_field_stringifies_non_str_column():
         def __str__(self):
             return "2011-06-07 06:15:00.000"
     assert _row_field(DictRow({"Start Time": Stamp()}), "Start Time") == "2011-06-07 06:15:00.000"
+
+
+def test_repeat_search_hits_in_memory_cache(qapp, tmp_path):
+    """A second identical search within the TTL must re-emit cached rows
+    without calling _do_search again."""
+    from sciqlop_radio.fetch import RadioFetchService
+
+    svc = RadioFetchService(cache_dir=tmp_path)
+    received = []
+    svc.searchCompleted.connect(lambda rows: received.append(rows))
+
+    fake_rows = [object(), object()]
+    query = _query(instrument="ILOFAR")
+
+    with patch("sciqlop_radio.fetch._do_search", return_value=fake_rows) as do_search:
+        svc.search(query)
+        svc.wait_for_finished(timeout_s=5.0)
+        qapp.processEvents()
+        svc.search(query)              # identical → cache hit
+        svc.wait_for_finished(timeout_s=5.0)
+        qapp.processEvents()
+
+    assert do_search.call_count == 1, "second identical search should hit the cache"
+    assert len(received) == 2 and len(received[1]) == 2

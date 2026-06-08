@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (
     QMessageBox, QPushButton, QVBoxLayout, QWidget,
 )
 
-from .fetch import RadioFetchService
+from .fetch import RadioFetchService, _row_field, _row_url
 from .plot import RadioPlotError, spectrogram_to_speasy_variable
 from .query import RadioQuery
 from .reader import open_spectrogram
@@ -100,6 +100,15 @@ def _parse_float(text: str) -> float | None:
         return float(text) if text else None
     except ValueError:
         return None
+
+
+def _source_for_instrument(instrument: str | None) -> RadioSource | None:
+    """Find the curated source whose Fido instrument matches (case-insensitive)."""
+    if not instrument:
+        return None
+    inst = instrument.strip().lower()
+    return next((s for s in SOURCES
+                 if s.fido_instrument and s.fido_instrument.lower() == inst), None)
 
 
 class RadioSpectraDock(QWidget):
@@ -265,6 +274,10 @@ class RadioSpectraDock(QWidget):
         instrument = self.adv_instrument.currentText().strip() or None
         wl_min = _parse_float(self.adv_wl_min.text())
         wl_max = _parse_float(self.adv_wl_max.text())
+        # Matching the instrument back to a curated source lets advanced
+        # searches reuse its key (for the virtual-product path) and its
+        # example_range (for the empty-results hint).
+        self._current_source = _source_for_instrument(instrument)
         self._current_expect_spectrogram = True
         self._set_status(f"Searching {instrument or 'advanced'}…")
         return RadioQuery(t_start=t0, t_end=t1, instrument=instrument,
@@ -292,7 +305,6 @@ class RadioSpectraDock(QWidget):
         self._svc.fetch(rows)
 
     def _on_search_completed(self, rows: list):
-        from .fetch import _row_url, _row_field
         self.results_table.setSortingEnabled(False)
         self.results_table.setRowCount(0)
         skipped = 0
@@ -373,8 +385,10 @@ class RadioSpectraDock(QWidget):
         self._set_status(f"Search failed: {message}")
 
     def _on_fetch_completed(self, ok: list, failed: list):
-        source: RadioSource = self.source_combo.currentData()
-        source_key = source.key if source is not None else "fetched"
+        # Use the source the active search was built from, not whatever the
+        # dropdown currently shows — advanced/raw fetches have no live source.
+        source = self._current_source
+        source_key = source.key if source is not None else "advanced"
         self._plot_paths(list(ok), source_key=source_key)
         msg = f"Downloaded {len(ok)} file(s)"
         if failed:

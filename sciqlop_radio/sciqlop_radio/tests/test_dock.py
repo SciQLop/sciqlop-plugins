@@ -240,3 +240,27 @@ def test_advanced_raw_query_sets_raw_and_keeps_all_rows(dock):
     q = svc.search_calls[-1]
     assert q.raw_attrs_text.startswith("a.Time(")
     assert q.expect_spectrogram is False
+
+
+def test_advanced_instrument_resolves_to_source_for_labeling_and_hint(dock, qtbot):
+    """An advanced structured query whose instrument matches a curated source
+    must reuse that source — so fetched files are labeled with its key and the
+    empty-results hint shows its example_range (the ILOFAR fix in advanced mode)."""
+    w, svc = dock
+    w.advanced_group.setChecked(True)
+    w.adv_instrument.setCurrentText("ILOFAR")
+    w.start_picker.setDateTime(_qdt(2017, 9, 6))
+    w.end_picker.setDateTime(_qdt(2017, 9, 7))
+    w.fetch_button.click()
+    assert w._current_source is not None and w._current_source.key == "ilofar"
+    with qtbot.waitSignal(w._results_changed, timeout=1000):
+        svc.searchCompleted.emit([])
+    assert "2021-09-07" in w.status_label.text()
+
+
+def test_advanced_unknown_instrument_has_no_source(dock):
+    w, svc = dock
+    w.advanced_group.setChecked(True)
+    w.adv_instrument.setCurrentText("SOMETHING_EXOTIC")
+    w.fetch_button.click()
+    assert w._current_source is None
