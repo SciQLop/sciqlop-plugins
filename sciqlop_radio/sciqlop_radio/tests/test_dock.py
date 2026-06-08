@@ -264,3 +264,11 @@ def test_advanced_unknown_instrument_has_no_source(dock):
     w.adv_instrument.setCurrentText("SOMETHING_EXOTIC")
     w.fetch_button.click()
     assert w._current_source is None
+
+
+def test_ilofar_dat_filename_is_supported():
+    """ILOFAR mode-357 BST files are .dat; they must not be filtered out as
+    'non-spectrogram' (radiospectra parses them via Spectrogram(path))."""
+    from sciqlop_radio.dock import _is_supported_filename
+    assert _is_supported_filename("20210901_080729_bst_00X.dat")
+    assert _is_supported_filename("20210901_080729_bst_00Y.dat")

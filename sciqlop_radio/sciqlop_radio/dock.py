@@ -75,6 +75,7 @@ _SUPPORTED_EXTENSIONS = (
     ".cdf", ".fits", ".fit", ".fits.gz", ".fit.gz",
     ".srs",          # RSTN ASCII flux
     ".r1", ".r2",    # Wind/WAVES daily binaries
+    ".dat",          # I-LOFAR mode 357 BST (radiospectra parses by filename)
 )
 
 
@@ -87,7 +88,7 @@ def _safe_basename(path: Path) -> str:
     """Filesystem name minus extensions, lowercased, slashes stripped — safe to
     embed in a virtual-product tree path."""
     name = path.name
-    for ext in (".fits.gz", ".fit.gz", ".fits", ".fit", ".cdf"):
+    for ext in (".fits.gz", ".fit.gz", ".fits", ".fit", ".cdf", ".dat"):
         if name.lower().endswith(ext):
             name = name[: -len(ext)]
             break
@@ -291,7 +292,7 @@ class RadioSpectraDock(QWidget):
 
     def _on_open_local_clicked(self):
         paths, _ = QFileDialog.getOpenFileNames(
-            self, "Open local radio file", "", "Radio data (*.cdf *.fits *.fit *.fit.gz);;All files (*)"
+            self, "Open local radio file", "", "Radio data (*.cdf *.fits *.fit *.fit.gz *.dat);;All files (*)"
         )
         if paths:
             self._plot_paths([Path(p) for p in paths], source_key="local")

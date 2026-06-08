@@ -136,3 +136,34 @@ def test_sequence_concatenates_along_time(fake_radiospectra):
     assert var.values.shape[0] == 10  # 4 + 6 time samples
     time_ns = var.axes[0].values.astype("datetime64[ns]").astype("int64")
     assert np.all(np.diff(time_ns) >= 0), "concatenated times must be non-decreasing"
+
+
+def test_list_of_cotemporal_bands_stacks_along_frequency(fake_radiospectra):
+    """ILOFAR mode-357: radiospectra.Spectrogram(.dat) returns a plain *list*
+    of band-spectrograms that share one time grid but cover different
+    frequencies. They must be stacked along the frequency axis."""
+    from sciqlop_radio.plot import spectrogram_to_speasy_variable
+
+    t0 = datetime(2021, 9, 1, tzinfo=timezone.utc).timestamp()
+    n_t = 6
+
+    def band(freqs):
+        s = fake_radiospectra.Spectrogram()
+        s.times = types.SimpleNamespace(
+            unix=np.arange(n_t, dtype=np.float64) + t0,
+            to_datetime=lambda: np.array(
+                [datetime.fromtimestamp(t0 + i, tz=timezone.utc) for i in range(n_t)]
+            ),
+        )
+        fv = np.array(freqs, dtype=np.float64)
+        s.frequencies = types.SimpleNamespace(to_value=lambda unit, _fv=fv: _fv, unit="MHz")
+        s.data = np.zeros((len(fv), n_t), dtype=np.float32)  # (n_freq, n_time)
+        s.meta = {"instrument": "ILOFAR", "wavelength_unit": "MHz"}
+        return s
+
+    bands = [band([210.0, 244.0]), band([10.0, 88.0]), band([110.0, 188.0])]  # unordered
+    var = spectrogram_to_speasy_variable(bands)  # a plain list, not a Sequence
+    assert var.values.shape == (n_t, 6)  # time preserved, 2+2+2 freqs stacked
+    np.testing.assert_array_equal(
+        var.axes[1].values, np.array([10.0, 88.0, 110.0, 188.0, 210.0, 244.0])
+    )

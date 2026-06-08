@@ -77,16 +77,60 @@ class _Flattened:
 
 
 def _flatten_sequence(spec):
-    """If `spec` is a SpectrogramSequence, concatenate into a flattened view."""
+    """Collapse a multi-spectrogram result into a single flattened view.
+
+    radiospectra returns either a single Spectrogram, a `SpectrogramSequence`
+    (`.spectrograms`), or a plain `list` (e.g. I-LOFAR mode 357 → 3 bands).
+    Co-temporal children (one shared time grid, different frequency ranges,
+    as for I-LOFAR) are stacked along frequency; otherwise children are
+    concatenated along time (the multi-file, shared-frequency case).
+    """
     children = getattr(spec, "spectrograms", None)
     if children is None:
-        return spec
+        if isinstance(spec, (list, tuple)):
+            children = list(spec)
+        else:
+            return spec
 
     if not children:
-        raise RadioPlotError(source="sequence", reason="empty SpectrogramSequence")
+        raise RadioPlotError(source="sequence", reason="empty spectrogram sequence")
+    if len(children) == 1:
+        return children[0]
 
+    times0 = _times_to_unix_seconds(children[0].times)
+    same_time_grid = times0 is not None and all(
+        (_times_to_unix_seconds(c.times) is not None
+         and _times_to_unix_seconds(c.times).shape == times0.shape
+         and np.allclose(_times_to_unix_seconds(c.times), times0))
+        for c in children
+    )
+    return (_stack_frequency_bands(children, times0) if same_time_grid
+            else _concat_along_time(children))
+
+
+def _stack_frequency_bands(children, times_unix):
+    """Co-temporal bands → one spectrogram spanning all frequencies (gaps
+    between bands left as-is). Children are ordered by ascending frequency so
+    the resulting frequency axis is ascending (required by the colormap)."""
+    n_t = times_unix.size
+    bands = []
+    for c in children:
+        freqs, unit = _frequencies_to_array(c.frequencies)
+        if freqs is None or freqs.size == 0:
+            raise RadioPlotError(source=_instrument_name(c), reason="missing .frequencies")
+        data = _normalize_data(c.data, n_t, freqs.size, source=_instrument_name(c))
+        bands.append((freqs, unit, data))
+    bands.sort(key=lambda b: b[0][0])
+    freqs = np.concatenate([b[0] for b in bands])
+    data = np.concatenate([b[2] for b in bands], axis=1)
+    meta = dict(children[0].meta)
+    return _Flattened(times=times_unix, freqs=freqs, unit=bands[0][1], data=data, meta=meta)
+
+
+def _concat_along_time(children):
+    """Time-sequential children sharing one frequency axis → concatenate along
+    time (e.g. several files of the same instrument over a window)."""
     children = sorted(children, key=lambda s: _times_to_unix_seconds(s.times)[0])
-
     freqs, unit = _frequencies_to_array(children[0].frequencies)
     if freqs is None or freqs.size == 0:
         raise RadioPlotError(source="sequence", reason="missing .frequencies in first child")
@@ -94,7 +138,8 @@ def _flatten_sequence(spec):
     pieces_t = [_times_to_unix_seconds(s.times) for s in children]
     times = np.concatenate(pieces_t)
     data = np.concatenate(
-        [_normalize_data(s.data, t.size, n_f, source=_instrument_name(children[0])) for s, t in zip(children, pieces_t)],
+        [_normalize_data(s.data, t.size, n_f, source=_instrument_name(children[0]))
+         for s, t in zip(children, pieces_t)],
         axis=0,
     )
     meta = dict(children[0].meta)
