@@ -14,12 +14,14 @@ from typing import Optional
 
 from PySide6.QtCore import QDateTime, Qt, Signal
 from PySide6.QtWidgets import (
-    QComboBox, QDateTimeEdit, QFileDialog, QHBoxLayout, QLabel,
-    QListWidget, QListWidgetItem, QMessageBox, QPushButton, QVBoxLayout, QWidget,
+    QComboBox, QDateTimeEdit, QFileDialog, QGroupBox, QHBoxLayout, QHeaderView, QLabel,
+    QAbstractItemView, QLineEdit, QTableWidget, QTableWidgetItem,
+    QMessageBox, QPushButton, QVBoxLayout, QWidget,
 )
 
-from .fetch import RadioFetchService
+from .fetch import RadioFetchService, _row_field, _row_url
 from .plot import RadioPlotError, spectrogram_to_speasy_variable
+from .query import RadioQuery
 from .reader import open_spectrogram
 from .settings import RadioSettings
 from .sources import SOURCES, RadioSource
@@ -92,6 +94,23 @@ def _safe_basename(path: Path) -> str:
     return name.replace("/", "_")
 
 
+def _parse_float(text: str) -> float | None:
+    text = (text or "").strip()
+    try:
+        return float(text) if text else None
+    except ValueError:
+        return None
+
+
+def _source_for_instrument(instrument: str | None) -> RadioSource | None:
+    """Find the curated source whose Fido instrument matches (case-insensitive)."""
+    if not instrument:
+        return None
+    inst = instrument.strip().lower()
+    return next((s for s in SOURCES
+                 if s.fido_instrument and s.fido_instrument.lower() == inst), None)
+
+
 class RadioSpectraDock(QWidget):
     """Source picker + time range + result list. No embedded plots."""
 
@@ -114,6 +133,8 @@ class RadioSpectraDock(QWidget):
         )
         # Keep VirtualProduct refs alive; SciQLop tree holds the callback weakly.
         self._virtual_products: dict[str, object] = {}
+        self._current_source: RadioSource | None = None
+        self._current_expect_spectrogram = True
 
         root = QVBoxLayout(self)
 
@@ -143,9 +164,58 @@ class RadioSpectraDock(QWidget):
         times.addWidget(self.fetch_button)
         root.addLayout(times)
 
-        self.results_list = QListWidget()
-        self.results_list.setSelectionMode(QListWidget.ExtendedSelection)
-        root.addWidget(self.results_list, 1)
+        self.advanced_group = QGroupBox("Advanced")
+        self.advanced_group.setCheckable(True)
+        self.advanced_group.setChecked(False)
+        adv = QVBoxLayout(self.advanced_group)
+        adv_row1 = QHBoxLayout()
+        self.adv_instrument = QComboBox()
+        self.adv_instrument.setEditable(True)
+        for name in ("RFS", "eCALLISTO", "ILOFAR", "RSTN"):
+            self.adv_instrument.addItem(name)
+        self.adv_wl_min = QLineEdit()
+        self.adv_wl_min.setPlaceholderText("λ min")
+        self.adv_wl_max = QLineEdit()
+        self.adv_wl_max.setPlaceholderText("λ max")
+        adv_row1.addWidget(QLabel("Instrument:"))
+        adv_row1.addWidget(self.adv_instrument, 1)
+        adv_row1.addWidget(QLabel("λ (MHz):"))
+        adv_row1.addWidget(self.adv_wl_min)
+        adv_row1.addWidget(QLabel("–"))
+        adv_row1.addWidget(self.adv_wl_max)
+        adv.addLayout(adv_row1)
+        adv_row2 = QHBoxLayout()
+        self.adv_raw = QLineEdit()
+        self.adv_raw.setPlaceholderText("Raw Fido query, e.g. a.Time('…','…'), a.Instrument('…')")
+        adv_row2.addWidget(QLabel("Raw:"))
+        adv_row2.addWidget(self.adv_raw, 1)
+        adv.addLayout(adv_row2)
+        adv.addWidget(QLabel("⚠ Advanced/raw results may not be plottable spectrograms."))
+        root.addWidget(self.advanced_group)
+
+        filters = QHBoxLayout()
+        self.text_filter = QLineEdit()
+        self.text_filter.setPlaceholderText("Filter results…")
+        self.station_filter = QComboBox()
+        self.station_filter.addItem("All stations", "")
+        filters.addWidget(QLabel("Filter:"))
+        filters.addWidget(self.text_filter, 1)
+        filters.addWidget(QLabel("Station:"))
+        filters.addWidget(self.station_filter)
+        root.addLayout(filters)
+
+        self.text_filter.textChanged.connect(self._apply_filters)
+        self.station_filter.currentIndexChanged.connect(self._apply_filters)
+
+        self.results_table = QTableWidget(0, 3)
+        self.results_table.setHorizontalHeaderLabels(["Start Time", "Station", "File"])
+        self.results_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.results_table.setSelectionMode(QAbstractItemView.ExtendedSelection)
+        self.results_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.results_table.setSortingEnabled(True)
+        self.results_table.horizontalHeader().setStretchLastSection(True)
+        self.results_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        root.addWidget(self.results_table, 1)
         self.plot_button = QPushButton("Plot selected")
         root.addWidget(self.plot_button)
 
@@ -165,19 +235,59 @@ class RadioSpectraDock(QWidget):
         self._svc.fetchFailed.connect(self._on_fetch_failed)
 
     def _on_fetch_clicked(self):
-        source: RadioSource = self.source_combo.currentData()
-        t0 = self.start_picker.dateTime().toPython().replace(tzinfo=timezone.utc)
-        t1 = self.end_picker.dateTime().toPython().replace(tzinfo=timezone.utc)
-        if t1 <= t0:
-            self._set_status("End time must be after start time")
+        query = (self._build_advanced_query() if self.advanced_group.isChecked()
+                 else self._build_simple_query())
+        if query is None:
             return
+        self._clear_results()
+        self._svc.search(query)
+
+    def _build_simple_query(self) -> "RadioQuery | None":
+        source: RadioSource = self.source_combo.currentData()
+        if source.unavailable_reason:
+            self._set_status(source.unavailable_reason)
+            return None
         if not source.fido_instrument:
             self._set_status(f"{source.label} is local-only — use 'Open local…'")
-            return
+            return None
+        t0, t1 = self._time_range()
+        if t1 <= t0:
+            self._set_status("End time must be after start time")
+            return None
+        self._current_source = source
+        self._current_expect_spectrogram = True
         self._set_status(f"Searching {source.label}…")
-        self.results_list.clear()
-        self._results_changed.emit()
-        self._svc.search(source, t0, t1)
+        return RadioQuery.from_source(source, t0, t1)
+
+    def _build_advanced_query(self) -> "RadioQuery | None":
+        t0, t1 = self._time_range()
+        if t1 <= t0:
+            self._set_status("End time must be after start time")
+            return None
+        raw = self.adv_raw.text().strip()
+        self._current_source = None
+        if raw:
+            self._current_expect_spectrogram = False
+            self._set_status("Searching (raw query)…")
+            return RadioQuery(t_start=t0, t_end=t1, raw_attrs_text=raw,
+                              expect_spectrogram=False)
+        instrument = self.adv_instrument.currentText().strip() or None
+        wl_min = _parse_float(self.adv_wl_min.text())
+        wl_max = _parse_float(self.adv_wl_max.text())
+        # Matching the instrument back to a curated source lets advanced
+        # searches reuse its key (for the virtual-product path) and its
+        # example_range (for the empty-results hint).
+        self._current_source = _source_for_instrument(instrument)
+        self._current_expect_spectrogram = True
+        self._set_status(f"Searching {instrument or 'advanced'}…")
+        return RadioQuery(t_start=t0, t_end=t1, instrument=instrument,
+                          wavelength_min_mhz=wl_min, wavelength_max_mhz=wl_max,
+                          expect_spectrogram=True)
+
+    def _time_range(self):
+        t0 = self.start_picker.dateTime().toPython().replace(tzinfo=timezone.utc)
+        t1 = self.end_picker.dateTime().toPython().replace(tzinfo=timezone.utc)
+        return t0, t1
 
     def _on_open_local_clicked(self):
         paths, _ = QFileDialog.getOpenFileNames(
@@ -187,9 +297,7 @@ class RadioSpectraDock(QWidget):
             self._plot_paths([Path(p) for p in paths], source_key="local")
 
     def _on_plot_selected_clicked(self):
-        rows = [self.results_list.item(i).data(Qt.UserRole)
-                for i in range(self.results_list.count())
-                if self.results_list.item(i).isSelected()]
+        rows = self._selected_rows()
         if not rows:
             self._set_status("No rows selected")
             return
@@ -197,31 +305,90 @@ class RadioSpectraDock(QWidget):
         self._svc.fetch(rows)
 
     def _on_search_completed(self, rows: list):
-        self.results_list.clear()
+        self.results_table.setSortingEnabled(False)
+        self.results_table.setRowCount(0)
         skipped = 0
         for row in rows:
-            url = getattr(row, "url", None) or ""
+            url = _row_url(row)
             name = url.rsplit("/", 1)[-1] if url else repr(row)
-            if not _is_supported_filename(name):
+            if self._current_expect_spectrogram and not _is_supported_filename(name):
                 skipped += 1
                 continue
-            item = QListWidgetItem(name)
-            item.setData(Qt.UserRole, row)
-            self.results_list.addItem(item)
-        msg = f"Found {self.results_list.count()} spectrogram file(s)"
-        if skipped:
-            msg += f" ({skipped} non-spectrogram row(s) hidden)"
-        self._set_status(msg)
+            r = self.results_table.rowCount()
+            self.results_table.insertRow(r)
+            start_item = QTableWidgetItem(_row_field(row, "Start Time"))
+            start_item.setData(Qt.UserRole, row)
+            self.results_table.setItem(r, 0, start_item)
+            self.results_table.setItem(r, 1, QTableWidgetItem(_row_field(row, "Observatory")))
+            self.results_table.setItem(r, 2, QTableWidgetItem(name))
+        self.results_table.setSortingEnabled(True)
+        count = self.results_table.rowCount()
+        if count == 0 and not skipped:
+            self._set_status(self._empty_results_message())
+        else:
+            msg = f"Found {count} spectrogram file(s)"
+            if skipped:
+                msg += f" ({skipped} non-spectrogram row(s) hidden)"
+            self._set_status(msg)
+        self._refresh_station_filter()
+        self._apply_filters()
         self._results_changed.emit()
+
+    def _empty_results_message(self) -> str:
+        src = self._current_source
+        if src is not None and src.example_range:
+            return (f"No data for {src.label} in this range. "
+                    f"Coverage may be sparse; try e.g. {src.example_range}.")
+        return "No spectrogram files found in this range."
+
+    def _table_filename(self, rowidx: int) -> str:
+        item = self.results_table.item(rowidx, 2)
+        return item.text() if item else ""
+
+    def _table_station(self, rowidx: int) -> str:
+        item = self.results_table.item(rowidx, 1)
+        return item.text() if item else ""
+
+    def _refresh_station_filter(self):
+        stations = sorted({self._table_station(i)
+                           for i in range(self.results_table.rowCount())
+                           if self._table_station(i)})
+        self.station_filter.blockSignals(True)
+        self.station_filter.clear()
+        self.station_filter.addItem("All stations", "")
+        for s in stations:
+            self.station_filter.addItem(s, s)
+        self.station_filter.blockSignals(False)
+
+    def _apply_filters(self):
+        needle = self.text_filter.text().strip().lower()
+        station = self.station_filter.currentData() or ""
+        for i in range(self.results_table.rowCount()):
+            start_item = self.results_table.item(i, 0)
+            start_text = start_item.text().lower() if start_item else ""
+            text_hit = (needle in self._table_filename(i).lower()
+                        or needle in self._table_station(i).lower()
+                        or needle in start_text)
+            station_hit = (not station) or self._table_station(i) == station
+            self.results_table.setRowHidden(i, not (text_hit and station_hit))
+
+    def _selected_rows(self) -> list:
+        rows = []
+        for idx in self.results_table.selectionModel().selectedRows():
+            item = self.results_table.item(idx.row(), 0)
+            if item is not None:
+                rows.append(item.data(Qt.UserRole))
+        return rows
 
     def _on_search_failed(self, message: str):
-        self.results_list.clear()
+        self._clear_results()
         self._set_status(f"Search failed: {message}")
-        self._results_changed.emit()
 
     def _on_fetch_completed(self, ok: list, failed: list):
-        source: RadioSource = self.source_combo.currentData()
-        source_key = source.key if source is not None else "fetched"
+        # Use the source the active search was built from, not whatever the
+        # dropdown currently shows — advanced/raw fetches have no live source.
+        source = self._current_source
+        source_key = source.key if source is not None else "advanced"
         self._plot_paths(list(ok), source_key=source_key)
         msg = f"Downloaded {len(ok)} file(s)"
         if failed:
@@ -304,6 +471,10 @@ class RadioSpectraDock(QWidget):
             )
         elif plotted:
             self._set_status(f"Plotted {plotted} file(s)")
+
+    def _clear_results(self):
+        self.results_table.setRowCount(0)
+        self._results_changed.emit()
 
     def _set_status(self, text: str):
         self.status_label.setText(text)

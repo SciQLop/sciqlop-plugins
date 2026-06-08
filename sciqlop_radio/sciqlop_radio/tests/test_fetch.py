@@ -17,9 +17,17 @@ def qapp():
     yield app
 
 
+def _query(**kw):
+    from sciqlop_radio.query import RadioQuery
+    base = dict(t_start=datetime(2021, 9, 1, tzinfo=timezone.utc),
+                t_end=datetime(2021, 9, 2, tzinfo=timezone.utc))
+    base.update(kw)
+    return RadioQuery(**base)
+
+
 def test_search_emits_search_completed(qapp, tmp_path):
     from sciqlop_radio.fetch import RadioFetchService
-    from sciqlop_radio.sources import SOURCES
+    from sciqlop_radio.query import RadioQuery
 
     svc = RadioFetchService(cache_dir=tmp_path)
     received = []
@@ -31,9 +39,9 @@ def test_search_emits_search_completed(qapp, tmp_path):
 
     with patch("sciqlop_radio.fetch._do_search", return_value=fake_rows):
         svc.search(
-            source=SOURCES[0],
-            t_start=datetime(2024, 5, 1, tzinfo=timezone.utc),
-            t_end=datetime(2024, 5, 2, tzinfo=timezone.utc),
+            RadioQuery(t_start=datetime(2024, 5, 1, tzinfo=timezone.utc),
+                       t_end=datetime(2024, 5, 2, tzinfo=timezone.utc),
+                       instrument="ILOFAR")
         )
         svc.wait_for_finished(timeout_s=5.0)
         qapp.processEvents()
@@ -45,7 +53,7 @@ def test_search_emits_search_completed(qapp, tmp_path):
 
 def test_search_failure_emits_search_failed(qapp, tmp_path):
     from sciqlop_radio.fetch import RadioFetchService
-    from sciqlop_radio.sources import SOURCES
+    from sciqlop_radio.query import RadioQuery
 
     svc = RadioFetchService(cache_dir=tmp_path)
     received = []
@@ -54,9 +62,9 @@ def test_search_failure_emits_search_failed(qapp, tmp_path):
 
     with patch("sciqlop_radio.fetch._do_search", side_effect=RuntimeError("boom")):
         svc.search(
-            source=SOURCES[0],
-            t_start=datetime(2024, 5, 1, tzinfo=timezone.utc),
-            t_end=datetime(2024, 5, 2, tzinfo=timezone.utc),
+            RadioQuery(t_start=datetime(2024, 5, 1, tzinfo=timezone.utc),
+                       t_end=datetime(2024, 5, 2, tzinfo=timezone.utc),
+                       instrument="ILOFAR")
         )
         svc.wait_for_finished(timeout_s=5.0)
         qapp.processEvents()
@@ -99,36 +107,95 @@ def test_format_time_for_fido_output_parses_with_astropy():
 
 def test_do_search_surfaces_response_errors(monkeypatch):
     """When Fido attaches client-side errors AND returns no rows, _do_search
-    must raise so the dock shows a real message instead of 'Found 0 file(s)'.
-    Regression for the radiospectra/sunpy Scraper API mismatch."""
+    must raise so the dock shows a real message instead of 'Found 0 file(s)'."""
     from types import SimpleNamespace
+    import sys, types
 
     from sciqlop_radio import fetch as fetch_mod
-    from sciqlop_radio.sources import SOURCES
 
     class FakeResponse:
         errors = [TypeError("Scraper.__init__() missing 1 required positional argument: 'format'")]
         def __iter__(self):
-            return iter([])  # zero tables
+            return iter([])
 
     fake_Fido = SimpleNamespace(search=lambda *args, **kwargs: FakeResponse())
     fake_attrs = SimpleNamespace(
         Time=lambda *a, **k: object(),
         Instrument=lambda *a, **k: object(),
     )
-
-    import sys, types
     fake_sunpy_net = types.ModuleType("sunpy.net")
     fake_sunpy_net.Fido = fake_Fido
     fake_sunpy_net.attrs = fake_attrs
     monkeypatch.setitem(sys.modules, "sunpy.net", fake_sunpy_net)
-    # _do_search also `import radiospectra.net` for side effects; stub it
-    # too so it doesn't blow up on the faked sunpy.net.
     monkeypatch.setitem(sys.modules, "radiospectra.net", types.ModuleType("radiospectra.net"))
 
-    src = next(s for s in SOURCES if s.fido_instrument)
     with pytest.raises(RuntimeError, match="Fido client errors"):
-        fetch_mod._do_search(src, datetime(2024, 5, 1, tzinfo=timezone.utc), datetime(2024, 5, 2, tzinfo=timezone.utc))
+        fetch_mod._do_search(_query(instrument="ILOFAR"))
+
+
+def test_build_attrs_includes_instrument_and_wavelength(monkeypatch):
+    from types import SimpleNamespace
+    import sys, types
+    fake_attrs = SimpleNamespace(
+        Time=lambda *a, **k: ("Time", a),
+        Instrument=lambda *a, **k: ("Instrument", a),
+        Wavelength=lambda lo, hi: ("Wavelength", lo, hi),
+    )
+    monkeypatch.setitem(sys.modules, "radiospectra.net", types.ModuleType("radiospectra.net"))
+    fake_net = types.ModuleType("sunpy.net")
+    fake_net.attrs = fake_attrs
+    monkeypatch.setitem(sys.modules, "sunpy.net", fake_net)
+
+    from sciqlop_radio import fetch as fetch_mod
+    attrs = fetch_mod._build_attrs(_query(instrument="ILOFAR",
+                                         wavelength_min_mhz=20.0,
+                                         wavelength_max_mhz=100.0))
+    kinds = [x[0] for x in attrs]
+    assert kinds == ["Time", "Instrument", "Wavelength"]
+
+
+def test_eval_raw_attrs_valid(monkeypatch):
+    from types import SimpleNamespace
+    import sys, types
+    fake_attrs = SimpleNamespace(
+        Time=lambda *a, **k: ("Time", a),
+        Instrument=lambda *a, **k: ("Instrument", a),
+        Wavelength=lambda *a, **k: ("Wavelength", a),
+    )
+    monkeypatch.setitem(sys.modules, "radiospectra.net", types.ModuleType("radiospectra.net"))
+    fake_net = types.ModuleType("sunpy.net")
+    fake_net.attrs = fake_attrs
+    monkeypatch.setitem(sys.modules, "sunpy.net", fake_net)
+
+    from sciqlop_radio import fetch as fetch_mod
+    attrs = fetch_mod._eval_raw_attrs("a.Time('2021-09-01','2021-09-02'), a.Instrument('ILOFAR')")
+    assert [x[0] for x in attrs] == ["Time", "Instrument"]
+
+
+def test_eval_raw_attrs_invalid_raises(monkeypatch):
+    import sys, types
+    from types import SimpleNamespace
+    monkeypatch.setitem(sys.modules, "radiospectra.net", types.ModuleType("radiospectra.net"))
+    fake_net = types.ModuleType("sunpy.net")
+    fake_net.attrs = SimpleNamespace()
+    monkeypatch.setitem(sys.modules, "sunpy.net", fake_net)
+
+    from sciqlop_radio import fetch as fetch_mod
+    with pytest.raises(RuntimeError, match="Invalid raw Fido query"):
+        fetch_mod._eval_raw_attrs("import os; os.system('boom')")
+
+
+def test_row_url_reads_column_then_attribute():
+    from sciqlop_radio.fetch import _row_url
+
+    class DictRow(dict):
+        pass
+
+    assert _row_url(DictRow({"url": "https://x/a.fit.gz"})) == "https://x/a.fit.gz"
+
+    class AttrRow:
+        url = "https://y/b.cdf"
+    assert _row_url(AttrRow()) == "https://y/b.cdf"
 
 
 def test_fetch_uses_cache_hit(qapp, tmp_path):
@@ -142,8 +209,9 @@ def test_fetch_uses_cache_hit(qapp, tmp_path):
     received = []
     svc.fetchCompleted.connect(lambda ok, failed: received.append((list(ok), list(failed))))
 
-    row = MagicMock()
-    row.url = "https://archive/example_0.cdf"
+    class DictRow(dict):
+        pass
+    row = DictRow({"url": "https://archive/example_0.cdf"})
 
     with patch("sciqlop_radio.fetch._do_fetch") as fido_fetch:
         svc.fetch([row])
@@ -155,3 +223,43 @@ def test_fetch_uses_cache_hit(qapp, tmp_path):
     ok, failed = received[0]
     assert cached in ok
     assert not failed
+
+
+def test_row_field_stringifies_non_str_column():
+    """Real Fido columns are often non-str (astropy Time, numpy scalars).
+    They must be stringified, not dropped."""
+    from sciqlop_radio.fetch import _row_field
+
+    class DictRow(dict):
+        pass
+
+    assert _row_field(DictRow({"Start Time": 12345}), "Start Time") == "12345"
+
+    class Stamp:
+        def __str__(self):
+            return "2011-06-07 06:15:00.000"
+    assert _row_field(DictRow({"Start Time": Stamp()}), "Start Time") == "2011-06-07 06:15:00.000"
+
+
+def test_repeat_search_hits_in_memory_cache(qapp, tmp_path):
+    """A second identical search within the TTL must re-emit cached rows
+    without calling _do_search again."""
+    from sciqlop_radio.fetch import RadioFetchService
+
+    svc = RadioFetchService(cache_dir=tmp_path)
+    received = []
+    svc.searchCompleted.connect(lambda rows: received.append(rows))
+
+    fake_rows = [object(), object()]
+    query = _query(instrument="ILOFAR")
+
+    with patch("sciqlop_radio.fetch._do_search", return_value=fake_rows) as do_search:
+        svc.search(query)
+        svc.wait_for_finished(timeout_s=5.0)
+        qapp.processEvents()
+        svc.search(query)              # identical → cache hit
+        svc.wait_for_finished(timeout_s=5.0)
+        qapp.processEvents()
+
+    assert do_search.call_count == 1, "second identical search should hit the cache"
+    assert len(received) == 2 and len(received[1]) == 2

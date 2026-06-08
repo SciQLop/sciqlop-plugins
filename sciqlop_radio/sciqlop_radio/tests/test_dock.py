@@ -18,6 +18,14 @@ pytest.importorskip("pytestqt")
 from PySide6.QtCore import QObject, Signal
 
 
+class FakeRow(dict):
+    """Dict-backed stand-in for a Fido QueryResponseRow (column access)."""
+
+
+def _erow(url, observatory="", start=""):
+    return FakeRow({"url": url, "Observatory": observatory, "Start Time": start})
+
+
 class FakeFetchService(QObject):
     searchCompleted = Signal(list)
     searchFailed = Signal(str)
@@ -31,8 +39,8 @@ class FakeFetchService(QObject):
         self.fetch_calls: list = []
         self._cache_dir = Path("/tmp/sciqlop_radio_test_cache")
 
-    def search(self, source, t_start, t_end):
-        self.search_calls.append((source.key, t_start, t_end))
+    def search(self, query):
+        self.search_calls.append(query)
 
     def fetch(self, rows):
         self.fetch_calls.append(list(rows))
@@ -56,46 +64,71 @@ def test_source_dropdown_populated_from_registry(dock):
     assert w.source_combo.count() == len(SOURCES)
 
 
-def test_fetch_button_calls_fetch_service_search(dock):
+def test_fetch_button_builds_query_from_source(dock):
     w, svc = dock
-    w.start_picker.setDateTime(_qdt(2024, 5, 1))
-    w.end_picker.setDateTime(_qdt(2024, 5, 2))
-    w.source_combo.setCurrentIndex(0)
+    w.start_picker.setDateTime(_qdt(2021, 9, 1))
+    w.end_picker.setDateTime(_qdt(2021, 9, 2))
+    for i in range(w.source_combo.count()):
+        if w.source_combo.itemData(i).fido_instrument:
+            w.source_combo.setCurrentIndex(i)
+            break
     w.fetch_button.click()
     assert svc.search_calls, "fetch button did not trigger search"
-    key, t0, t1 = svc.search_calls[-1]
-    assert isinstance(key, str)
-    assert t0 < t1
+    q = svc.search_calls[-1]
+    assert q.instrument
+    assert q.t_start < q.t_end
 
 
-def test_search_results_populate_list(dock, qtbot):
+def test_selecting_eovsa_disables_fetch_and_shows_message(dock):
     w, svc = dock
-    row = MagicMock()
-    row.url = "https://archive/example_0.cdf"
+    for i in range(w.source_combo.count()):
+        if w.source_combo.itemData(i).key == "eovsa":
+            w.source_combo.setCurrentIndex(i)
+            break
+    w.fetch_button.click()
+    assert not svc.search_calls, "EOVSA must not trigger a Fido search"
+    assert "registration" in w.status_label.text().lower()
+
+
+def test_search_results_populate_table(dock, qtbot):
+    w, svc = dock
     with qtbot.waitSignal(w._results_changed, timeout=1000):
-        svc.searchCompleted.emit([row])
-    assert w.results_list.count() == 1
-    assert "example_0.cdf" in w.results_list.item(0).text()
+        svc.searchCompleted.emit([_erow("https://archive/example_0.cdf", "BIR", "2021-09-07 08:00")])
+    assert w.results_table.rowCount() == 1
+    assert "example_0.cdf" in w._table_filename(0)
+    assert w._table_station(0) == "BIR"
 
 
 def test_search_drops_non_spectrogram_results(dock, qtbot):
     w, svc = dock
-    rows = []
-    for url in (
-        "https://archive/swaves_tds_tdsmax_20240612.txt",      # not a spectrogram
-        "https://archive/psp_rfs_20240612.cdf",                # spectrogram
-        "https://archive/callisto_20240612.fit.gz",            # spectrogram
-        "https://archive/something_else.bin",                  # not a spectrogram
-    ):
-        r = MagicMock()
-        r.url = url
-        rows.append(r)
+    rows = [
+        _erow("https://archive/swaves_tds_tdsmax_20240612.txt"),
+        _erow("https://archive/psp_rfs_20240612.cdf"),
+        _erow("https://archive/callisto_20240612.fit.gz"),
+        _erow("https://archive/something_else.bin"),
+    ]
     with qtbot.waitSignal(w._results_changed, timeout=1000):
         svc.searchCompleted.emit(rows)
-    assert w.results_list.count() == 2
-    names = [w.results_list.item(i).text() for i in range(w.results_list.count())]
+    assert w.results_table.rowCount() == 2
+    names = [w._table_filename(i) for i in range(w.results_table.rowCount())]
     assert not any(n.endswith(".txt") or n.endswith(".bin") for n in names)
     assert "2 non-spectrogram" in w.status_label.text()
+
+
+def test_empty_results_shows_coverage_hint(dock, qtbot):
+    w, svc = dock
+    # pick the ILOFAR source so _current_source has an example_range
+    for i in range(w.source_combo.count()):
+        if w.source_combo.itemData(i).key == "ilofar":
+            w.source_combo.setCurrentIndex(i)
+            break
+    w.start_picker.setDateTime(_qdt(2017, 9, 6))
+    w.end_picker.setDateTime(_qdt(2017, 9, 7))
+    w.fetch_button.click()        # sets _current_source = ILOFAR
+    with qtbot.waitSignal(w._results_changed, timeout=1000):
+        svc.searchCompleted.emit([])   # zero rows, no error
+    assert w.results_table.rowCount() == 0
+    assert "2021-09-07" in w.status_label.text()
 
 
 def test_search_failure_shows_status(dock, qtbot):
@@ -147,6 +180,87 @@ def test_plot_selected_registers_virtual_product_and_plots_on_panel(dock, qtbot,
     panel.plot.assert_called_once_with(fake_vp)
 
 
+def test_station_filter_hides_other_stations(dock, qtbot):
+    w, svc = dock
+    rows = [
+        _erow("https://a/BIR_1.fit.gz", "BIR"),
+        _erow("https://a/ALMATY_1.fit.gz", "ALMATY"),
+        _erow("https://a/BIR_2.fit.gz", "BIR"),
+    ]
+    with qtbot.waitSignal(w._results_changed, timeout=1000):
+        svc.searchCompleted.emit(rows)
+    idx = w.station_filter.findText("ALMATY")
+    assert idx >= 0
+    w.station_filter.setCurrentIndex(idx)
+    visible = [i for i in range(w.results_table.rowCount())
+               if not w.results_table.isRowHidden(i)]
+    assert len(visible) == 1
+    assert w._table_station(visible[0]) == "ALMATY"
+
+
+def test_text_filter_matches_filename(dock, qtbot):
+    w, svc = dock
+    rows = [_erow("https://a/BIR_1.fit.gz", "BIR"),
+            _erow("https://a/ALMATY_1.fit.gz", "ALMATY")]
+    with qtbot.waitSignal(w._results_changed, timeout=1000):
+        svc.searchCompleted.emit(rows)
+    w.text_filter.setText("almaty")
+    visible = [i for i in range(w.results_table.rowCount())
+               if not w.results_table.isRowHidden(i)]
+    assert len(visible) == 1
+    assert "ALMATY" in w._table_filename(visible[0])
+
+
 def _qdt(y, m, d):
     from PySide6.QtCore import QDateTime
     return QDateTime(y, m, d, 0, 0, 0)
+
+
+def test_advanced_structured_query(dock):
+    w, svc = dock
+    w.advanced_group.setChecked(True)
+    w.adv_instrument.setCurrentText("ILOFAR")
+    w.adv_wl_min.setText("20")
+    w.adv_wl_max.setText("100")
+    w.start_picker.setDateTime(_qdt(2021, 9, 1))
+    w.end_picker.setDateTime(_qdt(2021, 9, 10))
+    w.fetch_button.click()
+    q = svc.search_calls[-1]
+    assert q.instrument == "ILOFAR"
+    assert q.wavelength_min_mhz == 20.0
+    assert q.wavelength_max_mhz == 100.0
+    assert q.expect_spectrogram is True
+
+
+def test_advanced_raw_query_sets_raw_and_keeps_all_rows(dock):
+    w, svc = dock
+    w.advanced_group.setChecked(True)
+    w.adv_raw.setText("a.Time('2021-09-01','2021-09-10'), a.Instrument('ILOFAR')")
+    w.fetch_button.click()
+    q = svc.search_calls[-1]
+    assert q.raw_attrs_text.startswith("a.Time(")
+    assert q.expect_spectrogram is False
+
+
+def test_advanced_instrument_resolves_to_source_for_labeling_and_hint(dock, qtbot):
+    """An advanced structured query whose instrument matches a curated source
+    must reuse that source — so fetched files are labeled with its key and the
+    empty-results hint shows its example_range (the ILOFAR fix in advanced mode)."""
+    w, svc = dock
+    w.advanced_group.setChecked(True)
+    w.adv_instrument.setCurrentText("ILOFAR")
+    w.start_picker.setDateTime(_qdt(2017, 9, 6))
+    w.end_picker.setDateTime(_qdt(2017, 9, 7))
+    w.fetch_button.click()
+    assert w._current_source is not None and w._current_source.key == "ilofar"
+    with qtbot.waitSignal(w._results_changed, timeout=1000):
+        svc.searchCompleted.emit([])
+    assert "2021-09-07" in w.status_label.text()
+
+
+def test_advanced_unknown_instrument_has_no_source(dock):
+    w, svc = dock
+    w.advanced_group.setChecked(True)
+    w.adv_instrument.setCurrentText("SOMETHING_EXOTIC")
+    w.fetch_button.click()
+    assert w._current_source is None

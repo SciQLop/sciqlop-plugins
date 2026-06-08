@@ -23,6 +23,17 @@ class RadioSource(BaseModel):
     )
     notes: str = Field(default="", description="Tooltip text; coverage caveats")
     accepts_local: bool = Field(default=True)
+    unavailable_reason: str | None = Field(
+        default=None,
+        description=(
+            "If set, the source is shown in the picker but Fido search is"
+            " disabled and this message is displayed instead."
+        ),
+    )
+    example_range: str = Field(
+        default="",
+        description="A date with known data, used in the empty-results hint.",
+    )
 
     @field_validator("key")
     @classmethod
@@ -53,30 +64,40 @@ SOURCES: list[RadioSource] = [
         label="PSP / FIELDS / RFS",
         fido_instrument="rfs",
         notes="LFR (10 kHz–1.7 MHz) + HFR (1.3–19.2 MHz); receiver mode varies along orbit",
+        example_range="2021-10-28",
     ),
     RadioSource(
         key="ecallisto",
         label="e-CALLISTO (network)",
         fido_instrument="eCALLISTO",
         notes="Worldwide ground-based network; many stations with different frequency windows",
+        example_range="2011-06-07",
     ),
     RadioSource(
         key="eovsa",
-        label="EOVSA",
-        fido_instrument="EOVSA",
+        label="EOVSA (registration required)",
+        fido_instrument=None,
+        accepts_local=True,
+        unavailable_reason=(
+            "EOVSA spectrogram FITS now require registration at "
+            "ovsa.njit.edu/eovsadata. Download a .fts there, then use "
+            "'Open local…'."
+        ),
         notes="Expanded Owens Valley Solar Array; 1–18 GHz imaging spectroscopy",
     ),
     RadioSource(
         key="ilofar",
         label="I-LOFAR (mode 357 BST)",
         fido_instrument="ILOFAR",
-        notes="Irish LOFAR station, beam-formed mode 357",
+        notes="Irish LOFAR station, beam-formed mode 357; sparse campaign-day coverage",
+        example_range="2021-09-07",
     ),
     RadioSource(
         key="rstn",
         label="RSTN",
         fido_instrument="RSTN",
         notes="Radio Solar Telescope Network (USAF); data source may be stale",
+        example_range="2015-11-04",
     ),
     RadioSource(
         key="custom",
