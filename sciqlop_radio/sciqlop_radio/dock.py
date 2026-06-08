@@ -379,6 +379,10 @@ class RadioSpectraDock(QWidget):
     def _selected_rows(self) -> list:
         rows = []
         for idx in self.results_table.selectionModel().selectedRows():
+            # Filtering hides rows without deselecting them; only act on rows
+            # the user can actually see as selected.
+            if self.results_table.isRowHidden(idx.row()):
+                continue
             item = self.results_table.item(idx.row(), 0)
             if item is not None:
                 rows.append(item.data(Qt.UserRole))

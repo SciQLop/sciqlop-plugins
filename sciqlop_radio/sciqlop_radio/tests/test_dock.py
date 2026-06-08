@@ -333,3 +333,40 @@ def test_different_frequency_files_plot_separately(dock, qtbot, tmp_path, monkey
     assert len(vp_calls) == 2, "different-frequency files must plot separately"
     assert concat_calls == [], "no merge across different frequency grids"
     assert panel.plot.call_count == 2
+
+
+def test_selected_rows_excludes_rows_hidden_by_filter(dock, qtbot):
+    """Hiding a row via the filter must not leave it 'selected' for plotting.
+    Select-all then filter: only the still-visible rows count as selected."""
+    w, svc = dock
+    rows = [
+        _erow("https://a/BIR_1.fit.gz", "BIR"),
+        _erow("https://a/ALMATY_1.fit.gz", "ALMATY"),
+        _erow("https://a/BIR_2.fit.gz", "BIR"),
+    ]
+    with qtbot.waitSignal(w._results_changed, timeout=1000):
+        svc.searchCompleted.emit(rows)
+    w.results_table.selectAll()                       # all 3 selected
+    idx = w.station_filter.findText("ALMATY")
+    w.station_filter.setCurrentIndex(idx)             # hides the 2 BIR rows
+    sel = w._selected_rows()
+    assert len(sel) == 1, "hidden (filtered-out) rows must not be returned as selected"
+    assert sel[0]["url"].endswith("ALMATY_1.fit.gz")
+
+
+def test_selected_rows_correct_objects_after_sort(dock, qtbot):
+    """After sorting, _selected_rows must return the row objects at the
+    selected visual positions (UserRole travels with the sorted item)."""
+    w, svc = dock
+    rows = [
+        _erow("https://a/c.fit.gz", "C", "2021-09-03 00:00"),
+        _erow("https://a/a.fit.gz", "A", "2021-09-01 00:00"),
+        _erow("https://a/b.fit.gz", "B", "2021-09-02 00:00"),
+    ]
+    with qtbot.waitSignal(w._results_changed, timeout=1000):
+        svc.searchCompleted.emit(rows)
+    w.results_table.sortItems(0)                      # sort by Start Time asc
+    w.results_table.selectRow(0)                      # earliest -> a.fit.gz
+    sel = w._selected_rows()
+    assert len(sel) == 1
+    assert sel[0]["url"].endswith("a.fit.gz")
