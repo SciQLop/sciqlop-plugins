@@ -167,3 +167,40 @@ def test_list_of_cotemporal_bands_stacks_along_frequency(fake_radiospectra):
     np.testing.assert_array_equal(
         var.axes[1].values, np.array([10.0, 88.0, 110.0, 188.0, 210.0, 244.0])
     )
+
+
+def test_frequency_signature_groups_same_grid(fake_radiospectra):
+    from sciqlop_radio.plot import frequency_signature, spectrogram_to_speasy_variable
+    a = spectrogram_to_speasy_variable(_make_spec(fake_radiospectra.Spectrogram, n_f=5))
+    b = spectrogram_to_speasy_variable(_make_spec(fake_radiospectra.Spectrogram, n_f=5))
+    c = spectrogram_to_speasy_variable(_make_spec(fake_radiospectra.Spectrogram, n_f=7))
+    assert frequency_signature(a) == frequency_signature(b)   # same grid
+    assert frequency_signature(a) != frequency_signature(c)   # different grid
+
+
+def test_concat_variables_along_time_merges_same_grid(fake_radiospectra):
+    """Same instrument, different times → one continuous spectrogram."""
+    import numpy as np
+    from sciqlop_radio.plot import concat_variables_along_time, spectrogram_to_speasy_variable
+
+    def at(offset_s, n_t):
+        s = fake_radiospectra.Spectrogram()
+        t0 = datetime(2024, 5, 1, tzinfo=timezone.utc).timestamp() + offset_s
+        s.times = types.SimpleNamespace(
+            unix=np.arange(n_t, dtype=np.float64) + t0,
+            to_datetime=lambda _t0=t0, _n=n_t: np.array(
+                [datetime.fromtimestamp(_t0 + i, tz=timezone.utc) for i in range(_n)]),
+        )
+        fv = np.array([1.0, 2.0, 4.0, 8.0, 16.0])
+        s.frequencies = types.SimpleNamespace(to_value=lambda unit, _fv=fv: _fv, unit="MHz")
+        s.data = np.zeros((5, n_t), dtype=np.float32)
+        s.meta = {"instrument": "RFS", "wavelength_unit": "MHz"}
+        return spectrogram_to_speasy_variable(s)
+
+    later = at(100, 6)
+    earlier = at(0, 4)
+    merged = concat_variables_along_time([later, earlier])   # unordered on purpose
+    assert merged.values.shape == (10, 5)                    # 4 + 6 along time
+    tns = merged.time.astype("datetime64[ns]").astype("int64")
+    assert np.all(np.diff(tns) >= 0)                          # time-ordered
+    np.testing.assert_array_equal(merged.axes[1].values, [1.0, 2.0, 4.0, 8.0, 16.0])

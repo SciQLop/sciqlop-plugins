@@ -20,7 +20,10 @@ from PySide6.QtWidgets import (
 )
 
 from .fetch import RadioFetchService, _row_field, _row_url
-from .plot import RadioPlotError, spectrogram_to_speasy_variable
+from .plot import (
+    RadioPlotError, concat_variables_along_time, frequency_signature,
+    spectrogram_to_speasy_variable,
+)
 from .query import RadioQuery
 from .reader import open_spectrogram
 from .settings import RadioSettings
@@ -416,26 +419,52 @@ class RadioSpectraDock(QWidget):
             self._set_status(f"SciQLop user-API unavailable: {exc}")
             return
 
-        panel = None
-        t_min: float | None = None
-        t_max: float | None = None
+        # Convert all selected files (cached per file), collecting errors.
+        converted: list[tuple[Path, object]] = []
         for path in paths:
             try:
-                variable = _open_and_convert(path)
+                converted.append((path, _open_and_convert(path)))
             except RadioPlotError as e:
                 errors.append((path.name, str(e)))
-                continue
             except Exception as e:  # noqa: BLE001 — final user-facing safety net
                 errors.append((path.name, f"{type(e).__name__}: {e}"))
+
+        # Group files that share a frequency grid so the same instrument at
+        # different times merges into one continuous spectrogram on one plot.
+        # Different grids (e.g. distinct eCALLISTO stations) stay separate.
+        groups: dict = {}
+        order: list = []
+        for path, variable in converted:
+            try:
+                sig = frequency_signature(variable)
+            except Exception:  # noqa: BLE001 — unkeyable → never merge
+                sig = ("unkeyed", id(variable))
+            if sig not in groups:
+                groups[sig] = []
+                order.append(sig)
+            groups[sig].append((path, variable))
+
+        panel = None
+        files_plotted = 0
+        t_min: float | None = None
+        t_max: float | None = None
+        for sig in order:
+            member_paths = [p for p, _ in groups[sig]]
+            member_vars = [v for _, v in groups[sig]]
+            try:
+                merged = (concat_variables_along_time(member_vars)
+                          if len(member_vars) > 1 else member_vars[0])
+            except Exception as e:  # noqa: BLE001
+                for p in member_paths:
+                    errors.append((p.name, f"merge: {type(e).__name__}: {e}"))
                 continue
-            vp_path = f"radio/{source_key}/{_safe_basename(path)}"
-            callback = _build_static_callback(variable)
+            vp_path = _group_vp_path(source_key, member_paths)
             try:
                 vp = create_virtual_product(
-                    vp_path, callback, VirtualProductType.Spectrogram,
+                    vp_path, _build_static_callback(merged), VirtualProductType.Spectrogram,
                 )
             except Exception as e:  # noqa: BLE001
-                errors.append((path.name, f"create_virtual_product: {type(e).__name__}: {e}"))
+                errors.append((member_paths[0].name, f"create_virtual_product: {type(e).__name__}: {e}"))
                 continue
             self._virtual_products[vp_path] = vp
             if panel is None:
@@ -443,12 +472,13 @@ class RadioSpectraDock(QWidget):
             try:
                 panel.plot(vp)
                 plotted += 1
-                v_t0, v_t1 = _variable_time_bounds(variable)
+                files_plotted += len(member_paths)
+                v_t0, v_t1 = _variable_time_bounds(merged)
                 if v_t0 is not None and v_t1 is not None:
                     t_min = v_t0 if t_min is None else min(t_min, v_t0)
                     t_max = v_t1 if t_max is None else max(t_max, v_t1)
             except Exception as e:  # noqa: BLE001
-                errors.append((path.name, f"plot: {type(e).__name__}: {e}"))
+                errors.append((member_paths[0].name, f"plot: {type(e).__name__}: {e}"))
 
         if panel is not None and t_min is not None and t_max is not None:
             try:
@@ -468,10 +498,11 @@ class RadioSpectraDock(QWidget):
             self._set_status(f"Plot failed for {len(errors)} file(s); see dialog for details")
         elif errors:
             self._set_status(
-                f"Plotted {plotted} file(s); {len(errors)} failed — last: {errors[-1][1][:120]}"
+                f"Plotted {files_plotted} file(s) in {plotted} plot(s); "
+                f"{len(errors)} failed — last: {errors[-1][1][:120]}"
             )
         elif plotted:
-            self._set_status(f"Plotted {plotted} file(s)")
+            self._set_status(f"Plotted {files_plotted} file(s) in {plotted} plot(s)")
 
     def _clear_results(self):
         self.results_table.setRowCount(0)
@@ -480,6 +511,14 @@ class RadioSpectraDock(QWidget):
     def _set_status(self, text: str):
         self.status_label.setText(text)
         self._status_changed.emit()
+
+
+def _group_vp_path(source_key: str, paths: list[Path]) -> str:
+    """Virtual-product tree path for a (possibly merged) group of files."""
+    first = _safe_basename(paths[0])
+    if len(paths) == 1:
+        return f"radio/{source_key}/{first}"
+    return f"radio/{source_key}/{first}__+{len(paths) - 1}more"
 
 
 def _build_static_callback(variable):

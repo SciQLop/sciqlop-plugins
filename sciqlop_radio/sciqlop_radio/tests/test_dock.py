@@ -272,3 +272,64 @@ def test_ilofar_dat_filename_is_supported():
     from sciqlop_radio.dock import _is_supported_filename
     assert _is_supported_filename("20210901_080729_bst_00X.dat")
     assert _is_supported_filename("20210901_080729_bst_00Y.dat")
+
+
+def _install_fake_user_api(monkeypatch):
+    """Fake SciQLop.user_api.{plot,virtual_products}; return (panel, vp_calls)."""
+    import sys, types as _t
+    panel = MagicMock(name="panel")
+    vp_calls = []
+    fp = _t.ModuleType("SciQLop.user_api.plot")
+    fp.create_plot_panel = lambda: panel
+    fv = _t.ModuleType("SciQLop.user_api.virtual_products")
+    fv.create_virtual_product = lambda *a, **k: (vp_calls.append(a) or MagicMock())
+
+    class _VPT:
+        Spectrogram = "Spectrogram"
+
+    fv.VirtualProductType = _VPT
+    monkeypatch.setitem(sys.modules, "SciQLop.user_api.plot", fp)
+    monkeypatch.setitem(sys.modules, "SciQLop.user_api.virtual_products", fv)
+    return panel, vp_calls
+
+
+def test_same_frequency_files_merge_into_one_plot(dock, qtbot, tmp_path, monkeypatch):
+    import types as _t
+    w, svc = dock
+    p1 = tmp_path / "a.cdf"; p1.write_bytes(b"\x00")
+    p2 = tmp_path / "b.cdf"; p2.write_bytes(b"\x00")
+    monkeypatch.setattr("sciqlop_radio.dock._open_and_convert",
+                        lambda path: _t.SimpleNamespace(name=path.name))
+    monkeypatch.setattr("sciqlop_radio.dock.frequency_signature", lambda v: ("same",))
+    concat_calls = []
+    monkeypatch.setattr("sciqlop_radio.dock.concat_variables_along_time",
+                        lambda vs: (concat_calls.append(list(vs)) or _t.SimpleNamespace(name="merged")))
+    panel, vp_calls = _install_fake_user_api(monkeypatch)
+
+    svc.fetchCompleted.emit([p1, p2], [])
+    qtbot.wait(50)
+
+    assert len(vp_calls) == 1, "same-frequency files must merge into one plot"
+    assert len(concat_calls) == 1 and len(concat_calls[0]) == 2
+    panel.plot.assert_called_once()
+
+
+def test_different_frequency_files_plot_separately(dock, qtbot, tmp_path, monkeypatch):
+    import types as _t
+    w, svc = dock
+    p1 = tmp_path / "a.cdf"; p1.write_bytes(b"\x00")
+    p2 = tmp_path / "b.cdf"; p2.write_bytes(b"\x00")
+    monkeypatch.setattr("sciqlop_radio.dock._open_and_convert",
+                        lambda path: _t.SimpleNamespace(name=path.name))
+    monkeypatch.setattr("sciqlop_radio.dock.frequency_signature", lambda v: (v.name,))  # distinct
+    concat_calls = []
+    monkeypatch.setattr("sciqlop_radio.dock.concat_variables_along_time",
+                        lambda vs: (concat_calls.append(vs) or _t.SimpleNamespace(name="merged")))
+    panel, vp_calls = _install_fake_user_api(monkeypatch)
+
+    svc.fetchCompleted.emit([p1, p2], [])
+    qtbot.wait(50)
+
+    assert len(vp_calls) == 2, "different-frequency files must plot separately"
+    assert concat_calls == [], "no merge across different frequency grids"
+    assert panel.plot.call_count == 2

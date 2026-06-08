@@ -199,5 +199,47 @@ def spectrogram_to_speasy_variable(spec) -> "SpeasyVariable":
     return SpeasyVariable(axes=[time_axis, freq_axis], values=values, columns=[instrument])
 
 
+def frequency_signature(variable, decimals: int = 3) -> tuple:
+    """A hashable key identifying a variable's frequency axis. Variables with
+    the same signature share a frequency grid and can be concatenated along
+    time into one continuous spectrogram (same instrument, different times)."""
+    f = np.asarray(variable.axes[1].values, dtype=np.float64)
+    return (f.size,) + tuple(np.round(f, decimals).tolist())
+
+
+def concat_variables_along_time(variables) -> "SpeasyVariable":
+    """Merge translated radio SpeasyVariables that share one frequency axis
+    into a single time-ordered variable. The caller must group by
+    `frequency_signature` first, so the frequency axis is well-defined."""
+    from speasy.core.data_containers import DataContainer, VariableAxis, VariableTimeAxis
+    from speasy.products.variable import SpeasyVariable
+
+    variables = [v for v in variables if v is not None]
+    if not variables:
+        raise RadioPlotError(source="merge", reason="no variables to merge")
+    if len(variables) == 1:
+        return variables[0]
+
+    variables = sorted(variables, key=lambda v: np.asarray(v.time)[0])
+    times = np.concatenate([np.asarray(v.time).astype("datetime64[ns]") for v in variables])
+    data = np.ascontiguousarray(
+        np.concatenate([np.asarray(v.values) for v in variables], axis=0), dtype=np.float64
+    )
+    first = variables[0]
+    fa = first.axes[1]
+    freq_axis = VariableAxis(
+        name=getattr(fa, "name", "frequency"),
+        values=np.ascontiguousarray(np.asarray(fa.values), dtype=np.float64),
+        meta=dict(getattr(fa, "meta", {}) or {}),
+    )
+    cols = list(getattr(first, "columns", []) or ["radio"])
+    values = DataContainer(
+        values=data,
+        meta={"UNITS": str(getattr(first, "unit", "") or "")},
+        name=f"{cols[0]}.spectrogram",
+    )
+    return SpeasyVariable(axes=[VariableTimeAxis(values=times), freq_axis], values=values, columns=cols)
+
+
 def _format_iso(unix_seconds: float) -> str:
     return datetime.fromtimestamp(unix_seconds, tz=timezone.utc).isoformat()
