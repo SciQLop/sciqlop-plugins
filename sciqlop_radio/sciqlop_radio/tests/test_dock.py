@@ -26,6 +26,11 @@ def _erow(url, observatory="", start=""):
     return FakeRow({"url": url, "Observatory": observatory, "Start Time": start})
 
 
+def _crow(url, observatory, idcode, start=""):
+    return FakeRow({"url": url, "Observatory": observatory, "ID": idcode,
+                    "Start Time": start})
+
+
 class FakeFetchService(QObject):
     searchCompleted = Signal(list)
     searchFailed = Signal(str)
@@ -266,6 +271,54 @@ def test_advanced_unknown_instrument_has_no_source(dock):
     assert w._current_source is None
 
 
+def test_curated_source_fetched_files_use_streaming_vp(dock, qtbot, tmp_path, monkeypatch):
+    """A fetched eCALLISTO file registers a live stream keyed by station+focus,
+    at radio/ecallisto/<station>/<focus> — not a per-file static snapshot."""
+    import types as _t
+    w, svc = dock
+    for i in range(w.source_combo.count()):
+        if w.source_combo.itemData(i).key == "ecallisto":
+            w.source_combo.setCurrentIndex(i)
+            break
+    w.fetch_button.click()  # sets _current_source = eCALLISTO
+
+    fn = "AUSTRALIA-ASSA_20110607_120000_01.fit.gz"
+    p = tmp_path / fn
+    p.write_bytes(b"\x00")
+    w._pending_rows = [_crow(f"http://a/{fn}", "AUSTRALIA-ASSA", "01")]
+    monkeypatch.setattr("sciqlop_radio.dock._open_and_convert",
+                        lambda path: _t.SimpleNamespace(name=path.name))
+    monkeypatch.setattr("sciqlop_radio.dock.frequency_signature", lambda v: ("ecal",))
+    panel, vp_calls = _install_fake_user_api(monkeypatch)
+
+    svc.fetchCompleted.emit([p], [])
+    qtbot.wait(50)
+
+    assert len(vp_calls) == 1
+    assert vp_calls[0][0] == "radio/ecallisto/AUSTRALIA-ASSA/01"
+    assert panel.plot.call_count == 1
+
+
+def test_local_file_uses_static_vp(dock, qtbot, tmp_path, monkeypatch):
+    """Local files (no active source) produce a static VP with a file-stem path."""
+    import types as _t
+    w, svc = dock
+
+    p = tmp_path / "my_local_spec.cdf"
+    p.write_bytes(b"\x00")
+    monkeypatch.setattr("sciqlop_radio.dock._open_and_convert",
+                        lambda path: _t.SimpleNamespace(name=path.name))
+    monkeypatch.setattr("sciqlop_radio.dock.frequency_signature", lambda v: ("local",))
+    monkeypatch.setattr("sciqlop_radio.dock.concat_variables_along_time", lambda vs: vs[0])
+
+    panel, vp_calls = _install_fake_user_api(monkeypatch)
+
+    svc.fetchCompleted.emit([p], [])
+    qtbot.wait(50)
+
+    assert len(vp_calls) == 1, "local files use static create_virtual_product"
+
+
 def test_ilofar_dat_filename_is_supported():
     """ILOFAR mode-357 BST files are .dat; they must not be filtered out as
     'non-spectrogram' (radiospectra parses them via Spectrogram(path))."""
@@ -370,3 +423,60 @@ def test_selected_rows_correct_objects_after_sort(dock, qtbot):
     sel = w._selected_rows()
     assert len(sel) == 1
     assert sel[0]["url"].endswith("a.fit.gz")
+
+
+def test_ecallisto_focus_codes_stream_separately(dock, qtbot, tmp_path, monkeypatch):
+    """Two focus codes (_01/_02) at the same station/time -> two distinct streams."""
+    import types as _t
+    w, svc = dock
+    for i in range(w.source_combo.count()):
+        if w.source_combo.itemData(i).key == "ecallisto":
+            w.source_combo.setCurrentIndex(i)
+            break
+    w.fetch_button.click()
+
+    f1 = "BIR_20110607_120000_01.fit.gz"
+    f2 = "BIR_20110607_120000_02.fit.gz"
+    p1 = tmp_path / f1; p1.write_bytes(b"\x00")
+    p2 = tmp_path / f2; p2.write_bytes(b"\x00")
+    w._pending_rows = [_crow(f"http://a/{f1}", "BIR", "01"),
+                       _crow(f"http://a/{f2}", "BIR", "02")]
+    monkeypatch.setattr("sciqlop_radio.dock._open_and_convert",
+                        lambda path: _t.SimpleNamespace(name=path.name))
+    monkeypatch.setattr("sciqlop_radio.dock.frequency_signature", lambda v: (v.name,))
+    panel, vp_calls = _install_fake_user_api(monkeypatch)
+
+    svc.fetchCompleted.emit([p1, p2], [])
+    qtbot.wait(50)
+
+    paths = sorted(c[0] for c in vp_calls)
+    assert paths == ["radio/ecallisto/BIR/01", "radio/ecallisto/BIR/02"]
+    assert panel.plot.call_count == 2
+
+
+def test_ecallisto_same_station_focus_merge_into_one_stream(dock, qtbot, tmp_path, monkeypatch):
+    """Same station + focus at different times -> one stream node, one plot."""
+    import types as _t
+    w, svc = dock
+    for i in range(w.source_combo.count()):
+        if w.source_combo.itemData(i).key == "ecallisto":
+            w.source_combo.setCurrentIndex(i)
+            break
+    w.fetch_button.click()
+
+    f1 = "BIR_20110607_120000_01.fit.gz"
+    f2 = "BIR_20110607_121500_01.fit.gz"
+    p1 = tmp_path / f1; p1.write_bytes(b"\x00")
+    p2 = tmp_path / f2; p2.write_bytes(b"\x00")
+    w._pending_rows = [_crow(f"http://a/{f1}", "BIR", "01"),
+                       _crow(f"http://a/{f2}", "BIR", "01")]
+    monkeypatch.setattr("sciqlop_radio.dock._open_and_convert",
+                        lambda path: _t.SimpleNamespace(name=path.name))
+    monkeypatch.setattr("sciqlop_radio.dock.frequency_signature", lambda v: ("ecal",))
+    panel, vp_calls = _install_fake_user_api(monkeypatch)
+
+    svc.fetchCompleted.emit([p1, p2], [])
+    qtbot.wait(50)
+
+    assert [c[0] for c in vp_calls] == ["radio/ecallisto/BIR/01"]
+    assert panel.plot.call_count == 1

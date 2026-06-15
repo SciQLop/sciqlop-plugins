@@ -8,6 +8,7 @@ then plotted on a fresh `create_plot_panel()`.
 """
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -28,6 +29,8 @@ from .query import RadioQuery
 from .reader import open_spectrogram
 from .settings import RadioSettings
 from .sources import SOURCES, RadioSource
+from .streams import stream_identity_for_row
+from .continuous import make_stream_source, _build_callback
 
 
 def _file_signature(path: Path) -> tuple[str, int, int]:
@@ -126,6 +129,8 @@ class RadioSpectraDock(QWidget):
         main_window=None,
         fetch_service: Optional[RadioFetchService] = None,
         parent: Optional[QWidget] = None,
+        *,
+        existing_vps: Optional[dict] = None,
     ):
         super().__init__(parent)
         self.setWindowTitle("Radio Spectra")
@@ -135,8 +140,11 @@ class RadioSpectraDock(QWidget):
             cache_dir=_cfg.cache_dir,
             timeout_s=_cfg.download_timeout_s,
         )
-        # Keep VirtualProduct refs alive; SciQLop tree holds the callback weakly.
-        self._virtual_products: dict[str, object] = {}
+        self._cache_dir: Path = _cfg.cache_dir
+        # VP refs alive guard: dock-created VPs + pre-registered from CONTINUOUS_SOURCES.
+        # Keyed by vp_path so the dock reuses rather than double-registers an existing VP.
+        self._virtual_products: dict[str, object] = dict(existing_vps or {})
+        self._pending_rows: list = []
         self._current_source: RadioSource | None = None
         self._current_expect_spectrogram = True
 
@@ -298,13 +306,15 @@ class RadioSpectraDock(QWidget):
             self, "Open local radio file", "", "Radio data (*.cdf *.fits *.fit *.fit.gz *.dat);;All files (*)"
         )
         if paths:
-            self._plot_paths([Path(p) for p in paths], source_key="local")
+            self._plot_items([(Path(p), None) for p in paths],
+                             source=None, static_key="local")
 
     def _on_plot_selected_clicked(self):
         rows = self._selected_rows()
         if not rows:
             self._set_status("No rows selected")
             return
+        self._pending_rows = list(rows)
         self._set_status(f"Fetching {len(rows)} file(s)…")
         self._svc.fetch(rows)
 
@@ -393,11 +403,16 @@ class RadioSpectraDock(QWidget):
         self._set_status(f"Search failed: {message}")
 
     def _on_fetch_completed(self, ok: list, failed: list):
-        # Use the source the active search was built from, not whatever the
-        # dropdown currently shows — advanced/raw fetches have no live source.
+        # Correlate each downloaded path back to the Fido row it came from, so
+        # plot-time grouping can key streams on (station, focus). Cache paths are
+        # named after the row's url basename (see fetch._cache_path_for), which is
+        # unique per selected row in practice (station+time+focus are encoded in
+        # the filename); a path with no match falls back to a static snapshot.
         source = self._current_source
-        source_key = source.key if source is not None else "advanced"
-        self._plot_paths(list(ok), source_key=source_key)
+        by_name = {_row_basename(r): r for r in self._pending_rows}
+        items = [(p, by_name.get(p.name)) for p in ok]
+        static_key = source.key if source is not None else "advanced"
+        self._plot_items(items, source=source, static_key=static_key)
         msg = f"Downloaded {len(ok)} file(s)"
         if failed:
             msg += f"; {len(failed)} failed"
@@ -406,13 +421,9 @@ class RadioSpectraDock(QWidget):
     def _on_fetch_failed(self, message: str):
         self._set_status(f"Fetch failed: {message}")
 
-    def _plot_paths(self, paths: list[Path], source_key: str):
-        """Convert each spectrogram → SpeasyVariable, register as a virtual
-        product, then push onto a fresh main-timeline panel. The panel's
-        time range is set to span all loaded variables — otherwise it
-        defaults to "now" and the data looks empty."""
-        errors: list[tuple[str, str]] = []
-        plotted = 0
+    def _plot_items(self, items, *, source, static_key):
+        """items: list[(Path, row_or_None)]. Streamable fetched rows become live
+        per-channel streams; local/raw items keep the static snapshot path."""
         try:
             from SciQLop.core import TimeRange
             from SciQLop.user_api.plot import create_plot_panel
@@ -423,79 +434,105 @@ class RadioSpectraDock(QWidget):
             self._set_status(f"SciQLop user-API unavailable: {exc}")
             return
 
-        # Convert all selected files (cached per file), collecting errors.
-        converted: list[tuple[Path, object]] = []
-        for path in paths:
-            try:
-                converted.append((path, _open_and_convert(path)))
-            except RadioPlotError as e:
-                errors.append((path.name, str(e)))
-            except Exception as e:  # noqa: BLE001 — final user-facing safety net
-                errors.append((path.name, f"{type(e).__name__}: {e}"))
-
-        # Group files that share a frequency grid so the same instrument at
-        # different times merges into one continuous spectrogram on one plot.
-        # Different grids (e.g. distinct eCALLISTO stations) stay separate.
-        groups: dict = {}
-        order: list = []
-        for path, variable in converted:
-            try:
-                sig = frequency_signature(variable)
-            except Exception:  # noqa: BLE001 — unkeyable → never merge
-                sig = ("unkeyed", id(variable))
-            if sig not in groups:
-                groups[sig] = []
-                order.append(sig)
-            groups[sig].append((path, variable))
+        parsed, errors = self._parse_items(items)
+        groups = self._group_items(parsed, source, static_key)
 
         panel = None
+        plotted = 0
         files_plotted = 0
         t_min: float | None = None
         t_max: float | None = None
-        for sig in order:
-            member_paths = [p for p, _ in groups[sig]]
-            member_vars = [v for _, v in groups[sig]]
-            try:
-                merged = (concat_variables_along_time(member_vars)
-                          if len(member_vars) > 1 else member_vars[0])
-            except Exception as e:  # noqa: BLE001
-                for p in member_paths:
-                    errors.append((p.name, f"merge: {type(e).__name__}: {e}"))
-                continue
-            vp_path = _group_vp_path(source_key, member_paths)
-            try:
-                vp = create_virtual_product(
-                    vp_path, _build_static_callback(merged), VirtualProductType.Spectrogram,
-                )
-            except Exception as e:  # noqa: BLE001
-                errors.append((member_paths[0].name, f"create_virtual_product: {type(e).__name__}: {e}"))
-                continue
-            self._virtual_products[vp_path] = vp
+        for g in groups:
+            if g.vp_path not in self._virtual_products:
+                try:
+                    # Bare create_virtual_product (no make_rich_vp/static_meta) on
+                    # purpose: matches the long-standing static dock path, and the
+                    # rich-hints provider path is deferred (it regressed plotting in
+                    # an earlier attempt). Hints come from the SpeasyVariable itself.
+                    vp = create_virtual_product(
+                        g.vp_path, g.callback, VirtualProductType.Spectrogram,
+                    )
+                    self._virtual_products[g.vp_path] = vp
+                except Exception as e:  # noqa: BLE001
+                    errors.append((g.first_name,
+                                   f"create_virtual_product: {type(e).__name__}: {e}"))
+                    continue
             if panel is None:
                 panel = create_plot_panel()
             try:
-                panel.plot(vp)
+                panel.plot(self._virtual_products[g.vp_path])
                 plotted += 1
-                files_plotted += len(member_paths)
-                v_t0, v_t1 = _variable_time_bounds(merged)
-                if v_t0 is not None and v_t1 is not None:
-                    t_min = v_t0 if t_min is None else min(t_min, v_t0)
-                    t_max = v_t1 if t_max is None else max(t_max, v_t1)
+                files_plotted += g.n_files
+                if g.t0 is not None:
+                    t_min = g.t0 if t_min is None else min(t_min, g.t0)
+                if g.t1 is not None:
+                    t_max = g.t1 if t_max is None else max(t_max, g.t1)
             except Exception as e:  # noqa: BLE001
-                errors.append((member_paths[0].name, f"plot: {type(e).__name__}: {e}"))
+                errors.append((g.first_name, f"plot: {type(e).__name__}: {e}"))
 
         if panel is not None and t_min is not None and t_max is not None:
             try:
                 panel.time_range = TimeRange(t_min, t_max)
             except Exception as e:  # noqa: BLE001
-                errors.append(("<panel time range>", f"set_time_range: {type(e).__name__}: {e}"))
+                errors.append(("<panel time range>",
+                               f"set_time_range: {type(e).__name__}: {e}"))
 
+        self._report_plot_result(errors, plotted, files_plotted, len(items))
+
+    def _parse_items(self, items):
+        parsed: list = []
+        errors: list[tuple[str, str]] = []
+        for path, row in items:
+            try:
+                parsed.append((path, row, _open_and_convert(path)))
+            except RadioPlotError as e:
+                errors.append((path.name, str(e)))
+            except Exception as e:  # noqa: BLE001
+                errors.append((path.name, f"{type(e).__name__}: {e}"))
+        return parsed, errors
+
+    def _group_items(self, parsed, source, static_key):
+        streamable = source is not None and bool(source.fido_instrument)
+        buckets: dict = {}
+        order: list = []
+        for path, row, var in parsed:
+            if streamable and row is not None:
+                key = ("stream", stream_identity_for_row(row, source).vp_path)
+            else:
+                key = ("static", _safe_freq_sig(var))
+            if key not in buckets:
+                buckets[key] = []
+                order.append(key)
+            buckets[key].append((path, row, var))
+        return [self._finalize_group(key, buckets[key], source, static_key)
+                for key in order]
+
+    def _finalize_group(self, key, members, source, static_key):
+        paths = [p for p, _, _ in members]
+        variables = [v for _, _, v in members]
+        t0, t1 = _members_time_bounds(variables)
+        if key[0] == "stream":
+            row = members[0][1]
+            identity = stream_identity_for_row(row, source)
+            stream_src = make_stream_source(identity, _safe_freq_sig(variables[0]))
+            callback = _build_callback(stream_src, self._cache_dir, _open_and_convert)
+            return _PlotGroup(vp_path=identity.vp_path, callback=callback,
+                              first_name=paths[0].name, n_files=len(paths),
+                              t0=t0, t1=t1)
+        merged = (concat_variables_along_time(variables)
+                  if len(variables) > 1 else variables[0])
+        return _PlotGroup(vp_path=_group_vp_path(static_key, paths),
+                          callback=_build_static_callback(merged),
+                          first_name=paths[0].name, n_files=len(paths),
+                          t0=t0, t1=t1)
+
+    def _report_plot_result(self, errors, plotted, files_plotted, n_items):
         if errors and plotted == 0:
             detail = "\n\n".join(f"{name}:\n  {err}" for name, err in errors)
             box = QMessageBox(self)
             box.setIcon(QMessageBox.Warning)
             box.setWindowTitle("Could not plot")
-            box.setText(f"None of the {len(paths)} file(s) could be plotted.")
+            box.setText(f"None of the {n_items} file(s) could be plotted.")
             box.setDetailedText(detail)
             box.setTextInteractionFlags(Qt.TextSelectableByMouse)
             box.exec()
@@ -515,6 +552,39 @@ class RadioSpectraDock(QWidget):
     def _set_status(self, text: str):
         self.status_label.setText(text)
         self._status_changed.emit()
+
+
+@dataclass
+class _PlotGroup:
+    vp_path: str
+    callback: object
+    first_name: str
+    n_files: int
+    t0: float | None
+    t1: float | None
+
+
+def _row_basename(row) -> str:
+    url = _row_url(row)
+    return url.rsplit("/", 1)[-1] if url else ""
+
+
+def _safe_freq_sig(variable):
+    try:
+        return frequency_signature(variable)
+    except Exception:  # noqa: BLE001 — unkeyable → its own static group
+        return ("unkeyed", id(variable))
+
+
+def _members_time_bounds(variables):
+    lo = hi = None
+    for v in variables:
+        a, b = _variable_time_bounds(v)
+        if a is not None:
+            lo = a if lo is None else min(lo, a)
+        if b is not None:
+            hi = b if hi is None else max(hi, b)
+    return lo, hi
 
 
 def _group_vp_path(source_key: str, paths: list[Path]) -> str:
