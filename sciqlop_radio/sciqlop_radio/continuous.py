@@ -14,10 +14,11 @@ The callback runs on SciQLop's data thread (not the GUI thread), so the
 synchronous Fido.search/fetch path is acceptable — only the first visit
 to a time window pays the network cost; cache hits are instant.
 
-Per-observatory sources (RSTN, e-CALLISTO) are intentionally NOT here:
-each carries hundreds of stations with mismatched frequency grids, so a
-single per-source VP would render a meaningless blended colormap. They
-need an observatory picker first — v2.
+Per-channel streams (one station + focus code, e.g. e-CALLISTO/RSTN) are built
+on demand by the dock via `make_stream_source`, which keys each stream by
+station + channel and filters the search results accordingly. The CONTINUOUS_SOURCES
+registry below holds only the whole-instrument single-grid sources (EOVSA, ILOFAR)
+registered at load time.
 """
 from __future__ import annotations
 
@@ -31,6 +32,7 @@ from typing import Any, Callable, Iterable, List, Optional
 import numpy as np
 
 from .fetch import _row_field
+from .plot import frequency_signature
 
 log = logging.getLogger(__name__)
 
@@ -44,14 +46,13 @@ def _filter_rows_for_stream(rows: list, source: "ContinuousSource") -> list:
     correctness for every instrument and never folds two channels together."""
     if source.station:
         rows = [r for r in rows if _row_field(r, "Observatory") == source.station]
-    if source.channel_column:
+    if source.channel_column and source.channel_value:
         rows = [r for r in rows
                 if _row_field(r, source.channel_column) == source.channel_value]
     return rows
 
 
 def _frequency_signature_safe(variable):
-    from .plot import frequency_signature
     try:
         return frequency_signature(variable)
     except Exception:  # noqa: BLE001 — unkeyable variable never matches
