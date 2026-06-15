@@ -30,10 +30,32 @@ from typing import Any, Callable, Iterable, List, Optional
 
 import numpy as np
 
+from .fetch import _row_field
+
 log = logging.getLogger(__name__)
 
 
 MAX_FILES_PER_CALL = 32
+
+
+def _filter_rows_for_stream(rows: list, source: "ContinuousSource") -> list:
+    """Client-side station + channel filter. Server-side station filtering
+    (radiospectra.net.Observatory) narrows eCALLISTO already; this guarantees
+    correctness for every instrument and never folds two channels together."""
+    if source.station:
+        rows = [r for r in rows if _row_field(r, "Observatory") == source.station]
+    if source.channel_column:
+        rows = [r for r in rows
+                if _row_field(r, source.channel_column) == source.channel_value]
+    return rows
+
+
+def _frequency_signature_safe(variable):
+    from .plot import frequency_signature
+    try:
+        return frequency_signature(variable)
+    except Exception:  # noqa: BLE001 — unkeyable variable never matches
+        return None
 
 
 @dataclass(frozen=True)
@@ -58,6 +80,11 @@ class ContinuousSource:
     attrs_factory: Callable[[], list]
     max_files: int = MAX_FILES_PER_CALL
     static_meta: dict = field(default_factory=dict)
+    # Per-channel stream filters (empty/None = whole-source, e.g. EOVSA/ILOFAR):
+    station: str = ""                       # client-side Observatory-column filter
+    channel_column: str | None = None       # Fido column for the channel token
+    channel_value: str = ""                 # required value in channel_column
+    freq_signature: tuple | None = None     # post-parse frequency-grid filter
 
 
 def _format_time_for_fido(t: datetime) -> str:
@@ -225,20 +252,8 @@ def _build_callback(
             "continuous(%s): Fido.search returned %d row(s) in %.1fs",
             source.vp_path, len(rows), time.monotonic() - t_search,
         )
+        rows = _filter_rows_for_stream(rows, source)
         if not rows:
-            return None
-
-        # Cap: if the user's visible range covers more files than we'll
-        # download in one go, return None and tell them to zoom in. Silent
-        # truncation would only show data at one end of the range — confusing.
-        if len(rows) > source.max_files:
-            log.warning(
-                "continuous(%s): %d rows for [%s..%s] exceeds max_files=%d. "
-                "Zoom in to a window that covers fewer files (or raise "
-                "ContinuousSource.max_files).",
-                source.vp_path, len(rows), t0.isoformat(), t1.isoformat(),
-                source.max_files,
-            )
             return None
 
         t_fetch = time.monotonic()
@@ -264,6 +279,10 @@ def _build_callback(
             source.vp_path, len(variables), len(paths), time.monotonic() - t_parse,
         )
 
+        if source.freq_signature is not None:
+            variables = [v for v in variables
+                         if _frequency_signature_safe(v) == source.freq_signature]
+
         out = _concat_spectrograms(variables)
         if out is None:
             log.warning("continuous(%s): no usable data after concat", source.vp_path)
@@ -275,6 +294,25 @@ def _build_callback(
         return out
 
     return _callback
+
+
+def make_stream_source(identity, freq_signature) -> ContinuousSource:
+    """Build a per-channel streaming source from a dock-fetched group's identity
+    (`sciqlop_radio.streams.StreamIdentity`) and its reference frequency grid."""
+    from .streams import rule_for, stream_fido_attrs
+
+    rule = rule_for(identity.source_key)
+    label = " ".join(p for p in (identity.instrument, identity.station,
+                                 identity.channel) if p)
+    return ContinuousSource(
+        vp_path=identity.vp_path,
+        label=label or identity.source_key,
+        attrs_factory=lambda: stream_fido_attrs(identity),
+        station=identity.station if rule.per_station else "",
+        channel_column=rule.channel_column,
+        channel_value=identity.channel,
+        freq_signature=freq_signature,
+    )
 
 
 @dataclass

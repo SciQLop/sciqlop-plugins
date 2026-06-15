@@ -130,3 +130,75 @@ def test_register_continuous_products_passes_static_meta_to_factory(tmp_path, mo
         assert path == src.vp_path
         assert vptype == "SPEC"
         assert metadata is src.static_meta
+
+
+# ---------------------------------------------------------------------------
+# streaming callback: station/channel/frequency filters + no cap
+# ---------------------------------------------------------------------------
+
+
+def _ecallisto_source(**over):
+    from sciqlop_radio.continuous import ContinuousSource
+    base = dict(vp_path="radio/ecallisto/BIR/01", label="BIR/01",
+                attrs_factory=lambda: [], station="BIR",
+                channel_column="ID", channel_value="01")
+    base.update(over)
+    return ContinuousSource(**base)
+
+
+def test_stream_callback_filters_rows_by_station_and_channel(monkeypatch, tmp_path):
+    from sciqlop_radio import continuous as C
+    rows = [
+        {"Observatory": "BIR", "ID": "01", "url": "http://a/BIR_x_01.fit.gz"},
+        {"Observatory": "BIR", "ID": "02", "url": "http://a/BIR_x_02.fit.gz"},
+        {"Observatory": "ALMATY", "ID": "01", "url": "http://a/ALMATY_x_01.fit.gz"},
+    ]
+    captured = {}
+    monkeypatch.setattr(C, "_fido_search", lambda t0, t1, src: [dict(r) for r in rows])
+    monkeypatch.setattr(C, "_fetch_paths",
+                        lambda rws, cd: (captured.__setitem__("rows", list(rws)) or []))
+    cb = C._build_callback(_ecallisto_source(), tmp_path, lambda p: None)
+    cb(0.0, 100.0)
+    assert len(captured["rows"]) == 1
+    assert captured["rows"][0]["Observatory"] == "BIR"
+    assert captured["rows"][0]["ID"] == "01"
+
+
+def test_stream_callback_drops_files_off_frequency_signature(
+        monkeypatch, tmp_path, speasy_variable_factory):
+    from sciqlop_radio import continuous as C
+    from sciqlop_radio.plot import frequency_signature
+    v_good = speasy_variable_factory("2024-01-01T00:00:00", 3, 4)
+    v_bad = speasy_variable_factory("2024-01-01T00:01:00", 3, 5)
+    sig = frequency_signature(v_good)
+    rows = [{"Observatory": "BIR", "ID": "01", "url": "http://a/g.fit.gz"},
+            {"Observatory": "BIR", "ID": "01", "url": "http://a/b.fit.gz"}]
+    monkeypatch.setattr(C, "_fido_search", lambda *a: [dict(r) for r in rows])
+    monkeypatch.setattr(C, "_fetch_paths",
+                        lambda rws, cd: [tmp_path / "g.fit.gz", tmp_path / "b.fit.gz"])
+    mapping = {"g.fit.gz": v_good, "b.fit.gz": v_bad}
+    src = _ecallisto_source(freq_signature=sig)
+    out = C._build_callback(src, tmp_path, lambda p: mapping[p.name])(0.0, 100.0)
+    assert out is not None
+    assert out.values.shape[1] == 4  # only the matching-grid file survives
+
+
+def test_stream_callback_has_no_file_cap(monkeypatch, tmp_path, speasy_variable_factory):
+    from sciqlop_radio import continuous as C
+    v = speasy_variable_factory("2024-01-01T00:00:00", 2, 3)
+    rows = [{"Observatory": "BIR", "ID": "01", "url": f"http://a/{i}.fit.gz"}
+            for i in range(50)]
+    monkeypatch.setattr(C, "_fido_search", lambda *a: [dict(r) for r in rows])
+    monkeypatch.setattr(C, "_fetch_paths",
+                        lambda rws, cd: [tmp_path / f"{i}.fit.gz" for i in range(len(rws))])
+    out = C._build_callback(_ecallisto_source(), tmp_path, lambda p: v)(0.0, 100.0)
+    assert out is not None
+    assert out.values.shape[0] == 50 * 2  # all 50 files concatenated, not capped
+
+
+def test_stream_callback_returns_none_on_empty_window(monkeypatch, tmp_path):
+    from sciqlop_radio import continuous as C
+    monkeypatch.setattr(C, "_fido_search", lambda *a: [])
+    out = C._build_callback(_ecallisto_source(), tmp_path, lambda p: None)(0.0, 100.0)
+    assert out is None
+
