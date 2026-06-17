@@ -17,6 +17,12 @@ import tempfile
 
 # Must precede any SciQLop import.
 os.environ["XDG_CONFIG_HOME"] = tempfile.mkdtemp(prefix="sciqlop_radio_tests_")
+# Must precede any speasy import: the cache singleton reads SPEASY_CACHE_PATH at
+# import time. A fresh tempdir keeps the search/parse cache from leaking across
+# runs and from polluting the developer's real ~/.cache/speasy.
+os.environ.setdefault(
+    "SPEASY_CACHE_PATH", tempfile.mkdtemp(prefix="sciqlop_radio_cache_")
+)
 
 import atexit
 import importlib
@@ -113,4 +119,16 @@ def _isolate_sciqlop_config():
             os.remove(path)
         except OSError:
             pass
+    yield
+
+
+@pytest.fixture(autouse=True)
+def _isolate_speasy_cache():
+    """Drop all Speasy cache entries before each test so the day-bucketed search
+    cache (and parse cache) can't leak hits from one test into another."""
+    import re
+
+    from speasy.core.cache import drop_matching_entries
+
+    drop_matching_entries(re.compile(".*"))
     yield
