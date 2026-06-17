@@ -37,9 +37,24 @@ def load(main_window):
     import PySide6QtAds as QtAds  # local import; available only inside SciQLop
     from PySide6.QtGui import QIcon
 
-    from .dock import RadioSpectraDock
+    from .continuous import register_continuous_products
+    from .dock import RadioSpectraDock, _open_and_convert
+    from .settings import RadioSettings as _Settings
 
-    panel = RadioSpectraDock(main_window=main_window)
+    _cfg = _Settings()
+
+    # Register continuous per-source-channel VPs first so the dock can
+    # pre-seed its VP registry and skip re-registering them when the user
+    # plots a file from the same instrument (e.g. ILOFAR → radio/ilofar).
+    _cont = register_continuous_products(
+        cache_dir=_cfg.cache_dir,
+        open_and_convert=_open_and_convert,
+    )
+
+    panel = RadioSpectraDock(
+        main_window=main_window,
+        existing_vps=_cont.vps if _cont is not None else None,
+    )
     panel.setWindowTitle("Radio Spectra")
 
     main_window.addWidgetIntoDock(
@@ -61,23 +76,11 @@ def load(main_window):
     else:
         main_window.toolsMenu.addAction("Radio Spectra", panel.show)
 
-    # Register the continuous per-source-channel virtual products so the
-    # user can drag, e.g., "radio/psp_rfs_lfr" onto any panel and pan/zoom
-    # freely — the callback fetches whatever files cover the visible
-    # window on demand.
-    from .continuous import register_continuous_products
-    from .dock import _open_and_convert
-    from .settings import RadioSettings as _Settings
-    _cont = register_continuous_products(
-        cache_dir=_Settings().cache_dir,
-        open_and_convert=_open_and_convert,
-    )
-
     from pathlib import Path
     _cat = catalog.register_catalog_products(Path(__file__).parent / "radio_catalog.yaml")
 
     from .lofar import register_lofar_product
-    _lofar = register_lofar_product(cache_dir=_Settings().cache_dir)
+    _lofar = register_lofar_product(cache_dir=_cfg.cache_dir)
 
     handle = (panel, _cont, _cat, _lofar)
     _LOADED_PANELS[key] = handle
