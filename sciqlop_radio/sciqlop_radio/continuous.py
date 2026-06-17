@@ -37,9 +37,6 @@ from .plot import frequency_signature
 log = logging.getLogger(__name__)
 
 
-MAX_FILES_PER_CALL = 32
-
-
 def _filter_rows_for_stream(rows: list, source: "ContinuousSource") -> list:
     """Client-side station + channel filter. Server-side station filtering
     (radiospectra.net.Observatory) narrows eCALLISTO already; this guarantees
@@ -79,7 +76,6 @@ class ContinuousSource:
     vp_path: str
     label: str
     attrs_factory: Callable[[], list]
-    max_files: int = MAX_FILES_PER_CALL
     static_meta: dict = field(default_factory=dict)
     # Per-channel stream filters (empty/None = whole-source, e.g. EOVSA/ILOFAR):
     station: str = ""                       # client-side Observatory-column filter

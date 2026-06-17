@@ -454,6 +454,36 @@ def test_ecallisto_focus_codes_stream_separately(dock, qtbot, tmp_path, monkeypa
     assert panel.plot.call_count == 2
 
 
+def test_dominant_freq_sig_picks_majority_grid():
+    import types as _t
+    from sciqlop_radio import dock as D
+    import sciqlop_radio.dock as Dmod
+    vars_ = [_t.SimpleNamespace(g="A"), _t.SimpleNamespace(g="B"),
+             _t.SimpleNamespace(g="A")]
+    orig = Dmod.frequency_signature
+    Dmod.frequency_signature = lambda v: (v.g,)
+    try:
+        assert D._dominant_freq_sig(vars_) == ("A",)
+    finally:
+        Dmod.frequency_signature = orig
+
+
+def test_dominant_freq_sig_none_when_all_unkeyable():
+    import types as _t
+    from sciqlop_radio import dock as D
+    import sciqlop_radio.dock as Dmod
+
+    def _raise(v):
+        raise ValueError("no freq axis")
+
+    orig = Dmod.frequency_signature
+    Dmod.frequency_signature = _raise
+    try:
+        assert D._dominant_freq_sig([_t.SimpleNamespace(), _t.SimpleNamespace()]) is None
+    finally:
+        Dmod.frequency_signature = orig
+
+
 def test_ecallisto_same_station_focus_merge_into_one_stream(dock, qtbot, tmp_path, monkeypatch):
     """Same station + focus at different times -> one stream node, one plot."""
     import types as _t

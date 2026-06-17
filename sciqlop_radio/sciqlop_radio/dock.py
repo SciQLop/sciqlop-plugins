@@ -514,7 +514,7 @@ class RadioSpectraDock(QWidget):
         if key[0] == "stream":
             row = members[0][1]
             identity = stream_identity_for_row(row, source)
-            stream_src = make_stream_source(identity, _safe_freq_sig(variables[0]))
+            stream_src = make_stream_source(identity, _dominant_freq_sig(variables))
             callback = _build_callback(stream_src, self._cache_dir, _open_and_convert)
             return _PlotGroup(vp_path=identity.vp_path, callback=callback,
                               first_name=paths[0].name, n_files=len(paths),
@@ -574,6 +574,26 @@ def _safe_freq_sig(variable):
         return frequency_signature(variable)
     except Exception:  # noqa: BLE001 — unkeyable → its own static group
         return ("unkeyed", id(variable))
+
+
+def _freq_sig_or_none(variable):
+    """Frequency signature with the SAME None-on-failure contract as the stream
+    callback's filter (continuous._frequency_signature_safe), so the plot-time
+    seed and the on-demand filter can never disagree."""
+    try:
+        return frequency_signature(variable)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _dominant_freq_sig(variables):
+    """Most common frequency signature among a stream group's seed variables.
+    Robust to an atypical first file; None (no backstop) if none are keyable."""
+    from collections import Counter
+    sigs = [s for s in (_freq_sig_or_none(v) for v in variables) if s is not None]
+    if not sigs:
+        return None
+    return Counter(sigs).most_common(1)[0][0]
 
 
 def _members_time_bounds(variables):
