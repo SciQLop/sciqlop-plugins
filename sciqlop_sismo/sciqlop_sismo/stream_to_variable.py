@@ -13,6 +13,32 @@ from speasy.core.data_containers import DataContainer, VariableAxis, VariableTim
 from speasy.products.variable import SpeasyVariable
 
 
+def variable_to_stream(
+    variable: SpeasyVariable, nslc: tuple[str, str, str, str], sampling_rate_hz: float
+) -> Stream:
+    """Rebuild a single-trace `obspy.Stream` from a raw-counts `SpeasyVariable`.
+
+    Inverse of `stream_to_speasy_variable`. Used to re-derive processed/spectrogram
+    products from the cached raw-counts fetch without touching the network — the
+    pipeline then runs on the assembled full window, so no fragment-boundary
+    filter/STFT seams are introduced.
+    """
+    from obspy import Trace, UTCDateTime
+
+    net, sta, loc, chan = nslc
+    data = np.asarray(variable.values, dtype=np.float64).reshape(-1)
+    start_ns = variable.time[0].astype("datetime64[ns]").astype(np.int64)
+    tr = Trace(
+        data=data,
+        header={
+            "network": net, "station": sta, "location": loc, "channel": chan,
+            "sampling_rate": float(sampling_rate_hz),
+            "starttime": UTCDateTime(start_ns / 1e9),
+        },
+    )
+    return Stream([tr])
+
+
 def _pick_trace(stream: Stream, channel: str):
     for tr in stream:
         if tr.stats.channel == channel:

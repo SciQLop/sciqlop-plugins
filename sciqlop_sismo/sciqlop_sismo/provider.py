@@ -26,7 +26,9 @@ from .settings import SismoSettings
 from .stream_to_variable import (
     spectrogram_from_stream,
     stream_to_speasy_variable,
+    variable_to_stream,
 )
+from speasy.core.cache import Cacheable
 
 PROVIDER_NAME = "sismo"
 
@@ -121,8 +123,12 @@ class SismoProvider(DataProvider):
         routing = meta.get("routing", "iris-federator")
         t0 = _coerce_datetime(start_time)
         t1 = _coerce_datetime(stop_time)
-        stream = self._fetch_stream_for_meta(meta, nslc, t0, t1, routing)
         channel = nslc[3]
+
+        stream = self._raw_stream(meta, nslc, t0, t1, routing)
+        if stream is None or len(stream) == 0:
+            return None
+
         if kind == "raw":
             return stream_to_speasy_variable(stream, channel=channel, units="counts")
         if kind == "waveform":
@@ -132,6 +138,52 @@ class SismoProvider(DataProvider):
             processed = default_pipeline(stream, self._settings)
             return spectrogram_from_stream(processed, channel=channel)
         raise ValueError(f"unknown kind: {kind!r}")
+
+    def _raw_stream(self, meta, nslc, t0, t1, routing):
+        """Raw, kind-independent waveform stream for the requested window.
+
+        Local files are read directly (already on disk). Remote FDSN data goes
+        through the range-aware Speasy cache, keyed on the dataset uid so the
+        three derived products of a channel share one fetch, and re-visited time
+        windows reassemble from cached hourly fragments instead of re-fetching.
+        Processing (detrend/filter/STFT) runs downstream on the assembled
+        window, so caching never introduces fragment-boundary seams.
+        """
+        if routing.startswith("local:"):
+            return self._fetch_stream_for_meta(meta, nslc, t0, t1, routing)
+        dataset_uid = f"{nslc[0]}/{nslc[1]}/{nslc[2]}.{nslc[3]}"
+        counts = self._get_raw_counts(dataset_uid, t0, t1)
+        if counts is None:
+            return None
+        return variable_to_stream(counts, nslc, meta.get("sampling_rate_hz"))
+
+    @Cacheable(prefix="sismo", fragment_hours=lambda product: 1)
+    def _get_raw_counts(self, product, start_time, stop_time):
+        """Range-aware-cached raw counts for one channel (dataset uid `product`).
+
+        Returns None for a window with no data so a gap doesn't fail the whole
+        request — Speasy's fragment cache stores nothing for a None fragment."""
+        from obspy.clients.fdsn.header import FDSNNoDataException
+
+        record = self._record_for_dataset_uid(product)
+        nslc = (record["network"], record["station"],
+                record["location"], record["channel"])
+        try:
+            stream = fetch_stream(
+                nslc, start_time, stop_time, routing=record["routing"],
+                timeout=self._settings.fetch_timeout_s, allow_empty=True,
+            )
+        except FDSNNoDataException:
+            return None
+        if len(stream) == 0:
+            return None
+        return stream_to_speasy_variable(stream, channel=nslc[3], units="counts")
+
+    def _record_for_dataset_uid(self, uid: str) -> dict:
+        for r in self._pending_records:
+            if f'{r["network"]}/{r["station"]}/{r["location"]}.{r["channel"]}' == uid:
+                return r
+        raise RuntimeError(f"no channel record for dataset uid {uid!r}")
 
     # ----- Public API for the dock ------------------------------------------
 

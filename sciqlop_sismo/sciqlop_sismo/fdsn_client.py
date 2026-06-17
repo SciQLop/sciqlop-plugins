@@ -31,15 +31,30 @@ def fetch_stream(
     end_time: datetime,
     routing: str = "iris-federator",
     timeout: float | None = None,
+    *,
+    allow_empty: bool = False,
 ) -> Stream:
-    """Fetch waveforms for one NSLC tuple. Raises if the result is empty."""
+    """Fetch waveforms for one NSLC tuple.
+
+    With `allow_empty=False` (default) an empty result raises — keeps the
+    imperative/UI path loud. With `allow_empty=True` a no-data response yields
+    an empty `Stream` instead, which the cache layer treats as a missing
+    fragment so a gap in one sub-window doesn't fail the whole request.
+    """
+    from obspy.clients.fdsn.header import FDSNNoDataException
+
     net, sta, loc, chan = nslc
     client = _client_for(routing, timeout=timeout)
-    stream = client.get_waveforms(
-        network=net, station=sta, location=loc, channel=chan,
-        starttime=_to_utc(start_time), endtime=_to_utc(end_time),
-    )
-    if len(stream) == 0:
+    try:
+        stream = client.get_waveforms(
+            network=net, station=sta, location=loc, channel=chan,
+            starttime=_to_utc(start_time), endtime=_to_utc(end_time),
+        )
+    except FDSNNoDataException:
+        if allow_empty:
+            return Stream()
+        raise
+    if len(stream) == 0 and not allow_empty:
         raise RuntimeError(
             f"no data returned for {net}.{sta}.{loc}.{chan} "
             f"between {start_time.isoformat()} and {end_time.isoformat()} (routing={routing})"
