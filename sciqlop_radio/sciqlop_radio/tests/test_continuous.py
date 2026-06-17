@@ -202,3 +202,39 @@ def test_stream_callback_returns_none_on_empty_window(monkeypatch, tmp_path):
     out = C._build_callback(_ecallisto_source(), tmp_path, lambda p: None)(0.0, 100.0)
     assert out is None
 
+
+def _ecallisto_stream_cb(channel, tmp_path):
+    from sciqlop_radio.continuous import make_stream_source, _build_callback
+    from sciqlop_radio.dock import _open_and_convert
+    from sciqlop_radio.streams import StreamIdentity
+    ident = StreamIdentity(source_key="ecallisto", instrument="eCALLISTO",
+                           station="BIR", channel=channel)
+    src = make_stream_source(ident, freq_signature=None)
+    return _build_callback(src, tmp_path, _open_and_convert)
+
+
+@pytest.mark.live
+def test_live_ecallisto_stream_returns_data(tmp_path):
+    """Real Fido: a per-station+focus eCALLISTO stream over a known window returns
+    a non-empty spectrogram. Confirms server-side net.Observatory + the callback
+    chain end-to-end. BIR runs focus code 59 here. Network-gated; run with `-m live`."""
+    from datetime import datetime, timezone
+    t0 = datetime(2011, 6, 7, 6, 0, tzinfo=timezone.utc).timestamp()
+    t1 = datetime(2011, 6, 7, 7, 0, tzinfo=timezone.utc).timestamp()
+    out = _ecallisto_stream_cb("59", tmp_path)(t0, t1)
+    assert out is not None
+    assert out.values.shape[0] > 0
+    assert out.values.shape[1] > 0
+
+
+@pytest.mark.live
+def test_live_ecallisto_focus_code_filter_excludes_other_receivers(tmp_path):
+    """The focus-code guarantee against real data: BIR runs two receivers (59 and
+    10) in this window. A stream for a focus code that doesn't exist (01) must
+    return None even though the BIR search yields rows — proving the client-side
+    focus filter never folds a different receiver into the stream."""
+    from datetime import datetime, timezone
+    t0 = datetime(2011, 6, 7, 6, 0, tzinfo=timezone.utc).timestamp()
+    t1 = datetime(2011, 6, 7, 7, 0, tzinfo=timezone.utc).timestamp()
+    assert _ecallisto_stream_cb("01", tmp_path)(t0, t1) is None
+
