@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "sciqlop-opencode"
-version = "0.1.0"
+version = "0.1.1"
 description = "Opencode chat dock for SciQLop (powered by the opencode CLI via opencode-agent-sdk)"
 requires-python = ">=3.10"
 dependencies = ["SciQLop>=0.12.0,<0.14.0", "opencode-agent-sdk>=0.4.0"]

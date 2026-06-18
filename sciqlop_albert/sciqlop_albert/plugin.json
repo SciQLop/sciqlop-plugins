@@ -1,6 +1,6 @@
 {
   "name": "Albert Chat",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Albert (DINUM/Etalab) chat backend for SciQLop. Uses the OpenAI-compatible API at albert.api.etalab.gouv.fr.",
   "authors": [
     {

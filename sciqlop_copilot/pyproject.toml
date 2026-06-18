@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "sciqlop-copilot"
-version = "0.1.0"
+version = "0.1.1"
 description = "GitHub Copilot Chat backend for SciQLop — OpenAI-compatible API with tool calling, OAuth device-flow login"
 requires-python = ">=3.10"
 dependencies = ["SciQLop>=0.12.0,<0.14.0", "httpx>=0.25"]
