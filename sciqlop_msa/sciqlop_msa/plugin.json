@@ -4,7 +4,7 @@
   "description": "MSA instrument data access and quick-look panels for BepiColombo/MMO",
   "authors": [{"name": "LPP Team", "email": "msa-support@lpp.polytechnique.fr", "organization": "LPP/CNRS"}],
   "license": "MIT",
-  "python_dependencies": ["SciQLop>=0.12.0,<0.13.0", "speasy"],
+  "python_dependencies": ["SciQLop>=0.12.0,<0.14.0", "speasy"],
   "dependencies": ["speasy_provider"],
   "disabled": false
 }
