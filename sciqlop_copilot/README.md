@@ -11,6 +11,14 @@ Copilot Enterprise quirks, no extra proxy.
 > stable for years and is what every major third-party Copilot client
 > talks to, but GitHub could change it at any time.
 
+## Screenshot
+
+Copilot driving SciQLop from the Agents dock — here building a Solar
+Orbiter ICME/SEP demo panel end-to-end (creating the panel, setting the
+time range, and plotting MAG/SWA products):
+
+![GitHub Copilot in the SciQLop Agents dock](docs/copilot-agent.png)
+
 ## Requirements
 
 - An active **GitHub Copilot** subscription (Individual or Business — the
