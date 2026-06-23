@@ -174,6 +174,7 @@ class ClaudeBackend:
         self._tempdir = Path(ctx.tempdir)
         self._tempdir.mkdir(parents=True, exist_ok=True)
         self._confirm_cb = ctx.confirm_cb
+        self._ask_question_cb = getattr(ctx, "ask_question_cb", None)
         self._model: Optional[str] = None
         self._allow_writes = ctx.allow_writes
         self._resume: Optional[str] = None
@@ -191,7 +192,10 @@ class ClaudeBackend:
             system_prompt=SYSTEM_PROMPT,
             mcp_servers={_MCP_SERVER_NAME: server},
             allowed_tools=allowed,
-            can_use_tool=self._permission_check if self._confirm_cb else None,
+            can_use_tool=(
+                self._permission_check
+                if (self._confirm_cb or self._ask_question_cb) else None
+            ),
             model=self._model,
             resume=self._resume,
             cwd=str(_sessions.current_workspace_dir()),
@@ -292,8 +296,23 @@ class ClaudeBackend:
     def load_session(self, session_id: str, image_tempdir: Path) -> List[ChatMessage]:
         return _sessions.load_session_messages(session_id, image_tempdir=image_tempdir)
 
+    async def _answer_question(self, tool_input: dict):
+        """Render the model's AskUserQuestion and return the user's answers.
+
+        The SDK delivers AskUserQuestion through can_use_tool; the answers go
+        back as updated_input. Without a wired UI callback we fall back to the
+        default allow (the model then proceeds with its own defaults)."""
+        questions = tool_input.get("questions", [])
+        try:
+            answers = await self._ask_question_cb(questions)
+        except Exception as e:  # noqa: BLE001
+            return PermissionResultDeny(message=f"question callback failed: {e}")
+        return PermissionResultAllow(updated_input={**tool_input, "answers": answers})
+
     async def _permission_check(self, tool_name: str, tool_input: dict, context):
         short = tool_name.split("__")[-1]
+        if short == "AskUserQuestion" and self._ask_question_cb is not None:
+            return await self._answer_question(tool_input)
         if short not in self._gated_names:
             return PermissionResultAllow(updated_input=tool_input)
         if not self._allow_writes:
