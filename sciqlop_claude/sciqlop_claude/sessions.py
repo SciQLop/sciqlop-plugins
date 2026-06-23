@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional
 
-from SciQLop.components.agents.chat import write_b64_image
+from SciQLop.components.agents.chat import ThinkingBlock, write_b64_image
 
 
 def current_workspace_dir() -> Path:
@@ -159,6 +159,10 @@ def _render_blocks(content, tempdir, TextBlock, ImageBlock):
             text = block.get("text") or ""
             if text.strip():
                 blocks.append(TextBlock(text=text))
+        elif btype == "thinking":
+            text = block.get("thinking") or ""
+            if text.strip():
+                blocks.append(ThinkingBlock(text=text))
         elif btype == "tool_result":
             blocks.extend(_tool_result_images(block, tempdir, ImageBlock))
         elif btype == "image":

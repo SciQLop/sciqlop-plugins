@@ -14,6 +14,7 @@ from SciQLop.components.agents.chat import (
     ChatMessage,
     ImageBlock,
     TextBlock,
+    ThinkingBlock,
     write_b64_image,
 )
 
@@ -314,9 +315,13 @@ class ClaudeBackend:
         blocks: List[StreamBlock] = []
         if isinstance(message, AssistantMessage):
             for block in getattr(message, "content", []) or []:
+                thinking = getattr(block, "thinking", None)
+                if thinking:
+                    blocks.append(ThinkingBlock(text=thinking, complete=True))
+                    continue
                 text = getattr(block, "text", None)
                 if text:
-                    blocks.append(TextBlock(text=text))
+                    blocks.append(TextBlock(text=text, complete=True))
             return blocks
         if isinstance(message, UserMessage):
             for block in _iter_tool_results(message):
