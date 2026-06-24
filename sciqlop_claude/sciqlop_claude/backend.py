@@ -15,6 +15,7 @@ from SciQLop.components.agents.chat import (
     ImageBlock,
     TextBlock,
     ThinkingBlock,
+    ToolActivityBlock,
     write_b64_image,
 )
 
@@ -341,10 +342,24 @@ class ClaudeBackend:
                 text = getattr(block, "text", None)
                 if text:
                     blocks.append(TextBlock(text=text, complete=True))
+                    continue
+                name = getattr(block, "name", None)
+                if name is not None:  # ToolUseBlock
+                    blocks.append(ToolActivityBlock(
+                        tool_name=str(name).split("__")[-1],
+                        tool_input=getattr(block, "input", {}) or {},
+                        tool_use_id=getattr(block, "id", "") or "",
+                    ))
             return blocks
         if isinstance(message, UserMessage):
             for block in _iter_tool_results(message):
                 blocks.extend(self._tool_result_blocks(block))
+                summary = _result_summary(block)
+                if summary:
+                    blocks.append(ToolActivityBlock(
+                        tool_use_id=getattr(block, "tool_use_id", "") or "",
+                        result=summary,
+                    ))
         return blocks
 
     def _tool_result_blocks(self, block) -> List[StreamBlock]:
@@ -371,6 +386,34 @@ def _iter_tool_results(message) -> list:
     if not isinstance(content, list):
         return []
     return [b for b in content if isinstance(b, ToolResultBlock)]
+
+
+def _result_summary(block) -> str:
+    """A short one-line summary of a tool result, for the activity log."""
+    content = getattr(block, "content", None)
+    if isinstance(content, str):
+        text = content
+    elif isinstance(content, list):
+        parts = []
+        for item in content:
+            if isinstance(item, dict):
+                if item.get("type") == "text":
+                    parts.append(str(item.get("text", "")))
+                elif item.get("type") == "image":
+                    parts.append("[image]")
+            elif isinstance(item, str):
+                parts.append(item)
+            else:
+                t = getattr(item, "text", None)
+                if t:
+                    parts.append(str(t))
+        text = " ".join(parts)
+    else:
+        text = ""
+    text = " ".join(str(text).split())
+    if getattr(block, "is_error", False) and text:
+        text = f"error: {text}"
+    return text[:200]
 
 
 def _build_user_stream(text: str, image_paths: List[str]):
