@@ -161,6 +161,9 @@ def sdk_available() -> tuple[bool, Optional[str]]:
     return _SDK_AVAILABLE, _SDK_IMPORT_ERROR
 
 
+_INTERRUPT_DRAIN_TIMEOUT_S = 15.0
+
+
 class ClaudeBackend:
     display_name = "Claude"
     model_choices: List[tuple[str, Optional[str]]] = list(_DEFAULT_MODEL_CHOICES)
@@ -223,17 +226,52 @@ class ClaudeBackend:
             self._slash_cache = None
 
     async def cancel(self) -> None:
-        async with self._lock:
-            client = self._client
-            if client is None:
-                return
-            interrupt = getattr(client, "interrupt", None)
-            if interrupt is not None:
-                try:
-                    await interrupt()
-                    return
-                except Exception:
-                    pass
+        """Interrupt the in-flight turn.
+
+        ``interrupt()`` must NOT wait on ``self._lock``: ``ask()`` holds that lock
+        for the whole streamed turn, so acquiring it here would defer the interrupt
+        until the turn ends on its own — Stop would do nothing mid-turn.
+        """
+        client = self._client
+        if client is None:
+            return
+        interrupt = getattr(client, "interrupt", None)
+        if interrupt is None:
+            async with self._lock:
+                await self._disconnect()
+            return
+        try:
+            await interrupt()
+        except Exception:
+            async with self._lock:
+                await self._disconnect()
+            return
+        # The interrupted turn drains its own error_during_execution ResultMessage
+        # through its receive_response(). Only when nothing is consuming the stream
+        # (no turn in flight) do we drain here, so the leftover can't leak into the
+        # next query. https://code.claude.com/docs/en/agent-sdk/python
+        if not self._lock.locked():
+            async with self._lock:
+                if self._client is client:
+                    await self._drain_after_interrupt(client)
+
+    async def _drain_after_interrupt(self, client) -> None:
+        """Consume the interrupted task's leftover messages before the next query.
+
+        ``interrupt()`` does not clear the message buffer: the interrupted task's
+        messages — including its ResultMessage (subtype ``error_during_execution``)
+        — stay in the stream and would otherwise be read as the *next* query's
+        response, desyncing the chat. The bounded wait guards against an interrupt
+        that left nothing to drain; on any failure we drop the client so the next
+        turn reconnects clean. https://code.claude.com/docs/en/agent-sdk/python
+        """
+        async def _consume() -> None:
+            async for _message in client.receive_response():
+                pass
+
+        try:
+            await asyncio.wait_for(_consume(), timeout=_INTERRUPT_DRAIN_TIMEOUT_S)
+        except Exception:
             await self._disconnect()
 
     async def resume(self, session_id: str) -> None:
