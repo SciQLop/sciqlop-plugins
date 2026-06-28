@@ -8,7 +8,7 @@ from typing import Callable, List, Optional
 
 from SciQLop.components.agents import BackendContext, SessionEntry
 from SciQLop.components.agents.backend import StreamBlock
-from SciQLop.components.agents.chat import ChatMessage, TextBlock
+from SciQLop.components.agents.chat import ChatMessage, TextBlock, ToolActivityBlock
 
 from . import sessions as _sessions
 
@@ -203,6 +203,60 @@ def _split_provider_model(value: Optional[str]) -> tuple[str, str]:
         return "", ""
     provider, _, model_id = value.partition("/")
     return provider, model_id
+
+
+class _OpencodeStream:
+    """Translate opencode-agent-sdk messages into SciQLop chat StreamBlocks.
+
+    opencode's subprocess-ACP stream sends assistant text as a *growing
+    accumulated snapshot* (each AssistantMessage carries the full text so far),
+    while the SciQLop chat consumer appends incremental deltas. We diff snapshots
+    into deltas and close the open text block when a tool call interrupts it or
+    the turn ends. Tool calls arrive as ToolUseBlock at completion -> one
+    ToolActivityBlock each. Thinking is not separable here: the SDK flattens
+    agent_thought_chunk into the same AssistantMessage/TextBlock channel as the
+    answer, so it renders inline as text.
+    """
+
+    def __init__(self):
+        self._acc = ""      # text already emitted for the open text block
+        self._open = False  # an incomplete TextBlock is open in the consumer
+
+    def feed(self, message):
+        content = getattr(message, "content", None)
+        if not isinstance(content, list):
+            return
+        for block in content:
+            if getattr(block, "name", None) is not None:  # ToolUseBlock
+                yield from self._close_text()
+                yield ToolActivityBlock(
+                    tool_name=str(block.name).split("__")[-1],
+                    tool_input=getattr(block, "input", None) or {},
+                    tool_use_id=getattr(block, "id", "") or "",
+                )
+            else:
+                text = getattr(block, "text", None)
+                if text is not None:
+                    yield from self._emit_text(text)
+
+    def flush(self):
+        yield from self._close_text()
+
+    def _emit_text(self, snapshot):
+        if snapshot == self._acc:
+            return
+        if not snapshot.startswith(self._acc):
+            yield from self._close_text()  # buffer reset -> new block
+        delta = snapshot[len(self._acc):]
+        self._acc = snapshot
+        self._open = True
+        yield TextBlock(text=delta, complete=False)
+
+    def _close_text(self):
+        if self._open:
+            self._open = False
+            self._acc = ""
+            yield TextBlock(text="", complete=True)
 
 
 class OpencodeBackend:
