@@ -4,7 +4,7 @@ from __future__ import annotations
 import asyncio
 import shutil
 from pathlib import Path
-from typing import Callable, List, Optional
+from typing import Callable, Iterator, List, Optional
 
 from SciQLop.components.agents import BackendContext, SessionEntry
 from SciQLop.components.agents.backend import StreamBlock
@@ -222,7 +222,7 @@ class _OpencodeStream:
         self._acc = ""      # text already emitted for the open text block
         self._open = False  # an incomplete TextBlock is open in the consumer
 
-    def feed(self, message):
+    def feed(self, message) -> Iterator[StreamBlock]:
         content = getattr(message, "content", None)
         if not isinstance(content, list):
             return
@@ -239,10 +239,10 @@ class _OpencodeStream:
                 if text is not None:
                     yield from self._emit_text(text)
 
-    def flush(self):
+    def flush(self) -> Iterator[StreamBlock]:
         yield from self._close_text()
 
-    def _emit_text(self, snapshot):
+    def _emit_text(self, snapshot: str) -> Iterator[StreamBlock]:
         if snapshot == self._acc:
             return
         if not snapshot.startswith(self._acc):
@@ -252,7 +252,7 @@ class _OpencodeStream:
         self._open = True
         yield TextBlock(text=delta, complete=False)
 
-    def _close_text(self):
+    def _close_text(self) -> Iterator[StreamBlock]:
         if self._open:
             self._open = False
             self._acc = ""
