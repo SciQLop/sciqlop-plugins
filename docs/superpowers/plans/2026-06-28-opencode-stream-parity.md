@@ -24,7 +24,7 @@ pytest. Block classes come from `SciQLop.components.agents.chat`.
   block classes (`TextBlock`, `ToolActivityBlock`) as module globals, so tests can
   monkeypatch them.
 - Tests run from the plugins repo root with:
-  `uv run --project /var/home/jeandet/Documents/prog/SciQLop pytest <path> -v`
+  `uv run --isolated --no-project --with pytest --with "opencode-agent-sdk>=0.4.0" python -m pytest <path> -v`
 - Branch: stay on the current `fix/ask-user-question`. Stage only the opencode
   files listed per task — never `git add -A`.
 
@@ -233,7 +233,7 @@ def test_end_to_end_against_consumer_contract(monkeypatch):
 
 Run (from `/var/home/jeandet/Documents/prog/plugins_sciqlop`):
 ```
-uv run --project /var/home/jeandet/Documents/prog/SciQLop pytest \
+uv run --isolated --no-project --with pytest --with "opencode-agent-sdk>=0.4.0" python -m pytest \
   sciqlop_opencode/sciqlop_opencode/tests/test_stream.py -v
 ```
 Expected: FAIL/ERROR — `AttributeError: module 'sciqlop_opencode.backend' has no attribute '_OpencodeStream'`.
@@ -309,7 +309,7 @@ class _OpencodeStream:
 
 Run:
 ```
-uv run --project /var/home/jeandet/Documents/prog/SciQLop pytest \
+uv run --isolated --no-project --with pytest --with "opencode-agent-sdk>=0.4.0" python -m pytest \
   sciqlop_opencode/sciqlop_opencode/tests/test_stream.py -v
 ```
 Expected: PASS (7 passed; `test_end_to_end_against_consumer_contract` runs because
@@ -419,7 +419,7 @@ def test_ask_streams_translated_blocks_and_flushes(monkeypatch):
 
 Run:
 ```
-uv run --project /var/home/jeandet/Documents/prog/SciQLop pytest \
+uv run --isolated --no-project --with pytest --with "opencode-agent-sdk>=0.4.0" python -m pytest \
   sciqlop_opencode/sciqlop_opencode/tests/test_ask_streaming.py -v
 ```
 Expected: FAIL — current `ask()` calls `self._decode_message` (which only handles
@@ -451,7 +451,7 @@ Then delete the entire `_decode_message` method (the old `def _decode_message(se
 
 Run:
 ```
-uv run --project /var/home/jeandet/Documents/prog/SciQLop pytest sciqlop_opencode -v
+uv run --isolated --no-project --with pytest --with "opencode-agent-sdk>=0.4.0" python -m pytest sciqlop_opencode -v
 ```
 Expected: PASS — `test_ask_streaming.py`, `test_stream.py`, and the existing
 `test_backend_hook.py` / `test_backend_models.py` / `test_plugin_metadata.py` /
