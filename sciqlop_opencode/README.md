@@ -1,3 +1,18 @@
 # sciqlop_opencode
 
 Opencode chat dock for SciQLop. Requires the `opencode` CLI (https://opencode.ai) and `opencode auth login` to be run once.
+
+## Limitations (opencode-agent-sdk 0.4.x, subprocess ACP)
+
+The opencode SDK exposes a narrower stream than the Claude backend, so some
+chat features are intentionally not implemented:
+
+- **Inline tool images / screenshots** — the subprocess stream carries no
+  tool-result image, so screenshots taken by tools are sent to the model but
+  not rendered in the chat.
+- **Thinking** is rendered inline as normal text — the SDK flattens it into the
+  same channel as the answer, so it cannot be shown as a separate dimmed block.
+- **Mid-turn interrupt**, **live model switching**, and **slash-command listing**
+  have no SDK surface; cancelling tears down the connection, model changes apply
+  on the next turn, and the slash-command list is empty.
+- **User-attached images** are not sent (text-only prompts).

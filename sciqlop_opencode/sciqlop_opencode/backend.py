@@ -319,9 +319,12 @@ class OpencodeBackend:
         async with self._lock:
             client = await self._ensure_client()
             await client.query(prompt)
+            stream = _OpencodeStream()
             async for message in client.receive_response():
-                for block in self._decode_message(message):
+                for block in stream.feed(message):
                     yield block
+            for block in stream.flush():
+                yield block
 
     async def reset(self) -> None:
         async with self._lock:
@@ -405,11 +408,3 @@ class OpencodeBackend:
             "permissionDecisionReason": "user approval" if allowed else "user denied",
         }
 
-    def _decode_message(self, message) -> List[StreamBlock]:
-        blocks: List[StreamBlock] = []
-        if AssistantMessage is not None and isinstance(message, AssistantMessage):
-            for block in getattr(message, "content", []) or []:
-                text = getattr(block, "text", None)
-                if text:
-                    blocks.append(TextBlock(text=text))
-        return blocks
