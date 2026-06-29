@@ -39,6 +39,7 @@ path="" to list providers, then drill down level by level using "//" as separato
 - Call sciqlop_api_reference BEFORE writing any Python code.
 - NEVER invent error messages or code; only report what tools returned.
 - If a tool returns an error, read the message and retry with corrected arguments.
+- To add a Python dependency, use the sciqlop_install_package tool — never run `pip install` (it is not recorded and is wiped when the venv is rebuilt).
 
 Be concise. Cite product names and time ranges verbatim.
 """

@@ -42,6 +42,12 @@ except Exception as e:  # pragma: no cover
     _SDK_IMPORT_ERROR = str(e)
 
 
+import logging as _logging  # DESYNC-PROBE (temporary instrumentation)
+from SciQLop.components.sciqlop_logging import getLogger as _getLogger  # DESYNC-PROBE
+_log = _getLogger("sciqlop_claude")  # DESYNC-PROBE
+_log.level = _logging.DEBUG  # DESYNC-PROBE: force-emit probe logs regardless of global level
+
+
 _MCP_SERVER_NAME = "sciqlop"
 
 _DEFAULT_MODEL_CHOICES: List[tuple[str, Optional[str]]] = [
@@ -132,6 +138,10 @@ SYSTEM_PROMPT = (
     "    all importable. Prefer this over asking the user to run code. "
     "    Always show the user the code you ran, and always consult "
     "    sciqlop_api_reference first if unsure about signatures.\n"
+    "  • sciqlop_install_package(packages) — install Python dependencies into "
+    "    the workspace venv and record them in the manifest so they persist. "
+    "    Use this to add libraries; never run `pip install` directly (it is not "
+    "    recorded and is wiped when the venv is rebuilt).\n"
     "  • sciqlop_create_notebook(path) / sciqlop_write_notebook_cell / "
     "    sciqlop_insert_notebook_cell / sciqlop_delete_notebook_cell — "
     "    edit notebooks on disk in the workspace directory. JupyterLab's "
@@ -215,9 +225,32 @@ class ClaudeBackend:
         async with self._lock:
             client = await self._ensure_client()
             await client.query(_build_user_stream(prompt, image_paths or []))
+            self._probe_seq = getattr(self, "_probe_seq", 0) + 1  # DESYNC-PROBE
+            _seq = self._probe_seq  # DESYNC-PROBE
+            _log.warning(  # DESYNC-PROBE
+                f"DESYNC-PROBE turn={_seq} START prompt={(prompt or '')[:80]!r}")
+            _consumed = 0  # DESYNC-PROBE
             async for message in client.receive_response():
+                _consumed += 1  # DESYNC-PROBE
+                _mtype = type(message).__name__  # DESYNC-PROBE
+                if _mtype == "ResultMessage":  # DESYNC-PROBE
+                    _log.warning(  # DESYNC-PROBE
+                        f"DESYNC-PROBE turn={_seq} msg#{_consumed} ResultMessage "
+                        f"subtype={getattr(message, 'subtype', None)!r} "
+                        f"is_error={getattr(message, 'is_error', None)!r} "
+                        f"num_turns={getattr(message, 'num_turns', None)!r} "
+                        f"session={getattr(message, 'session_id', None)!r} "
+                        f"-> receive_response() TERMINATES here")  # DESYNC-PROBE
+                else:  # DESYNC-PROBE
+                    _content = getattr(message, "content", None)  # DESYNC-PROBE
+                    _kinds = ([type(b).__name__ for b in _content]  # DESYNC-PROBE
+                              if isinstance(_content, list) else None)  # DESYNC-PROBE
+                    _log.warning(  # DESYNC-PROBE
+                        f"DESYNC-PROBE turn={_seq} msg#{_consumed} {_mtype} blocks={_kinds}")
                 for block in self._decode_message(message):
                     yield block
+            _log.warning(  # DESYNC-PROBE
+                f"DESYNC-PROBE turn={_seq} END consumed={_consumed}")
 
     async def reset(self) -> None:
         async with self._lock:
