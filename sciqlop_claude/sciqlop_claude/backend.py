@@ -50,6 +50,14 @@ _log.level = _logging.DEBUG  # DESYNC-PROBE: force-emit probe logs regardless of
 
 _MCP_SERVER_NAME = "sciqlop"
 
+# claude_agent_sdk's stdio transport caps each newline-delimited JSON message at
+# _DEFAULT_MAX_BUFFER_SIZE (1 MB). The CLI echoes tool results back over that
+# transport, so a sciqlop_screenshot_* result (an inline base64 PNG) overflows it
+# and aborts the session ("JSON message exceeded maximum buffer size"). Raise the
+# ceiling to comfortably hold a full-window screenshot — bounded, so a single
+# message can't grow without limit.
+_MAX_BUFFER_SIZE = 64 * 1024 * 1024  # 64 MB
+
 _DEFAULT_MODEL_CHOICES: List[tuple[str, Optional[str]]] = [
     ("Default (Claude Code)", None),
 ]
@@ -214,6 +222,7 @@ class ClaudeBackend:
             resume=self._resume,
             cwd=str(_sessions.current_workspace_dir()),
             setting_sources=["user", "project"],
+            max_buffer_size=_MAX_BUFFER_SIZE,
         )
         self._client = ClaudeSDKClient(options=options)
         await self._client.connect()
