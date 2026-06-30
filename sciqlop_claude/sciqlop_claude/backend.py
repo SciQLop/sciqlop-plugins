@@ -121,6 +121,11 @@ SYSTEM_PROMPT = (
     "    find real product paths before calling plot_product. Start with an "
     "    empty string to list top-level providers, then drill with e.g. "
     "    'speasy//amda//Parameters//MMS//MMS1'.\n"
+    "  • sciqlop_search_literature(query, source?, max_results?) / "
+    "sciqlop_fetch_paper(id_or_url) — search arXiv + NASA ADS for papers and "
+    "read an arXiv paper's full text. Use these to ground and cite claims.\n"
+    "  • WebSearch / WebFetch — general web search and page fetch when the "
+    "scholarly tools are not enough.\n"
     "  • sciqlop_speasy_inventory(path?) — browse the speasy inventory for "
     "    spz_uid values used by `speasy.get_data` directly. These paths are "
     "    NOT valid for plot_product — use sciqlop_products_tree instead "
@@ -228,6 +233,7 @@ class ClaudeBackend:
         sdk_tools = [_wrap_tool(t) for t in self._tools]
         server = create_sdk_mcp_server(name=_MCP_SERVER_NAME, tools=sdk_tools)
         allowed = [f"mcp__{_MCP_SERVER_NAME}__{t['name']}" for t in self._tools]
+        allowed += ["WebSearch", "WebFetch"]  # built-in web search + page fetch (ungated)
         options = ClaudeAgentOptions(
             system_prompt=SYSTEM_PROMPT,
             mcp_servers={_MCP_SERVER_NAME: server},
