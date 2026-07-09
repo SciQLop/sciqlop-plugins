@@ -458,13 +458,17 @@ def register_continuous_products(
     open_and_convert: Callable[[Path], Any],
     *,
     vp_factory: Optional[Callable[..., Any]] = None,
+    out_of_process: bool = True,
 ) -> Optional[ContinuousRegistration]:
     """Register one VP per `ContinuousSource`. Returns None when SciQLop's
     virtual-products API isn't importable (headless tests).
 
     `vp_factory` defaults to `sciqlop_radio.hints.make_rich_vp` so the VPs
     carry the same plot-hints overrides as the catalog. Tests can inject
-    a fake."""
+    a fake.
+
+    `out_of_process` defaults to True: each fetch+convert runs in SciQLop's
+    remote worker process instead of the GUI thread."""
     try:
         from SciQLop.user_api.virtual_products import VirtualProductType
     except ImportError as exc:
@@ -480,7 +484,7 @@ def register_continuous_products(
         cb = _build_callback(src, cache_dir, open_and_convert)
         try:
             vp = vp_factory(src.vp_path, cb, VirtualProductType.Spectrogram,
-                             metadata=src.static_meta)
+                             metadata=src.static_meta, out_of_process=out_of_process)
         except Exception as exc:  # noqa: BLE001
             log.exception("continuous: vp_factory failed for %s: %s",
                           src.vp_path, exc)

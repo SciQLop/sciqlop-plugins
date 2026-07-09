@@ -345,9 +345,13 @@ def register_lofar_product(
     cache_dir: Path,
     *,
     vp_factory: Optional[Callable[..., Any]] = None,
+    out_of_process: bool = True,
 ) -> Optional[LofarRegistration]:
     """Register the single LOFAR LBA virtual product. Returns None when
-    SciQLop's user_api isn't importable (headless tests)."""
+    SciQLop's user_api isn't importable (headless tests).
+
+    `out_of_process` defaults to True: the beam/SAP-parameterized fetch runs
+    in SciQLop's remote worker process instead of the GUI thread."""
     try:
         from SciQLop.user_api.virtual_products import VirtualProductType
     except ImportError as exc:
@@ -362,7 +366,7 @@ def register_lofar_product(
     try:
         vp = vp_factory(
             LOFAR_VP_PATH, cb, VirtualProductType.Spectrogram,
-            metadata=LOFAR_META,
+            metadata=LOFAR_META, out_of_process=out_of_process,
         )
     except Exception as exc:  # noqa: BLE001
         log.exception("lofar: vp_factory failed: %s", exc)

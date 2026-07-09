@@ -249,11 +249,12 @@ def test_register_lofar_product_passes_metadata_and_path(monkeypatch, tmp_path):
     )
     captured = {}
 
-    def vp_factory(path, cb, vptype, *, metadata, labels=None):
+    def vp_factory(path, cb, vptype, *, metadata, labels=None, out_of_process=False):
         captured["path"] = path
         captured["vptype"] = vptype
         captured["metadata"] = metadata
         captured["cb"] = cb
+        captured["out_of_process"] = out_of_process
         return "VP-OBJECT"
 
     reg = register_lofar_product(cache_dir=tmp_path, vp_factory=vp_factory)
@@ -263,6 +264,26 @@ def test_register_lofar_product_passes_metadata_and_path(monkeypatch, tmp_path):
     assert captured["vptype"] == "SPEC"
     assert captured["metadata"] is LOFAR_META
     assert callable(captured["cb"])
+    assert captured["out_of_process"] is True
+
+
+def test_register_lofar_product_out_of_process_can_be_overridden(monkeypatch, tmp_path):
+    import sys
+    from types import SimpleNamespace
+    fake_vp_module = SimpleNamespace(
+        VirtualProductType=SimpleNamespace(Spectrogram="SPEC"),
+    )
+    monkeypatch.setitem(sys.modules, "SciQLop.user_api.virtual_products", fake_vp_module)
+
+    from sciqlop_radio.lofar import register_lofar_product
+    captured = {}
+
+    def vp_factory(path, cb, vptype, *, metadata, labels=None, out_of_process=False):
+        captured["out_of_process"] = out_of_process
+        return "VP-OBJECT"
+
+    register_lofar_product(cache_dir=tmp_path, vp_factory=vp_factory, out_of_process=False)
+    assert captured["out_of_process"] is False
 
 
 def test_callback_signature_resolves_under_eval_str(tmp_path):

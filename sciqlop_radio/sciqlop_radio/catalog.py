@@ -145,6 +145,8 @@ def _register_entries(
     vp_factory: Callable[..., Any],
     vp_types,
     speasy_module,
+    *,
+    out_of_process: bool = True,
 ) -> CatalogRegistration:
     from .hints import extract_speasy_index_meta
 
@@ -169,7 +171,8 @@ def _register_entries(
         cb = _build_callback(e, speasy_module)
         path = f"radio/{e.path}"
         try:
-            vp = vp_factory(path, cb, vptype, metadata=meta, labels=e.labels)
+            vp = vp_factory(path, cb, vptype, metadata=meta, labels=e.labels,
+                             out_of_process=out_of_process)
         except Exception as exc:  # noqa: BLE001
             log.exception("catalog: vp_factory failed for %s: %s", path, exc)
             continue
@@ -180,12 +183,16 @@ def _register_entries(
 def register_catalog_products(
     catalog_path: Union[str, Path], *, speasy_module=None,
     vp_factory: Optional[Callable[..., Any]] = None,
+    out_of_process: bool = True,
 ) -> Optional[CatalogRegistration]:
     """Read the catalog and register one virtual product per resolvable entry.
 
     Returns an empty `CatalogRegistration` when the catalog is empty/missing,
     and `None` when SciQLop's virtual-products API isn't importable (headless
-    tests) — mirroring `continuous.register_continuous_products`."""
+    tests) — mirroring `continuous.register_continuous_products`.
+
+    `out_of_process` defaults to True: each `speasy.get_data` fetch runs in
+    SciQLop's remote worker process instead of the GUI thread."""
     entries = load_catalog(catalog_path)
     if not entries:
         return CatalogRegistration()
@@ -199,4 +206,5 @@ def register_catalog_products(
     if vp_factory is None:
         from .hints import make_rich_vp
         vp_factory = make_rich_vp
-    return _register_entries(entries, vp_factory, VirtualProductType, speasy_module)
+    return _register_entries(entries, vp_factory, VirtualProductType, speasy_module,
+                              out_of_process=out_of_process)

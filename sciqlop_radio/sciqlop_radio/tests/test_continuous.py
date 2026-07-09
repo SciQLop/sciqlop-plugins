@@ -115,8 +115,8 @@ def test_register_continuous_products_passes_static_meta_to_factory(tmp_path, mo
     from sciqlop_radio.continuous import register_continuous_products, CONTINUOUS_SOURCES
     captured = []
 
-    def vp_factory(path, cb, vptype, *, metadata, labels=None):
-        captured.append((path, vptype, metadata))
+    def vp_factory(path, cb, vptype, *, metadata, labels=None, out_of_process=False):
+        captured.append((path, vptype, metadata, out_of_process))
         return path
 
     out = register_continuous_products(
@@ -126,10 +126,35 @@ def test_register_continuous_products_passes_static_meta_to_factory(tmp_path, mo
     )
     assert out is not None
     assert len(captured) == len(CONTINUOUS_SOURCES)
-    for (path, vptype, metadata), src in zip(captured, CONTINUOUS_SOURCES):
+    for (path, vptype, metadata, out_of_process), src in zip(captured, CONTINUOUS_SOURCES):
         assert path == src.vp_path
         assert vptype == "SPEC"
         assert metadata is src.static_meta
+        assert out_of_process is True
+
+
+def test_register_continuous_products_out_of_process_can_be_overridden(tmp_path, monkeypatch):
+    import sys
+    from types import SimpleNamespace
+    fake_vp_module = SimpleNamespace(
+        VirtualProductType=SimpleNamespace(Spectrogram="SPEC"),
+    )
+    monkeypatch.setitem(sys.modules, "SciQLop.user_api.virtual_products", fake_vp_module)
+
+    from sciqlop_radio.continuous import register_continuous_products
+    captured = []
+
+    def vp_factory(path, cb, vptype, *, metadata, labels=None, out_of_process=False):
+        captured.append(out_of_process)
+        return path
+
+    register_continuous_products(
+        cache_dir=tmp_path,
+        open_and_convert=lambda p: None,
+        vp_factory=vp_factory,
+        out_of_process=False,
+    )
+    assert captured and all(v is False for v in captured)
 
 
 # ---------------------------------------------------------------------------
