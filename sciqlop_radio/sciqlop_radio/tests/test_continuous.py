@@ -221,6 +221,38 @@ def test_stream_callback_has_no_file_cap(monkeypatch, tmp_path, speasy_variable_
     assert out.values.shape[0] == 50 * 2  # all 50 files concatenated, not capped
 
 
+def test_stream_callback_emits_tracing_zones_and_points_counter(
+        monkeypatch, tmp_path, speasy_variable_factory):
+    from sciqlop_radio import continuous as C
+    from contextlib import contextmanager
+    zone_calls = []
+    counter_calls = []
+
+    @contextmanager
+    def fake_zone(name, cat="", **kwargs):
+        zone_calls.append(name)
+        yield
+
+    monkeypatch.setattr(C, "zone", fake_zone)
+    monkeypatch.setattr(C, "counter",
+                        lambda name, value, cat="": counter_calls.append((name, value, cat)))
+    v = speasy_variable_factory("2024-01-01T00:00:00", 2, 3)
+    rows = [{"Observatory": "BIR", "ID": "01", "url": "http://a/x.fit.gz"}]
+    monkeypatch.setattr(C, "_fido_search", lambda *a: [dict(r) for r in rows])
+    monkeypatch.setattr(C, "_fetch_paths", lambda rws, cd: [tmp_path / "x.fit.gz"])
+
+    out = C._build_callback(_ecallisto_source(), tmp_path, lambda p: v)(0.0, 100.0)
+
+    assert out is not None
+    for expected in ("sciqlop_radio.continuous.callback",
+                     "sciqlop_radio.continuous.search",
+                     "sciqlop_radio.continuous.fetch",
+                     "sciqlop_radio.continuous.parse"):
+        assert expected in zone_calls
+    points_calls = [c for c in counter_calls if c[0] == "sciqlop_radio.continuous.points"]
+    assert points_calls and points_calls[0][1] == out.values.size
+
+
 def test_stream_callback_returns_none_on_empty_window(monkeypatch, tmp_path):
     from sciqlop_radio import continuous as C
     monkeypatch.setattr(C, "_fido_search", lambda *a: [])

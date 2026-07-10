@@ -325,6 +325,53 @@ def test_callback_returns_none_when_index_empty(monkeypatch, tmp_path, written_i
     assert cb(t0, t1) is None
 
 
+def _make_speasy_variable():
+    from speasy.core.data_containers import DataContainer, VariableAxis, VariableTimeAxis
+    from speasy.products.variable import SpeasyVariable
+
+    time_axis = VariableTimeAxis(
+        values=np.array(["2024-05-14T16:30:00", "2024-05-14T16:30:01"], dtype="datetime64[ns]"))
+    freq_axis = VariableAxis(
+        values=np.array([10.0, 20.0, 30.0], dtype=np.float32),
+        meta={"FIELDNAM": "Frequency", "UNITS": "Hz"})
+    values = DataContainer(values=np.zeros((2, 3), dtype=np.float32), meta={})
+    return SpeasyVariable(axes=[time_axis, freq_axis], values=values)
+
+
+def test_callback_emits_tracing_zones_and_a_points_counter(monkeypatch, tmp_path, written_index):
+    from sciqlop_radio import lofar
+    zone_calls = []
+    counter_calls = []
+
+    from contextlib import contextmanager
+
+    @contextmanager
+    def fake_zone(name, cat="", **kwargs):
+        zone_calls.append((name, cat, kwargs))
+        yield
+
+    monkeypatch.setattr(lofar, "zone", fake_zone)
+    monkeypatch.setattr(lofar, "counter",
+                        lambda name, value, cat="": counter_calls.append((name, value, cat)))
+    monkeypatch.setattr(lofar, "_download_index", lambda cache_dir: written_index)
+    monkeypatch.setattr(lofar, "_read_lofar", lambda url: _make_speasy_variable())
+    lofar._load_index_cached.cache_clear()
+    lofar._entries_for.cache_clear()
+
+    cb = lofar._build_callback(tmp_path)
+    t0 = datetime(2024, 5, 14, 16, 0, tzinfo=timezone.utc).timestamp()
+    t1 = datetime(2024, 5, 14, 17, 0, tzinfo=timezone.utc).timestamp()
+    result = cb(t0, t1)
+
+    assert result is not None
+    zone_names = [c[0] for c in zone_calls]
+    assert "sciqlop_radio.lofar.callback" in zone_names
+    assert "sciqlop_radio.lofar.merge" in zone_names
+    assert counter_calls  # at least the points counter fired
+    points_calls = [c for c in counter_calls if c[0] == "sciqlop_radio.lofar.points"]
+    assert points_calls and points_calls[0][1] == result.values.size
+
+
 def test_callback_returns_none_when_read_returns_none(monkeypatch, tmp_path, written_index):
     """Every FITS-read returns None (parse failure / wrong shape) → callback
     short-circuits to None, doesn't try to merge an empty list."""
