@@ -232,16 +232,20 @@ class ClaudeBackend:
             return self._client
         sdk_tools = [_wrap_tool(t) for t in self._tools]
         server = create_sdk_mcp_server(name=_MCP_SERVER_NAME, tools=sdk_tools)
-        allowed = [f"mcp__{_MCP_SERVER_NAME}__{t['name']}" for t in self._tools]
+        permission_gate_active = bool(self._confirm_cb or self._ask_question_cb)
+        # allowed_tools auto-approves before can_use_tool is ever consulted, so
+        # gated tools must stay out of it whenever the gate is actually wired —
+        # otherwise _permission_check's write-action gate never runs for them.
+        allowed = [
+            f"mcp__{_MCP_SERVER_NAME}__{t['name']}" for t in self._tools
+            if not (permission_gate_active and t.get("gated"))
+        ]
         allowed += ["WebSearch", "WebFetch"]  # built-in web search + page fetch (ungated)
         options = ClaudeAgentOptions(
             system_prompt=SYSTEM_PROMPT,
             mcp_servers={_MCP_SERVER_NAME: server},
             allowed_tools=allowed,
-            can_use_tool=(
-                self._permission_check
-                if (self._confirm_cb or self._ask_question_cb) else None
-            ),
+            can_use_tool=self._permission_check if permission_gate_active else None,
             model=self._model,
             resume=self._resume,
             cwd=str(_sessions.current_workspace_dir()),
