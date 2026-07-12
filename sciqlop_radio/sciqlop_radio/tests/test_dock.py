@@ -299,6 +299,50 @@ def test_curated_source_fetched_files_use_streaming_vp(dock, qtbot, tmp_path, mo
     assert panel.plot.call_count == 1
 
 
+def test_ilofar_stream_reuses_preexisting_continuous_vp_by_path(qtbot, tmp_path, monkeypatch):
+    """ILOFAR has no per-station/channel stream rule, so its stream vp_path
+    ("radio/ilofar") collides with the whole-instrument VP that `continuous.py`
+    already registered (and passed in as `existing_vps`) at plugin load time.
+
+    That pre-registered entry is a raw EasyProvider (`RichEasySpectrogram`),
+    not a `SciQLop.user_api.virtual_products.VirtualProduct` — `panel.plot()`
+    only accepts a product path (str/list/VirtualProduct), a callable or a
+    SpeasyVariable, so plotting the raw provider object raises ValueError.
+    The dock must plot pre-existing entries by their path string instead."""
+    import types as _t
+    from sciqlop_radio.dock import RadioSpectraDock
+
+    class _NotAVirtualProduct:
+        """Stands in for the EasyProvider instance continuous.py registers —
+        not a str, not a list, not callable, not a VirtualProduct."""
+
+    svc = FakeFetchService()
+    w = RadioSpectraDock(main_window=None, fetch_service=svc,
+                         existing_vps={"radio/ilofar": _NotAVirtualProduct()})
+    qtbot.addWidget(w)
+
+    for i in range(w.source_combo.count()):
+        if w.source_combo.itemData(i).key == "ilofar":
+            w.source_combo.setCurrentIndex(i)
+            break
+    w.fetch_button.click()  # sets _current_source = ILOFAR
+
+    fn = "20250708_170038_bst_00X.dat"
+    p = tmp_path / fn
+    p.write_bytes(b"\x00")
+    w._pending_rows = [_erow(f"http://a/{fn}", "IE613")]
+    monkeypatch.setattr("sciqlop_radio.dock._open_and_convert",
+                        lambda path: _t.SimpleNamespace(name=path.name))
+    monkeypatch.setattr("sciqlop_radio.dock.frequency_signature", lambda v: ("ilofar",))
+    panel, vp_calls = _install_fake_user_api(monkeypatch)
+
+    svc.fetchCompleted.emit([p], [])
+    qtbot.wait(50)
+
+    assert vp_calls == [], "already-registered path must not be re-created"
+    panel.plot.assert_called_once_with("radio/ilofar")
+
+
 def test_local_file_uses_static_vp(dock, qtbot, tmp_path, monkeypatch):
     """Local files (no active source) produce a static VP with a file-stem path."""
     import types as _t

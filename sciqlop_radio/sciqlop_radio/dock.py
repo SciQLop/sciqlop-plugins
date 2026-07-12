@@ -143,7 +143,11 @@ class RadioSpectraDock(QWidget):
         self._cache_dir: Path = _cfg.cache_dir
         # VP refs alive guard: dock-created VPs + pre-registered from CONTINUOUS_SOURCES.
         # Keyed by vp_path so the dock reuses rather than double-registers an existing VP.
-        self._virtual_products: dict[str, object] = dict(existing_vps or {})
+        # `existing_vps` values are raw EasyProvider instances (continuous.py's own
+        # keep-alive refs, not `VirtualProduct`s) — plotting those directly would fail
+        # `panel.plot()`'s type check, so we track presence via the path string itself;
+        # its owner already keeps the real object alive.
+        self._virtual_products: dict[str, object] = {path: path for path in (existing_vps or {})}
         self._pending_rows: list = []
         self._current_source: RadioSource | None = None
         self._current_expect_spectrogram = True
