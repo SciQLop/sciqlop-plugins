@@ -174,8 +174,8 @@ def test_register_entries_registers_resolvable_skips_unresolvable():
     ]
     created = []
 
-    def vp_factory(path, cb, vptype, *, metadata, labels=None):
-        created.append((path, vptype, metadata, labels))
+    def vp_factory(path, cb, vptype, *, metadata, labels=None, out_of_process=False):
+        created.append((path, vptype, metadata, labels, out_of_process))
         return f"VP[{path}]"
 
     reg = _register_entries(entries, vp_factory, _fake_vp_types(), sp)
@@ -183,7 +183,22 @@ def test_register_entries_registers_resolvable_skips_unresolvable():
     assert created[0][1] == "SPEC"
     assert created[0][2]["speasy_id"] == "amda/ok"
     assert created[0][2]["UNITS"] == "dB"
+    assert created[0][4] is True
     assert reg.vps == {"radio/Wind/WAVES/RAD1": "VP[radio/Wind/WAVES/RAD1]"}
+
+
+def test_register_entries_out_of_process_default_can_be_overridden():
+    from sciqlop_radio.catalog import CuratedRadioProduct, _register_entries
+    sp = _fake_speasy({"amda": {"ok": _fake_index("ok", "amda")}})
+    entries = [CuratedRadioProduct(path="Wind/WAVES/RAD1", speasy_id="amda/ok")]
+    captured = []
+
+    def vp_factory(path, cb, vptype, *, metadata, labels=None, out_of_process=False):
+        captured.append(out_of_process)
+        return path
+
+    _register_entries(entries, vp_factory, _fake_vp_types(), sp, out_of_process=False)
+    assert captured == [False]
 
 
 def test_register_entries_passes_labels_for_non_spectrogram():
@@ -196,7 +211,7 @@ def test_register_entries_passes_labels_for_non_spectrogram():
     ]
     created = []
 
-    def vp_factory(path, cb, vptype, *, metadata, labels=None):
+    def vp_factory(path, cb, vptype, *, metadata, labels=None, out_of_process=False):
         created.append((path, vptype, metadata, labels))
         return path
 
@@ -218,7 +233,7 @@ def test_register_entries_continues_when_create_vp_raises():
         CuratedRadioProduct(path="Two", speasy_id="amda/b"),
     ]
 
-    def vp_factory(path, cb, vptype, *, metadata, labels=None):
+    def vp_factory(path, cb, vptype, *, metadata, labels=None, out_of_process=False):
         if path == "radio/One":
             raise RuntimeError("boom")
         return path
@@ -237,7 +252,7 @@ def test_register_entries_falls_back_to_minimal_meta_when_extraction_raises(capl
     entries = [CuratedRadioProduct(path="Bad/One", speasy_id="amda/bad")]
     created = []
 
-    def vp_factory(path, cb, vptype, *, metadata, labels=None):
+    def vp_factory(path, cb, vptype, *, metadata, labels=None, out_of_process=False):
         created.append((path, metadata))
         return path
 

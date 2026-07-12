@@ -272,6 +272,63 @@ def test_make_rich_vp_dispatches_to_multicomponent_with_labels():
 
 
 # ---------------------------------------------------------------------------
+# make_rich_vp forwards out_of_process to the RichEasy* constructor -
+# monkeypatched fakes so this runs without a real SciQLop install.
+# ---------------------------------------------------------------------------
+
+
+def _patch_rich_easy_classes(monkeypatch):
+    """Replace the four RichEasy* names in sciqlop_radio.hints with fakes
+    that record the kwargs they were constructed with."""
+    import sciqlop_radio.hints as hints_module
+    captured = {}
+
+    def _make_fake(name):
+        class _Fake:
+            def __init__(self, *args, **kwargs):
+                captured[name] = kwargs
+
+        return _Fake
+
+    for name in ("RichEasyScalar", "RichEasyVector",
+                 "RichEasyMultiComponent", "RichEasySpectrogram"):
+        monkeypatch.setattr(hints_module, name, _make_fake(name))
+    return captured
+
+
+def test_make_rich_vp_forwards_out_of_process_to_spectrogram(monkeypatch):
+    from sciqlop_radio.hints import make_rich_vp
+    types = _patched_vp_types(monkeypatch)
+    captured = _patch_rich_easy_classes(monkeypatch)
+    make_rich_vp("radio/x", _no_op_callback, types.Spectrogram,
+                  metadata={}, out_of_process=True)
+    assert captured["RichEasySpectrogram"]["out_of_process"] is True
+
+
+def test_make_rich_vp_defaults_out_of_process_to_false(monkeypatch):
+    from sciqlop_radio.hints import make_rich_vp
+    types = _patched_vp_types(monkeypatch)
+    captured = _patch_rich_easy_classes(monkeypatch)
+    make_rich_vp("radio/x", _no_op_callback, types.Spectrogram, metadata={})
+    assert captured["RichEasySpectrogram"]["out_of_process"] is False
+
+
+def test_make_rich_vp_forwards_out_of_process_to_scalar_vector_multicomponent(monkeypatch):
+    from sciqlop_radio.hints import make_rich_vp
+    types = _patched_vp_types(monkeypatch)
+    captured = _patch_rich_easy_classes(monkeypatch)
+    make_rich_vp("radio/x", _no_op_callback, types.Scalar,
+                  metadata={}, labels=["a"], out_of_process=True)
+    make_rich_vp("radio/x", _no_op_callback, types.Vector,
+                  metadata={}, labels=["x", "y", "z"], out_of_process=True)
+    make_rich_vp("radio/x", _no_op_callback, types.MultiComponent,
+                  metadata={}, labels=["a", "b"], out_of_process=True)
+    assert captured["RichEasyScalar"]["out_of_process"] is True
+    assert captured["RichEasyVector"]["out_of_process"] is True
+    assert captured["RichEasyMultiComponent"]["out_of_process"] is True
+
+
+# ---------------------------------------------------------------------------
 # make_rich_vp validation - pure-Python ValueError paths (no SciQLop needed)
 # ---------------------------------------------------------------------------
 

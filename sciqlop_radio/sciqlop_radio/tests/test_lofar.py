@@ -249,11 +249,12 @@ def test_register_lofar_product_passes_metadata_and_path(monkeypatch, tmp_path):
     )
     captured = {}
 
-    def vp_factory(path, cb, vptype, *, metadata, labels=None):
+    def vp_factory(path, cb, vptype, *, metadata, labels=None, out_of_process=False):
         captured["path"] = path
         captured["vptype"] = vptype
         captured["metadata"] = metadata
         captured["cb"] = cb
+        captured["out_of_process"] = out_of_process
         return "VP-OBJECT"
 
     reg = register_lofar_product(cache_dir=tmp_path, vp_factory=vp_factory)
@@ -263,6 +264,26 @@ def test_register_lofar_product_passes_metadata_and_path(monkeypatch, tmp_path):
     assert captured["vptype"] == "SPEC"
     assert captured["metadata"] is LOFAR_META
     assert callable(captured["cb"])
+    assert captured["out_of_process"] is True
+
+
+def test_register_lofar_product_out_of_process_can_be_overridden(monkeypatch, tmp_path):
+    import sys
+    from types import SimpleNamespace
+    fake_vp_module = SimpleNamespace(
+        VirtualProductType=SimpleNamespace(Spectrogram="SPEC"),
+    )
+    monkeypatch.setitem(sys.modules, "SciQLop.user_api.virtual_products", fake_vp_module)
+
+    from sciqlop_radio.lofar import register_lofar_product
+    captured = {}
+
+    def vp_factory(path, cb, vptype, *, metadata, labels=None, out_of_process=False):
+        captured["out_of_process"] = out_of_process
+        return "VP-OBJECT"
+
+    register_lofar_product(cache_dir=tmp_path, vp_factory=vp_factory, out_of_process=False)
+    assert captured["out_of_process"] is False
 
 
 def test_callback_signature_resolves_under_eval_str(tmp_path):
@@ -302,6 +323,53 @@ def test_callback_returns_none_when_index_empty(monkeypatch, tmp_path, written_i
     t0 = datetime(2030, 1, 1, tzinfo=timezone.utc).timestamp()
     t1 = datetime(2030, 1, 2, tzinfo=timezone.utc).timestamp()
     assert cb(t0, t1) is None
+
+
+def _make_speasy_variable():
+    from speasy.core.data_containers import DataContainer, VariableAxis, VariableTimeAxis
+    from speasy.products.variable import SpeasyVariable
+
+    time_axis = VariableTimeAxis(
+        values=np.array(["2024-05-14T16:30:00", "2024-05-14T16:30:01"], dtype="datetime64[ns]"))
+    freq_axis = VariableAxis(
+        values=np.array([10.0, 20.0, 30.0], dtype=np.float32),
+        meta={"FIELDNAM": "Frequency", "UNITS": "Hz"})
+    values = DataContainer(values=np.zeros((2, 3), dtype=np.float32), meta={})
+    return SpeasyVariable(axes=[time_axis, freq_axis], values=values)
+
+
+def test_callback_emits_tracing_zones_and_a_points_counter(monkeypatch, tmp_path, written_index):
+    from sciqlop_radio import lofar
+    zone_calls = []
+    counter_calls = []
+
+    from contextlib import contextmanager
+
+    @contextmanager
+    def fake_zone(name, cat="", **kwargs):
+        zone_calls.append((name, cat, kwargs))
+        yield
+
+    monkeypatch.setattr(lofar, "zone", fake_zone)
+    monkeypatch.setattr(lofar, "counter",
+                        lambda name, value, cat="": counter_calls.append((name, value, cat)))
+    monkeypatch.setattr(lofar, "_download_index", lambda cache_dir: written_index)
+    monkeypatch.setattr(lofar, "_read_lofar", lambda url: _make_speasy_variable())
+    lofar._load_index_cached.cache_clear()
+    lofar._entries_for.cache_clear()
+
+    cb = lofar._build_callback(tmp_path)
+    t0 = datetime(2024, 5, 14, 16, 0, tzinfo=timezone.utc).timestamp()
+    t1 = datetime(2024, 5, 14, 17, 0, tzinfo=timezone.utc).timestamp()
+    result = cb(t0, t1)
+
+    assert result is not None
+    zone_names = [c[0] for c in zone_calls]
+    assert "sciqlop_radio.lofar.callback" in zone_names
+    assert "sciqlop_radio.lofar.merge" in zone_names
+    assert counter_calls  # at least the points counter fired
+    points_calls = [c for c in counter_calls if c[0] == "sciqlop_radio.lofar.points"]
+    assert points_calls and points_calls[0][1] == result.values.size
 
 
 def test_callback_returns_none_when_read_returns_none(monkeypatch, tmp_path, written_index):

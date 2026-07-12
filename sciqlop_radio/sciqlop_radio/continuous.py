@@ -33,6 +33,7 @@ import numpy as np
 
 from .fetch import _row_field
 from .plot import frequency_signature
+from .tracing_compat import zone, counter
 
 log = logging.getLogger(__name__)
 
@@ -362,62 +363,68 @@ def _build_callback(
     """
 
     def _callback(start: float, stop: float):
-        t0 = datetime.fromtimestamp(start, tz=timezone.utc)
-        t1 = datetime.fromtimestamp(stop, tz=timezone.utc)
-        t_search = time.monotonic()
-        log.warning(  # WARNING so it shows up in SciQLop's log widget by default
-            "continuous(%s): callback fired for [%s .. %s]",
-            source.vp_path, t0.isoformat(), t1.isoformat(),
-        )
-        try:
-            rows = _search_rows_for_window(t0, t1, source, cache_dir)
-        except Exception as exc:  # noqa: BLE001
-            log.exception("continuous(%s): Fido.search failed: %s", source.vp_path, exc)
-            return None
-        log.warning(
-            "continuous(%s): Fido.search returned %d row(s) in %.1fs",
-            source.vp_path, len(rows), time.monotonic() - t_search,
-        )
-        rows = _filter_rows_for_stream(rows, source)
-        if not rows:
-            return None
-
-        t_fetch = time.monotonic()
-        paths = _fetch_paths(rows, cache_dir)
-        log.warning(
-            "continuous(%s): fetched %d/%d file(s) in %.1fs",
-            source.vp_path, len(paths), len(rows), time.monotonic() - t_fetch,
-        )
-
-        t_parse = time.monotonic()
-        variables = []
-        for p in paths:
-            try:
-                v = open_and_convert(p)
-            except Exception as exc:  # noqa: BLE001
-                log.warning("continuous(%s): parse failed for %s: %s",
-                            source.vp_path, p.name, exc)
-                continue
-            if v is not None:
-                variables.append(v)
-        log.warning(
-            "continuous(%s): parsed %d/%d file(s) in %.1fs",
-            source.vp_path, len(variables), len(paths), time.monotonic() - t_parse,
-        )
-
-        if source.freq_signature is not None:
-            variables = [v for v in variables
-                         if _frequency_signature_safe(v) == source.freq_signature]
-
-        out = _concat_spectrograms(variables)
-        if out is None:
-            log.warning("continuous(%s): no usable data after concat", source.vp_path)
-        else:
-            log.warning(
-                "continuous(%s): returning SpeasyVariable shape=%s",
-                source.vp_path, tuple(out.values.shape),
+        with zone("sciqlop_radio.continuous.callback", cat="sciqlop_radio",
+                 vp_path=source.vp_path):
+            t0 = datetime.fromtimestamp(start, tz=timezone.utc)
+            t1 = datetime.fromtimestamp(stop, tz=timezone.utc)
+            t_search = time.monotonic()
+            log.warning(  # WARNING so it shows up in SciQLop's log widget by default
+                "continuous(%s): callback fired for [%s .. %s]",
+                source.vp_path, t0.isoformat(), t1.isoformat(),
             )
-        return out
+            try:
+                with zone("sciqlop_radio.continuous.search", cat="sciqlop_radio"):
+                    rows = _search_rows_for_window(t0, t1, source, cache_dir)
+            except Exception as exc:  # noqa: BLE001
+                log.exception("continuous(%s): Fido.search failed: %s", source.vp_path, exc)
+                return None
+            log.warning(
+                "continuous(%s): Fido.search returned %d row(s) in %.1fs",
+                source.vp_path, len(rows), time.monotonic() - t_search,
+            )
+            rows = _filter_rows_for_stream(rows, source)
+            if not rows:
+                return None
+
+            t_fetch = time.monotonic()
+            with zone("sciqlop_radio.continuous.fetch", cat="sciqlop_radio", n_rows=len(rows)):
+                paths = _fetch_paths(rows, cache_dir)
+            log.warning(
+                "continuous(%s): fetched %d/%d file(s) in %.1fs",
+                source.vp_path, len(paths), len(rows), time.monotonic() - t_fetch,
+            )
+
+            t_parse = time.monotonic()
+            variables = []
+            with zone("sciqlop_radio.continuous.parse", cat="sciqlop_radio", n_files=len(paths)):
+                for p in paths:
+                    try:
+                        v = open_and_convert(p)
+                    except Exception as exc:  # noqa: BLE001
+                        log.warning("continuous(%s): parse failed for %s: %s",
+                                    source.vp_path, p.name, exc)
+                        continue
+                    if v is not None:
+                        variables.append(v)
+            log.warning(
+                "continuous(%s): parsed %d/%d file(s) in %.1fs",
+                source.vp_path, len(variables), len(paths), time.monotonic() - t_parse,
+            )
+
+            if source.freq_signature is not None:
+                variables = [v for v in variables
+                             if _frequency_signature_safe(v) == source.freq_signature]
+
+            out = _concat_spectrograms(variables)
+            if out is None:
+                log.warning("continuous(%s): no usable data after concat", source.vp_path)
+            else:
+                log.warning(
+                    "continuous(%s): returning SpeasyVariable shape=%s",
+                    source.vp_path, tuple(out.values.shape),
+                )
+                counter("sciqlop_radio.continuous.points", out.values.size, cat="sciqlop_radio")
+            return out
 
     return _callback
 
@@ -458,13 +465,17 @@ def register_continuous_products(
     open_and_convert: Callable[[Path], Any],
     *,
     vp_factory: Optional[Callable[..., Any]] = None,
+    out_of_process: bool = True,
 ) -> Optional[ContinuousRegistration]:
     """Register one VP per `ContinuousSource`. Returns None when SciQLop's
     virtual-products API isn't importable (headless tests).
 
     `vp_factory` defaults to `sciqlop_radio.hints.make_rich_vp` so the VPs
     carry the same plot-hints overrides as the catalog. Tests can inject
-    a fake."""
+    a fake.
+
+    `out_of_process` defaults to True: each fetch+convert runs in SciQLop's
+    remote worker process instead of the GUI thread."""
     try:
         from SciQLop.user_api.virtual_products import VirtualProductType
     except ImportError as exc:
@@ -480,7 +491,7 @@ def register_continuous_products(
         cb = _build_callback(src, cache_dir, open_and_convert)
         try:
             vp = vp_factory(src.vp_path, cb, VirtualProductType.Spectrogram,
-                             metadata=src.static_meta)
+                             metadata=src.static_meta, out_of_process=out_of_process)
         except Exception as exc:  # noqa: BLE001
             log.exception("continuous: vp_factory failed for %s: %s",
                           src.vp_path, exc)

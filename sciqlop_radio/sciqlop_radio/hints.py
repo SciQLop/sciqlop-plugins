@@ -17,10 +17,10 @@ The three public-ish exports:
   `plot_hints` and `plot_hints_from_variable` using SciQLop's
   ISTP translators (same logic as the bundled Speasy plugin).
 
-- `make_rich_vp(path, callback, vp_type, *, metadata, labels=None)
-  -> EasyProvider` - internal factory used by catalog.py and
-  continuous.py. Replaces the call site of user_api
-  `create_virtual_product` (which does not take metadata).
+- `make_rich_vp(path, callback, vp_type, *, metadata, labels=None,
+  out_of_process=False) -> EasyProvider` - internal factory used by
+  catalog.py, continuous.py and lofar.py. Replaces the call site of
+  user_api `create_virtual_product` (which does not take metadata).
 """
 from __future__ import annotations
 
@@ -191,31 +191,35 @@ class RichEasySpectrogram(_EasySpectrogram):
 
 
 def make_rich_vp(path: str, callback, vp_type, *, metadata: dict,
-                 labels: Optional[list[str]] = None):
+                 labels: Optional[list[str]] = None,
+                 out_of_process: bool = False):
     """Construct the right RichEasy* subclass for `vp_type` with the
     supplied metadata pre-populated on the underlying ProductsModelNode.
 
     `vp_type` is a member of `SciQLop.user_api.virtual_products.VirtualProductType`.
     `labels` is required for Scalar (1 label), Vector (3 labels), and
     MultiComponent (any non-empty list); ignored for Spectrogram.
+    `out_of_process` is forwarded to the underlying `EasyProvider` so the
+    callback runs in SciQLop's remote worker process instead of the GUI thread.
     """
     from SciQLop.user_api.virtual_products import VirtualProductType
 
     if vp_type == VirtualProductType.Spectrogram:
-        return RichEasySpectrogram(path, callback, metadata=metadata)
+        return RichEasySpectrogram(path, callback, metadata=metadata,
+                                    out_of_process=out_of_process)
     if vp_type == VirtualProductType.Scalar:
         if not labels:
             raise ValueError("Scalar requires labels=[<one_label>]")
         return RichEasyScalar(path, callback, component_name=labels[0],
-                               metadata=metadata)
+                               metadata=metadata, out_of_process=out_of_process)
     if vp_type == VirtualProductType.Vector:
         if not labels or len(labels) != 3:
             raise ValueError("Vector requires labels=[x, y, z]")
         return RichEasyVector(path, callback, components_names=labels,
-                               metadata=metadata)
+                               metadata=metadata, out_of_process=out_of_process)
     if vp_type == VirtualProductType.MultiComponent:
         if not labels:
             raise ValueError("MultiComponent requires non-empty labels")
         return RichEasyMultiComponent(path, callback, components_names=labels,
-                                       metadata=metadata)
+                                       metadata=metadata, out_of_process=out_of_process)
     raise ValueError(f"unknown VirtualProductType: {vp_type!r}")

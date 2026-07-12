@@ -32,6 +32,8 @@ from typing import Annotated, Any, Callable, Optional
 
 import numpy as np
 
+from .tracing_compat import zone, traced, counter
+
 log = logging.getLogger(__name__)
 
 
@@ -226,6 +228,7 @@ def _make_cached_read_lofar():
     return _cached
 
 
+@traced(cat="sciqlop_radio", capture=("url",))
 def _read_lofar_uncached(url: str):
     """Open a LOFAR FITS file by URL, parse, return a 2-D `SpeasyVariable` or None.
 
@@ -299,37 +302,41 @@ def _build_callback(cache_dir: Path) -> Callable[..., Any]:
     ):
         from speasy.products.variable import merge
 
-        t0 = datetime.fromtimestamp(start, tz=timezone.utc)
-        t1 = datetime.fromtimestamp(stop, tz=timezone.utc)
-        beam_tag = f"B{int(beam):03d}"
-        sap_tag = f"SAP00{int(sap)}"
-        try:
-            entries = _entries_in_range(cache_dir, t0, t1, beam_tag, sap_tag)
-        except Exception as exc:  # noqa: BLE001
-            log.exception("lofar: failed to read index: %s", exc)
-            return None
-        if not entries:
+        with zone("sciqlop_radio.lofar.callback", cat="sciqlop_radio", beam=int(beam), sap=int(sap)):
+            t0 = datetime.fromtimestamp(start, tz=timezone.utc)
+            t1 = datetime.fromtimestamp(stop, tz=timezone.utc)
+            beam_tag = f"B{int(beam):03d}"
+            sap_tag = f"SAP00{int(sap)}"
+            try:
+                entries = _entries_in_range(cache_dir, t0, t1, beam_tag, sap_tag)
+            except Exception as exc:  # noqa: BLE001
+                log.exception("lofar: failed to read index: %s", exc)
+                return None
+            if not entries:
+                log.debug(
+                    "lofar: no files cover [%s..%s] for %s/%s",
+                    t0.isoformat(), t1.isoformat(), beam_tag, sap_tag,
+                )
+                return None
             log.debug(
-                "lofar: no files cover [%s..%s] for %s/%s",
-                t0.isoformat(), t1.isoformat(), beam_tag, sap_tag,
+                "lofar: %d file(s) for [%s..%s] %s/%s",
+                len(entries), t0.isoformat(), t1.isoformat(), beam_tag, sap_tag,
             )
-            return None
-        log.debug(
-            "lofar: %d file(s) for [%s..%s] %s/%s",
-            len(entries), t0.isoformat(), t1.isoformat(), beam_tag, sap_tag,
-        )
-        variables = []
-        for entry in entries:
-            v = _read_lofar(_fits_url_for_entry(entry))
-            if v is not None:
-                variables.append(v)
-        if not variables:
-            return None
-        try:
-            return merge(variables)
-        except Exception as exc:  # noqa: BLE001
-            log.warning("lofar: merge failed (%d var(s)): %s", len(variables), exc)
-            return None
+            variables = []
+            for entry in entries:
+                v = _read_lofar(_fits_url_for_entry(entry))
+                if v is not None:
+                    variables.append(v)
+            if not variables:
+                return None
+            try:
+                with zone("sciqlop_radio.lofar.merge", cat="sciqlop_radio", n_files=len(variables)):
+                    result = merge(variables)
+            except Exception as exc:  # noqa: BLE001
+                log.warning("lofar: merge failed (%d var(s)): %s", len(variables), exc)
+                return None
+            counter("sciqlop_radio.lofar.points", result.values.size, cat="sciqlop_radio")
+            return result
 
     return lofar
 
@@ -345,9 +352,13 @@ def register_lofar_product(
     cache_dir: Path,
     *,
     vp_factory: Optional[Callable[..., Any]] = None,
+    out_of_process: bool = True,
 ) -> Optional[LofarRegistration]:
     """Register the single LOFAR LBA virtual product. Returns None when
-    SciQLop's user_api isn't importable (headless tests)."""
+    SciQLop's user_api isn't importable (headless tests).
+
+    `out_of_process` defaults to True: the beam/SAP-parameterized fetch runs
+    in SciQLop's remote worker process instead of the GUI thread."""
     try:
         from SciQLop.user_api.virtual_products import VirtualProductType
     except ImportError as exc:
@@ -362,7 +373,7 @@ def register_lofar_product(
     try:
         vp = vp_factory(
             LOFAR_VP_PATH, cb, VirtualProductType.Spectrogram,
-            metadata=LOFAR_META,
+            metadata=LOFAR_META, out_of_process=out_of_process,
         )
     except Exception as exc:  # noqa: BLE001
         log.exception("lofar: vp_factory failed: %s", exc)
