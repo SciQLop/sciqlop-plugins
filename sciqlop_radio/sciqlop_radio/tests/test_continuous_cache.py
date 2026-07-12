@@ -6,9 +6,19 @@ never hit under panning, so we quantize to whole UTC days — the same principle
 as Speasy's fragment cache — and store picklable row-dicts. A cached day is only
 trusted while its files are still on disk; otherwise we re-search live (we need
 real Fido rows to download).
+
+`_fido_search_day_cached` reads/writes the search cache via the raw
+`speasy.core.cache.get_item`/`add_item` primitives, which have no in-flight
+request deduplication (unlike Speasy's provider-grade `Cacheable`/
+`request_locker`). SciQLop's `QThreadPool`-based fetch dispatch can invoke the
+same continuous VP's callback from two worker threads concurrently (e.g. two
+plots showing the same source), so a per-key `threading.Lock` guards the
+live-search + cache-fill section directly in this module.
 """
 from __future__ import annotations
 
+import threading
+import time
 from datetime import datetime, timezone
 
 import pytest
@@ -72,6 +82,39 @@ def test_cache_hit_with_missing_files_refetches(monkeypatch, tmp_path):
     cb(0.0, 100.0)
     cb(0.0, 100.0)
     assert calls["n"] == 2, "missing cached files must force a fresh live search"
+
+
+def test_concurrent_calls_for_same_window_dedupe_the_live_search(monkeypatch, tmp_path):
+    """Two threads racing on the same (source, day) must not both hit the
+    network: the second must wait for the first's result instead of
+    re-running Fido.search (reproduces the 2026-07-10 diagnostic-dump race:
+    two SciQLop worker threads caught mid-`_fido_search` for the same day)."""
+    from sciqlop_radio import continuous as C
+
+    (tmp_path / "BIR_race_01.fit.gz").write_bytes(b"x")  # present → cache hit is valid
+    rows = [{"Observatory": "BIR", "ID": "01", "url": "http://a/BIR_race_01.fit.gz"}]
+    calls = {"n": 0}
+    calls_lock = threading.Lock()
+
+    def slow_live(t0, t1, src):
+        with calls_lock:
+            calls["n"] += 1
+        time.sleep(0.1)
+        return [dict(r) for r in rows]
+
+    monkeypatch.setattr(C, "_fido_search", slow_live)
+    source = _ecallisto_source(vp_path="radio/ecallisto/BIR/race",
+                               station="BIR", channel_value="01")
+    day = datetime(2024, 5, 1, tzinfo=timezone.utc)
+
+    threads = [threading.Thread(target=C._fido_search_day_cached, args=(day, source, tmp_path))
+               for _ in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=5)
+
+    assert calls["n"] == 1, f"concurrent requests for the same window must dedupe; live search ran {calls['n']}x"
 
 
 def test_day_search_covers_each_spanned_day_once(monkeypatch, tmp_path):

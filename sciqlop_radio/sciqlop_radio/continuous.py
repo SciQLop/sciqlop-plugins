@@ -23,6 +23,7 @@ registered at load time.
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -225,22 +226,42 @@ def _all_files_on_disk(rows: list, cache_dir: Path) -> bool:
     return all(_cache_path_for_row(r, cache_dir).exists() for r in rows)
 
 
+_search_locks: dict = {}
+_search_locks_guard = threading.Lock()
+
+
+def _search_lock_for(key: str) -> threading.Lock:
+    """One lock per cache key, so unrelated (source, day) searches never
+    block each other. SciQLop dispatches the continuous-VP callback on a
+    Qt-managed worker-thread pool, so the same key can be requested by two
+    threads at once (e.g. the same source shown on two plots) — Speasy's
+    disk cache has no in-flight dedup for the raw get/add primitives used
+    here, so we guard it ourselves rather than duplicate the live search."""
+    with _search_locks_guard:
+        return _search_locks.setdefault(key, threading.Lock())
+
+
 def _fido_search_day_cached(day: datetime, source: "ContinuousSource", cache_dir: Path) -> list:
     """Return the rows for one whole UTC day, hitting the disk-backed day cache.
 
     Cache HIT (and every cached file still on disk) → return the picklable
     row-dicts. Otherwise run the live search (`_fido_search`, which tests patch),
     refresh the cache, and return the real Fido rows so missing files can be
-    downloaded."""
+    downloaded. A per-key lock serializes concurrent misses on the same
+    (source, day) so only one thread ever hits the network."""
     from speasy.core.cache import add_item, get_item
 
     key = _search_cache_key(source, day)
     cached = get_item(key)
     if cached is not None and _all_files_on_disk(cached, cache_dir):
         return cached
-    rows = _fido_search(day, day + timedelta(days=1), source)
-    add_item(key, [_row_to_dict(r, source) for r in rows], _SEARCH_CACHE_TTL_S)
-    return rows
+    with _search_lock_for(key):
+        cached = get_item(key)
+        if cached is not None and _all_files_on_disk(cached, cache_dir):
+            return cached
+        rows = _fido_search(day, day + timedelta(days=1), source)
+        add_item(key, [_row_to_dict(r, source) for r in rows], _SEARCH_CACHE_TTL_S)
+        return rows
 
 
 def _rows_overlapping(rows: list, t0: datetime, t1: datetime) -> list:
