@@ -228,6 +228,49 @@ def test_ilofar_callback_never_fetches_both_polarisations(
     assert captured["rows"][0]["Polarisation"] == "X"
 
 
+def test_ilofar_stale_day_cache_without_polarisation_self_heals(
+        monkeypatch, tmp_path):
+    """Regression: the disk-backed day cache (`_fido_search_day_cached`) is
+    keyed only by (search_signature, day) — it has no schema-compatibility
+    check. Before the X/Y polarisation split, ILOFAR's ContinuousSource had
+    no `channel_column`, so `_row_to_dict` cached rows *without* a
+    "Polarisation" key under `sciqlop_radio/search/ILOFAR/<day>`. After the
+    split, that exact stale cache entry (confirmed on a real machine's disk
+    cache) still matches the new sources' cache key and their files are
+    already on disk from prior use, so the old cache-hit path returned it
+    unchanged — `_filter_rows_for_stream` then filtered out every row
+    (`Polarisation` field missing) and every I-LOFAR VP went permanently
+    empty. The day cache must detect a schema-incompatible hit and
+    re-search instead of trusting stale field-incomplete rows."""
+    from speasy.core.cache import add_item
+    from sciqlop_radio.continuous import CONTINUOUS_SOURCES, _search_cache_key
+    from sciqlop_radio import continuous as C
+    from datetime import datetime, timezone
+
+    x_source = next(s for s in CONTINUOUS_SOURCES if s.vp_path == "radio/ilofar/X")
+    day = datetime(2025, 7, 22, tzinfo=timezone.utc)
+    stale_row = {
+        "url": "https://data.lofar.ie/2025/07/22/bst/kbt/rcu357_1beam_datastream_fast/"
+               "20250722_140037_bst_00X.dat",
+        "Observatory": "",
+        "Start Time": "2025-07-22 14:00:37.000",
+    }
+    add_item(_search_cache_key(x_source, day), [stale_row], 3600)
+    (tmp_path / "20250722_140037_bst_00X.dat").write_bytes(b"\x00")
+
+    fresh_row = dict(stale_row, Polarisation="X")
+    monkeypatch.setattr(C, "_fido_search", lambda t0, t1, src: [dict(fresh_row)])
+
+    rows = C._search_rows_for_window(
+        datetime(2025, 7, 22, 14, 0, tzinfo=timezone.utc),
+        datetime(2025, 7, 22, 15, 0, tzinfo=timezone.utc),
+        x_source, tmp_path,
+    )
+    rows = C._filter_rows_for_stream(rows, x_source)
+    assert len(rows) == 1, "stale pre-split cache entry must not poison the filter"
+    assert rows[0]["Polarisation"] == "X"
+
+
 def test_stream_callback_drops_files_off_frequency_signature(
         monkeypatch, tmp_path, speasy_variable_factory):
     from sciqlop_radio import continuous as C

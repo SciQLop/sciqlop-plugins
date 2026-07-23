@@ -246,6 +246,19 @@ def _all_files_on_disk(rows: list, cache_dir: Path) -> bool:
     return all(_cache_path_for_row(r, cache_dir).exists() for r in rows)
 
 
+def _cache_entry_matches_schema(rows: list, source: "ContinuousSource") -> bool:
+    """A cached day's row-dicts only carry the columns their writer's
+    `source.channel_column` asked for (see `_row_to_dict`). If a source
+    later gains a `channel_column` it didn't have when an entry was
+    written (or shares a cache key with one that never set it), the old
+    dicts silently lack the field `_filter_rows_for_stream` needs — every
+    row then fails the filter and the product goes permanently empty
+    until the entry expires. Treat that mismatch as a cache miss."""
+    if not source.channel_column:
+        return True
+    return all(source.channel_column in row for row in rows)
+
+
 _search_locks: dict = {}
 _search_locks_guard = threading.Lock()
 
@@ -264,20 +277,25 @@ def _search_lock_for(key: str) -> threading.Lock:
 def _fido_search_day_cached(day: datetime, source: "ContinuousSource", cache_dir: Path) -> list:
     """Return the rows for one whole UTC day, hitting the disk-backed day cache.
 
-    Cache HIT (and every cached file still on disk) → return the picklable
+    Cache HIT (every cached file still on disk, and the cached rows carry
+    whatever column this source filters on) → return the picklable
     row-dicts. Otherwise run the live search (`_fido_search`, which tests patch),
     refresh the cache, and return the real Fido rows so missing files can be
     downloaded. A per-key lock serializes concurrent misses on the same
     (source, day) so only one thread ever hits the network."""
     from speasy.core.cache import add_item, get_item
 
+    def _usable(rows):
+        return (rows is not None and _all_files_on_disk(rows, cache_dir)
+                and _cache_entry_matches_schema(rows, source))
+
     key = _search_cache_key(source, day)
     cached = get_item(key)
-    if cached is not None and _all_files_on_disk(cached, cache_dir):
+    if _usable(cached):
         return cached
     with _search_lock_for(key):
         cached = get_item(key)
-        if cached is not None and _all_files_on_disk(cached, cache_dir):
+        if _usable(cached):
             return cached
         rows = _fido_search(day, day + timedelta(days=1), source)
         add_item(key, [_row_to_dict(r, source) for r in rows], _SEARCH_CACHE_TTL_S)
