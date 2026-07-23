@@ -300,9 +300,9 @@ def test_curated_source_fetched_files_use_streaming_vp(dock, qtbot, tmp_path, mo
 
 
 def test_ilofar_stream_reuses_preexisting_continuous_vp_by_path(qtbot, tmp_path, monkeypatch):
-    """ILOFAR has no per-station/channel stream rule, so its stream vp_path
-    ("radio/ilofar") collides with the whole-instrument VP that `continuous.py`
-    already registered (and passed in as `existing_vps`) at plugin load time.
+    """ILOFAR's per-polarisation stream vp_path ("radio/ilofar/X") collides
+    with the matching per-channel VP that `continuous.py` already registered
+    (and passed in as `existing_vps`) at plugin load time.
 
     That pre-registered entry is a raw EasyProvider (`RichEasySpectrogram`),
     not a `SciQLop.user_api.virtual_products.VirtualProduct` — `panel.plot()`
@@ -318,7 +318,7 @@ def test_ilofar_stream_reuses_preexisting_continuous_vp_by_path(qtbot, tmp_path,
 
     svc = FakeFetchService()
     w = RadioSpectraDock(main_window=None, fetch_service=svc,
-                         existing_vps={"radio/ilofar": _NotAVirtualProduct()})
+                         existing_vps={"radio/ilofar/X": _NotAVirtualProduct()})
     qtbot.addWidget(w)
 
     for i in range(w.source_combo.count()):
@@ -330,7 +330,8 @@ def test_ilofar_stream_reuses_preexisting_continuous_vp_by_path(qtbot, tmp_path,
     fn = "20250708_170038_bst_00X.dat"
     p = tmp_path / fn
     p.write_bytes(b"\x00")
-    w._pending_rows = [_erow(f"http://a/{fn}", "IE613")]
+    w._pending_rows = [FakeRow({"url": f"http://a/{fn}", "Observatory": "IE613",
+                                "Polarisation": "X"})]
     monkeypatch.setattr("sciqlop_radio.dock._open_and_convert",
                         lambda path: _t.SimpleNamespace(name=path.name))
     monkeypatch.setattr("sciqlop_radio.dock.frequency_signature", lambda v: ("ilofar",))
@@ -340,7 +341,46 @@ def test_ilofar_stream_reuses_preexisting_continuous_vp_by_path(qtbot, tmp_path,
     qtbot.wait(50)
 
     assert vp_calls == [], "already-registered path must not be re-created"
-    panel.plot.assert_called_once_with("radio/ilofar")
+    panel.plot.assert_called_once_with("radio/ilofar/X")
+
+
+def test_ilofar_x_and_y_polarisation_files_form_separate_streams(qtbot, tmp_path, monkeypatch):
+    """The bug this guards against: fetching both polarisation files for the
+    same I-LOFAR interval must produce two separate plots/streams (X, Y), not
+    one merged spectrogram splicing the two channels together."""
+    import types as _t
+    from sciqlop_radio.dock import RadioSpectraDock
+
+    svc = FakeFetchService()
+    w = RadioSpectraDock(main_window=None, fetch_service=svc)
+    qtbot.addWidget(w)
+
+    for i in range(w.source_combo.count()):
+        if w.source_combo.itemData(i).key == "ilofar":
+            w.source_combo.setCurrentIndex(i)
+            break
+    w.fetch_button.click()  # sets _current_source = ILOFAR
+
+    fn_x = "20250708_170038_bst_00X.dat"
+    fn_y = "20250708_170038_bst_00Y.dat"
+    px = tmp_path / fn_x
+    py = tmp_path / fn_y
+    px.write_bytes(b"\x00")
+    py.write_bytes(b"\x00")
+    w._pending_rows = [
+        FakeRow({"url": f"http://a/{fn_x}", "Observatory": "IE613", "Polarisation": "X"}),
+        FakeRow({"url": f"http://a/{fn_y}", "Observatory": "IE613", "Polarisation": "Y"}),
+    ]
+    monkeypatch.setattr("sciqlop_radio.dock._open_and_convert",
+                        lambda path: _t.SimpleNamespace(name=path.name))
+    monkeypatch.setattr("sciqlop_radio.dock.frequency_signature", lambda v: ("ilofar",))
+    panel, vp_calls = _install_fake_user_api(monkeypatch)
+
+    svc.fetchCompleted.emit([px, py], [])
+    qtbot.wait(50)
+
+    assert {call[0] for call in vp_calls} == {"radio/ilofar/X", "radio/ilofar/Y"}
+    assert panel.plot.call_count == 2
 
 
 def test_local_file_uses_static_vp(dock, qtbot, tmp_path, monkeypatch):

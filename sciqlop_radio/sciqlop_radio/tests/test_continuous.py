@@ -36,10 +36,23 @@ def speasy_variable_factory():
 def test_continuous_sources_registry_covers_known_channels():
     """PSP/RFS used to live here but is now served via the curated catalog
     (cda L3 PSD flux/SFU); only ground-based / mission-specific receivers
-    without a calibrated Speasy equivalent remain as continuous VPs."""
+    without a calibrated Speasy equivalent remain as continuous VPs. ILOFAR
+    ships two files per timestamp (X/Y linear polarisation) so it needs two
+    registry entries, not one whole-instrument entry."""
     from sciqlop_radio.continuous import CONTINUOUS_SOURCES
     paths = {s.vp_path for s in CONTINUOUS_SOURCES}
-    assert paths == {"radio/eovsa", "radio/ilofar"}
+    assert paths == {"radio/eovsa", "radio/ilofar/X", "radio/ilofar/Y"}
+
+
+def test_ilofar_continuous_sources_filter_by_polarisation():
+    """Each ILOFAR registry entry must scope to exactly one polarisation —
+    otherwise both channels get merged into the same product (the bug this
+    guards against: an X-pol image and a Y-pol image spliced together)."""
+    from sciqlop_radio.continuous import CONTINUOUS_SOURCES
+    ilofar_sources = {s.vp_path: s for s in CONTINUOUS_SOURCES
+                      if s.vp_path.startswith("radio/ilofar")}
+    assert {s.channel_value for s in ilofar_sources.values()} == {"X", "Y"}
+    assert all(s.channel_column == "Polarisation" for s in ilofar_sources.values())
 
 
 def test_concat_returns_single_variable_unchanged(speasy_variable_factory):
@@ -187,6 +200,32 @@ def test_stream_callback_filters_rows_by_station_and_channel(monkeypatch, tmp_pa
     assert len(captured["rows"]) == 1
     assert captured["rows"][0]["Observatory"] == "BIR"
     assert captured["rows"][0]["ID"] == "01"
+
+
+def test_ilofar_callback_never_fetches_both_polarisations(
+        monkeypatch, tmp_path, speasy_variable_factory):
+    """Real I-LOFAR mode 357 BST search results carry an X file and a Y file
+    for the same timestamp. The X-polarisation VP's callback must fetch only
+    the X row — fetching both and letting `_concat_spectrograms` merge them
+    (same frequency grid, so nothing else catches it) is exactly the bug
+    that spliced two channels into one spectrogram."""
+    from sciqlop_radio.continuous import CONTINUOUS_SOURCES
+    from sciqlop_radio import continuous as C
+    rows = [
+        {"Observatory": "IE613", "Polarisation": "X",
+         "url": "http://a/20250722_140037_bst_00X.dat"},
+        {"Observatory": "IE613", "Polarisation": "Y",
+         "url": "http://a/20250722_140037_bst_00Y.dat"},
+    ]
+    captured = {}
+    monkeypatch.setattr(C, "_fido_search", lambda t0, t1, src: [dict(r) for r in rows])
+    monkeypatch.setattr(C, "_fetch_paths",
+                        lambda rws, cd: (captured.__setitem__("rows", list(rws)) or []))
+    x_source = next(s for s in CONTINUOUS_SOURCES if s.vp_path == "radio/ilofar/X")
+    cb = C._build_callback(x_source, tmp_path, lambda p: None)
+    cb(0.0, 100.0)
+    assert len(captured["rows"]) == 1
+    assert captured["rows"][0]["Polarisation"] == "X"
 
 
 def test_stream_callback_drops_files_off_frequency_signature(

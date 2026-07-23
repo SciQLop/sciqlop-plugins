@@ -35,6 +35,11 @@ class StreamRule:
 STREAM_RULES: dict[str, StreamRule] = {
     "ecallisto": StreamRule(per_station=True, server_side=True, channel_column="ID"),
     "rstn": StreamRule(per_station=True, server_side=False, channel_column=None),
+    # Single station, but every timestamp ships two files — one per linear
+    # polarisation (see radiospectra's ILOFARMode357Client, "Polarisation"
+    # column, values X/Y). Without a channel rule both get folded into one
+    # stream, splicing two different channels' data together.
+    "ilofar": StreamRule(per_station=False, server_side=False, channel_column="Polarisation"),
 }
 
 _DEFAULT_RULE = StreamRule()

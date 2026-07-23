@@ -17,8 +17,9 @@ to a time window pays the network cost; cache hits are instant.
 Per-channel streams (one station + focus code, e.g. e-CALLISTO/RSTN) are built
 on demand by the dock via `make_stream_source`, which keys each stream by
 station + channel and filters the search results accordingly. The CONTINUOUS_SOURCES
-registry below holds only the whole-instrument single-grid sources (EOVSA, ILOFAR)
-registered at load time.
+registry below holds sources registered at load time: EOVSA (single-channel) and
+ILOFAR (pre-split into its two polarisation channels, X and Y — see streams.py's
+STREAM_RULES for why ILOFAR needs a channel filter at all).
 """
 from __future__ import annotations
 
@@ -79,7 +80,7 @@ class ContinuousSource:
     label: str
     attrs_factory: Callable[[], list]
     static_meta: dict = field(default_factory=dict)
-    # Per-channel stream filters (empty/None = whole-source, e.g. EOVSA/ILOFAR):
+    # Per-channel stream filters (empty/None = whole-source, e.g. EOVSA):
     station: str = ""                       # client-side Observatory-column filter
     channel_column: str | None = None       # Fido column for the channel token
     channel_value: str = ""                 # required value in channel_column
@@ -120,12 +121,15 @@ _EOVSA_META = {
     "provider": "radiospectra",
 }
 
-_ILOFAR_META = {
-    "DISPLAY_TYPE": "spectrogram",
-    "SCALETYP": "log",
-    "description": "ILOFAR mode 357 BST dynamic spectrum (10-240 MHz)",
-    "provider": "radiospectra",
-}
+
+def _ilofar_meta(pol: str) -> dict:
+    return {
+        "DISPLAY_TYPE": "spectrogram",
+        "SCALETYP": "log",
+        "description": f"ILOFAR mode 357 BST dynamic spectrum, {pol} polarisation (10-240 MHz)",
+        "provider": "radiospectra",
+    }
+
 
 CONTINUOUS_SOURCES: list[ContinuousSource] = [
     ContinuousSource(
@@ -135,11 +139,27 @@ CONTINUOUS_SOURCES: list[ContinuousSource] = [
         static_meta=_EOVSA_META,
         search_signature="EOVSA",
     ),
+    # I-LOFAR ships one file per polarisation (X/Y linear) for every
+    # timestamp — see radiospectra's ILOFARMode357Client "Polarisation"
+    # column. Two registry entries, one per channel, share a day's cached
+    # Fido search (same search_signature) but each's channel_column filter
+    # (below) keeps it from fetching the other's files.
     ContinuousSource(
-        vp_path="radio/ilofar",
-        label="ILOFAR (mode 357 BST)",
+        vp_path="radio/ilofar/X",
+        label="ILOFAR (mode 357 BST, X pol)",
         attrs_factory=_attrs_ilofar,
-        static_meta=_ILOFAR_META,
+        static_meta=_ilofar_meta("X"),
+        channel_column="Polarisation",
+        channel_value="X",
+        search_signature="ILOFAR",
+    ),
+    ContinuousSource(
+        vp_path="radio/ilofar/Y",
+        label="ILOFAR (mode 357 BST, Y pol)",
+        attrs_factory=_attrs_ilofar,
+        static_meta=_ilofar_meta("Y"),
+        channel_column="Polarisation",
+        channel_value="Y",
         search_signature="ILOFAR",
     ),
 ]

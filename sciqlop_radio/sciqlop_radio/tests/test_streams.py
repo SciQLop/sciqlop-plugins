@@ -39,14 +39,22 @@ def test_rstn_identity_is_per_station_no_channel():
     assert ident.vp_path == "radio/rstn/learmonth"
 
 
-def test_ilofar_identity_reuses_continuous_single_stream_path():
-    # ILOFAR is single-channel: no station/channel, so its path matches the
-    # load-time continuous VP (radio/ilofar) and gets reused, not duplicated.
-    row = FakeRow({"Observatory": "IE613", "ID": "00X"})
-    ident = stream_identity_for_row(row, _src("ilofar"))
-    assert ident.station == ""
-    assert ident.channel == ""
-    assert ident.vp_path == "radio/ilofar"
+def test_ilofar_identity_splits_by_polarisation():
+    # ILOFAR mode 357 BST ships one file per polarisation (X and Y linear,
+    # see ILOFARMode357Client) for every timestamp. Folding both into one
+    # stream concatenates two different channels' data into a single time
+    # series, producing a spectrogram with an X-pol/Y-pol seam at every file
+    # boundary. Each polarisation must get its own stream identity.
+    row_x = FakeRow({"Observatory": "IE613", "Polarisation": "X"})
+    row_y = FakeRow({"Observatory": "IE613", "Polarisation": "Y"})
+    ident_x = stream_identity_for_row(row_x, _src("ilofar"))
+    ident_y = stream_identity_for_row(row_y, _src("ilofar"))
+    assert ident_x.station == ""
+    assert ident_x.channel == "X"
+    assert ident_y.channel == "Y"
+    assert ident_x.vp_path != ident_y.vp_path
+    assert ident_x.vp_path == "radio/ilofar/X"
+    assert ident_y.vp_path == "radio/ilofar/Y"
 
 
 def test_station_with_space_is_sanitized():
