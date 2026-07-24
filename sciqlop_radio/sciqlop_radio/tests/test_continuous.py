@@ -271,6 +271,37 @@ def test_ilofar_stale_day_cache_without_polarisation_self_heals(
     assert rows[0]["Polarisation"] == "X"
 
 
+def test_filter_rows_for_stream_observatory_match_is_case_insensitive():
+    """Regression: e-CALLISTO's own client normalizes the "Observatory"
+    field to upper-case only when a search is scoped by Observatory(...) --
+    which every stream re-fetch is, via stream_fido_attrs's server-side
+    filter. An UNSCOPED search (what populates the dock's results table for
+    the initial drag) can return a DIFFERENT case for the exact same
+    station -- confirmed live: 'AUSTRIA-Krumbach' unscoped vs
+    'AUSTRIA-KRUMBACH' scoped. identity.station (source.station here) is
+    captured from that unscoped search, so a case-sensitive comparison
+    filtered out every re-fetched row for any station whose display name
+    wasn't already all-uppercase -- the stream's plot stayed permanently
+    empty no matter how long you waited or panned, with the worker
+    correctly (and silently, by design) reporting EMPTY every time."""
+    from sciqlop_radio.continuous import ContinuousSource, _filter_rows_for_stream
+
+    source = ContinuousSource(
+        vp_path="radio/ecallisto/AUSTRIA-Krumbach/10",
+        label="AUSTRIA-Krumbach",
+        attrs_factory=lambda: [],
+        station="AUSTRIA-Krumbach",
+        channel_column="ID",
+        channel_value="10",
+    )
+    rows = [{"Observatory": "AUSTRIA-KRUMBACH", "ID": "10",
+             "Start Time": "2025-07-24 07:00:00"}]
+
+    filtered = _filter_rows_for_stream(rows, source)
+
+    assert len(filtered) == 1, "Observatory comparison must be case-insensitive"
+
+
 def test_stream_callback_drops_files_off_frequency_signature(
         monkeypatch, tmp_path, speasy_variable_factory):
     from sciqlop_radio import continuous as C

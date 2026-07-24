@@ -43,12 +43,24 @@ log = logging.getLogger(__name__)
 def _filter_rows_for_stream(rows: list, source: "ContinuousSource") -> list:
     """Client-side station + channel filter. Server-side station filtering
     (radiospectra.net.Observatory) narrows eCALLISTO already; this guarantees
-    correctness for every instrument and never folds two channels together."""
+    correctness for every instrument and never folds two channels together.
+
+    Case-insensitive on purpose: eCALLISTO's own client normalizes the
+    "Observatory" field to upper-case only when a search is scoped by
+    Observatory(...) (as every stream re-fetch is) -- an unscoped search
+    (what populates the dock's results table for the initial drag, and
+    therefore what `source.station` is captured from) can return a
+    different case for the exact same station. A case-sensitive compare
+    here silently filtered out every re-fetched row for any station whose
+    display name wasn't already all-uppercase, leaving the stream
+    permanently empty."""
     if source.station:
-        rows = [r for r in rows if _row_field(r, "Observatory") == source.station]
+        target = source.station.upper()
+        rows = [r for r in rows if _row_field(r, "Observatory").upper() == target]
     if source.channel_column and source.channel_value:
+        target = source.channel_value.upper()
         rows = [r for r in rows
-                if _row_field(r, source.channel_column) == source.channel_value]
+                if _row_field(r, source.channel_column).upper() == target]
     return rows
 
 
