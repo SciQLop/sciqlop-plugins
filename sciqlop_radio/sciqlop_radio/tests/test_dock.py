@@ -166,6 +166,7 @@ def test_plot_selected_registers_virtual_product_and_plots_on_panel(dock, qtbot,
     fake_user_api_plot.create_plot_panel = lambda: (create_panel_calls.append(1) or panel)
     fake_user_api_vp = _types.ModuleType("SciQLop.user_api.virtual_products")
     fake_user_api_vp.create_virtual_product = lambda *a, **kw: (vp_calls.append((a, kw)) or fake_vp)
+    fake_user_api_vp.VirtualSpectrogram = MagicMock(name="VirtualSpectrogram")
 
     class _VPT:
         Spectrogram = "Spectrogram"
@@ -273,7 +274,13 @@ def test_advanced_unknown_instrument_has_no_source(dock):
 
 def test_curated_source_fetched_files_use_streaming_vp(dock, qtbot, tmp_path, monkeypatch):
     """A fetched eCALLISTO file registers a live stream keyed by station+focus,
-    at radio/ecallisto/<station>/<focus> — not a per-file static snapshot."""
+    at radio/ecallisto/<station>/<focus> — not a per-file static snapshot.
+
+    Live streams re-search/fetch/parse on every pan (continuous.py's
+    _build_callback), so unlike a static snapshot they must run via
+    VirtualSpectrogram(..., out_of_process=True) -- off SciQLop's own
+    process/GIL, in the remote worker -- not the bare create_virtual_product()
+    the static path uses (which has no out_of_process passthrough at all)."""
     import types as _t
     w, svc = dock
     for i in range(w.source_combo.count()):
@@ -289,13 +296,17 @@ def test_curated_source_fetched_files_use_streaming_vp(dock, qtbot, tmp_path, mo
     monkeypatch.setattr("sciqlop_radio.dock._open_and_convert",
                         lambda path: _t.SimpleNamespace(name=path.name))
     monkeypatch.setattr("sciqlop_radio.dock.frequency_signature", lambda v: ("ecal",))
-    panel, vp_calls = _install_fake_user_api(monkeypatch)
+    vs_calls = []
+    panel, vp_calls = _install_fake_user_api(monkeypatch, vs_calls=vs_calls)
 
     svc.fetchCompleted.emit([p], [])
     qtbot.wait(50)
 
-    assert len(vp_calls) == 1
-    assert vp_calls[0][0] == "radio/ecallisto/AUSTRALIA-ASSA/01"
+    assert vp_calls == [], "a live stream must not go through create_virtual_product"
+    assert len(vs_calls) == 1
+    args, kwargs = vs_calls[0]
+    assert args[0] == "radio/ecallisto/AUSTRALIA-ASSA/01"
+    assert kwargs.get("out_of_process") is True
     assert panel.plot.call_count == 1
 
 
@@ -374,12 +385,15 @@ def test_ilofar_x_and_y_polarisation_files_form_separate_streams(qtbot, tmp_path
     monkeypatch.setattr("sciqlop_radio.dock._open_and_convert",
                         lambda path: _t.SimpleNamespace(name=path.name))
     monkeypatch.setattr("sciqlop_radio.dock.frequency_signature", lambda v: ("ilofar",))
-    panel, vp_calls = _install_fake_user_api(monkeypatch)
+    vs_calls = []
+    panel, vp_calls = _install_fake_user_api(monkeypatch, vs_calls=vs_calls)
 
     svc.fetchCompleted.emit([px, py], [])
     qtbot.wait(50)
 
-    assert {call[0] for call in vp_calls} == {"radio/ilofar/X", "radio/ilofar/Y"}
+    assert vp_calls == [], "live streams must not go through create_virtual_product"
+    assert {call[0][0] for call in vs_calls} == {"radio/ilofar/X", "radio/ilofar/Y"}
+    assert all(call[1].get("out_of_process") is True for call in vs_calls)
     assert panel.plot.call_count == 2
 
 
@@ -411,15 +425,27 @@ def test_ilofar_dat_filename_is_supported():
     assert _is_supported_filename("20210901_080729_bst_00Y.dat")
 
 
-def _install_fake_user_api(monkeypatch):
-    """Fake SciQLop.user_api.{plot,virtual_products}; return (panel, vp_calls)."""
+def _install_fake_user_api(monkeypatch, vs_calls=None):
+    """Fake SciQLop.user_api.{plot,virtual_products}; return (panel, vp_calls).
+
+    `vs_calls`, if given a list, receives (args, kwargs) for each
+    VirtualSpectrogram(...) call -- the out_of_process=True path live
+    streams use instead of create_virtual_product()."""
     import sys, types as _t
+    if vs_calls is None:
+        vs_calls = []
     panel = MagicMock(name="panel")
     vp_calls = []
     fp = _t.ModuleType("SciQLop.user_api.plot")
     fp.create_plot_panel = lambda: panel
     fv = _t.ModuleType("SciQLop.user_api.virtual_products")
     fv.create_virtual_product = lambda *a, **k: (vp_calls.append(a) or MagicMock())
+
+    class _FakeVirtualSpectrogram:
+        def __init__(self, *a, **k):
+            vs_calls.append((a, k))
+
+    fv.VirtualSpectrogram = _FakeVirtualSpectrogram
 
     class _VPT:
         Spectrogram = "Spectrogram"
@@ -528,13 +554,16 @@ def test_ecallisto_focus_codes_stream_separately(dock, qtbot, tmp_path, monkeypa
     monkeypatch.setattr("sciqlop_radio.dock._open_and_convert",
                         lambda path: _t.SimpleNamespace(name=path.name))
     monkeypatch.setattr("sciqlop_radio.dock.frequency_signature", lambda v: (v.name,))
-    panel, vp_calls = _install_fake_user_api(monkeypatch)
+    vs_calls = []
+    panel, vp_calls = _install_fake_user_api(monkeypatch, vs_calls=vs_calls)
 
     svc.fetchCompleted.emit([p1, p2], [])
     qtbot.wait(50)
 
-    paths = sorted(c[0] for c in vp_calls)
+    assert vp_calls == [], "live streams must not go through create_virtual_product"
+    paths = sorted(c[0][0] for c in vs_calls)
     assert paths == ["radio/ecallisto/BIR/01", "radio/ecallisto/BIR/02"]
+    assert all(call[1].get("out_of_process") is True for call in vs_calls)
     assert panel.plot.call_count == 2
 
 
@@ -587,10 +616,13 @@ def test_ecallisto_same_station_focus_merge_into_one_stream(dock, qtbot, tmp_pat
     monkeypatch.setattr("sciqlop_radio.dock._open_and_convert",
                         lambda path: _t.SimpleNamespace(name=path.name))
     monkeypatch.setattr("sciqlop_radio.dock.frequency_signature", lambda v: ("ecal",))
-    panel, vp_calls = _install_fake_user_api(monkeypatch)
+    vs_calls = []
+    panel, vp_calls = _install_fake_user_api(monkeypatch, vs_calls=vs_calls)
 
     svc.fetchCompleted.emit([p1, p2], [])
     qtbot.wait(50)
 
-    assert [c[0] for c in vp_calls] == ["radio/ecallisto/BIR/01"]
+    assert vp_calls == [], "live streams must not go through create_virtual_product"
+    assert [c[0][0] for c in vs_calls] == ["radio/ecallisto/BIR/01"]
+    assert vs_calls[0][1].get("out_of_process") is True
     assert panel.plot.call_count == 1

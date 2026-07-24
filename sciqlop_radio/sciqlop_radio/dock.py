@@ -432,7 +432,7 @@ class RadioSpectraDock(QWidget):
             from SciQLop.core import TimeRange
             from SciQLop.user_api.plot import create_plot_panel
             from SciQLop.user_api.virtual_products import (
-                create_virtual_product, VirtualProductType,
+                create_virtual_product, VirtualProductType, VirtualSpectrogram,
             )
         except ImportError as exc:
             self._set_status(f"SciQLop user-API unavailable: {exc}")
@@ -449,13 +449,27 @@ class RadioSpectraDock(QWidget):
         for g in groups:
             if g.vp_path not in self._virtual_products:
                 try:
-                    # Bare create_virtual_product (no make_rich_vp/static_meta) on
-                    # purpose: matches the long-standing static dock path, and the
-                    # rich-hints provider path is deferred (it regressed plotting in
-                    # an earlier attempt). Hints come from the SpeasyVariable itself.
-                    vp = create_virtual_product(
-                        g.vp_path, g.callback, VirtualProductType.Spectrogram,
-                    )
+                    if g.out_of_process:
+                        # Live stream: re-searches/fetches/parses on every pan
+                        # (continuous.py's _build_callback). Run it in the remote
+                        # worker process, not on SciQLop's own GIL -- PySide6
+                        # isn't NO-GIL-friendly, so a slow in-process callback
+                        # contends with the GUI thread's own Python work.
+                        vp = VirtualSpectrogram(
+                            g.vp_path, g.callback, out_of_process=True,
+                        )
+                    else:
+                        # Bare create_virtual_product (no make_rich_vp/static_meta)
+                        # on purpose: matches the long-standing static dock path,
+                        # and the rich-hints provider path is deferred (it
+                        # regressed plotting in an earlier attempt). Hints come
+                        # from the SpeasyVariable itself. Already-parsed,
+                        # in-memory data with no further per-pan work, so staying
+                        # in-process (no out_of_process passthrough here anyway)
+                        # is correct, not just incidental.
+                        vp = create_virtual_product(
+                            g.vp_path, g.callback, VirtualProductType.Spectrogram,
+                        )
                     self._virtual_products[g.vp_path] = vp
                 except Exception as e:  # noqa: BLE001
                     errors.append((g.first_name,
@@ -522,7 +536,7 @@ class RadioSpectraDock(QWidget):
             callback = _build_callback(stream_src, self._cache_dir, _open_and_convert)
             return _PlotGroup(vp_path=identity.vp_path, callback=callback,
                               first_name=paths[0].name, n_files=len(paths),
-                              t0=t0, t1=t1)
+                              t0=t0, t1=t1, out_of_process=True)
         merged = (concat_variables_along_time(variables)
                   if len(variables) > 1 else variables[0])
         return _PlotGroup(vp_path=_group_vp_path(static_key, paths),
@@ -566,6 +580,12 @@ class _PlotGroup:
     n_files: int
     t0: float | None
     t1: float | None
+    # Live streams re-search/fetch/parse on every pan (continuous.py's
+    # _build_callback) -- that needs to run off SciQLop's own process/GIL, in
+    # the remote worker. Static snapshots are already-parsed, in-memory data
+    # with no further per-pan work, so out-of-process would just add pointless
+    # IPC overhead for them.
+    out_of_process: bool = False
 
 
 def _row_basename(row) -> str:
