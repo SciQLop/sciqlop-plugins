@@ -316,8 +316,17 @@ def _fido_search_day_cached(day: datetime, source: "ContinuousSource", cache_dir
 
 def _rows_overlapping(rows: list, t0: datetime, t1: datetime) -> list:
     """Trim a full-day row list to files overlapping [t0, t1]. A file's coverage
-    is approximated as [start, next_file_start); the last file extends to t1.
-    Rows without a parseable Start Time are always kept."""
+    is approximated as [start, next *distinct* start); the last one extends to
+    t1. Rows without a parseable Start Time are always kept.
+
+    Coverage runs to the next distinct start — not to the next row's start —
+    because this runs before `_filter_rows_for_stream`, on a row list that
+    still holds every channel of the instrument. I-LOFAR ships one file per
+    polarisation under the same Start Time, so pairing each row with its
+    immediate neighbour gave all but the last of each same-timestamp group a
+    zero-width coverage, dropping them for any window starting after that
+    timestamp: the X VP lost the file containing the window's start and its
+    spectrogram only began at the next file."""
     epoch0, epoch1 = t0.timestamp(), t1.timestamp()
     timed: list[tuple[float, Any]] = []
     keep: list = []
@@ -327,11 +336,11 @@ def _rows_overlapping(rows: list, t0: datetime, t1: datetime) -> list:
             keep.append(row)
         else:
             timed.append((start, row))
-    timed.sort(key=lambda x: x[0])
-    for i, (start, row) in enumerate(timed):
-        end = timed[i + 1][0] if i + 1 < len(timed) else epoch1
-        if start < epoch1 and end > epoch0:
-            keep.append(row)
+    starts = sorted({start for start, _ in timed})
+    ends = {start: (starts[i + 1] if i + 1 < len(starts) else epoch1)
+            for i, start in enumerate(starts)}
+    keep.extend(row for start, row in timed
+                if start < epoch1 and ends[start] > epoch0)
     return keep
 
 

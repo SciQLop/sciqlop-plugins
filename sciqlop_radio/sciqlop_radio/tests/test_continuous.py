@@ -228,6 +228,41 @@ def test_ilofar_callback_never_fetches_both_polarisations(
     assert captured["rows"][0]["Polarisation"] == "X"
 
 
+def _ilofar_day_rows(starts):
+    """One X row and one Y row per start time — exactly what
+    `ILOFARMode357Client` returns for a whole day."""
+    return [
+        {"Observatory": "IE613", "Polarisation": pol,
+         "Start Time": f"2025-07-26 {s}",
+         "url": f"http://a/20250726_{s.replace(':', '')}_bst_00{pol}.dat"}
+        for s in starts for pol in ("X", "Y")
+    ]
+
+
+@pytest.mark.parametrize("pol", ["X", "Y"])
+def test_window_trim_keeps_every_channel_of_the_file_containing_the_start(pol):
+    """Regression: `_rows_overlapping` approximates a file's coverage as
+    [its start, the *next row's* start) — but it runs on the day's whole,
+    still-unfiltered row list, and I-LOFAR ships one file per polarisation
+    under the *same* Start Time. Every row but the last of each same-timestamp
+    group therefore got a zero-width coverage and was dropped as soon as the
+    window started after it, so the X VP silently lost the file containing the
+    window's start and its colormap only began at the next file's timestamp.
+
+    Coverage must run to the next *distinct* start time, so both polarisations
+    of a timestamp live or die together."""
+    from sciqlop_radio.continuous import _rows_overlapping, _filter_rows_for_stream
+    from sciqlop_radio.continuous import CONTINUOUS_SOURCES
+
+    rows = _ilofar_day_rows(["12:00:37", "13:00:37", "14:00:37", "15:00:37"])
+    t0 = datetime(2025, 7, 26, 13, 8, 44, tzinfo=timezone.utc)
+    t1 = datetime(2025, 7, 26, 14, 8, 44, tzinfo=timezone.utc)
+    source = next(s for s in CONTINUOUS_SOURCES if s.vp_path == f"radio/ilofar/{pol}")
+
+    kept = _filter_rows_for_stream(_rows_overlapping(rows, t0, t1), source)
+    assert sorted(r["Start Time"][11:] for r in kept) == ["13:00:37", "14:00:37"]
+
+
 def test_ilofar_stale_day_cache_without_polarisation_self_heals(
         monkeypatch, tmp_path):
     """Regression: the disk-backed day cache (`_fido_search_day_cached`) is
