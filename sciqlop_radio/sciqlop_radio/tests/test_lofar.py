@@ -296,7 +296,9 @@ def test_callback_signature_resolves_under_eval_str(tmp_path):
     from sciqlop_radio.lofar import _build_callback
     cb = _build_callback(tmp_path)
     sig = inspect.signature(cb, eval_str=True)
-    assert {"start", "stop", "beam", "sap"} <= set(sig.parameters)
+    assert {"start", "stop", "beam", "sap",
+            "bg_mode", "bg_window_s", "bg_q"} <= set(sig.parameters)
+    assert [sig.parameters[n].annotation for n in ("start", "stop")] == [float, float]
 
 
 def test_lofar_meta_carries_plot_hints_essentials():
@@ -385,3 +387,37 @@ def test_callback_returns_none_when_read_returns_none(monkeypatch, tmp_path, wri
     t0 = datetime(2024, 5, 14, 16, 0, tzinfo=timezone.utc).timestamp()
     t1 = datetime(2024, 5, 14, 17, 0, tzinfo=timezone.utc).timestamp()
     assert cb(t0, t1) is None
+
+
+def test_lofar_callback_exposes_beam_sap_and_background_knobs(tmp_path):
+    """All five knobs must coexist — adding the background trio must not knock
+    out the Beam/SAP pair that was already there."""
+    knobs = pytest.importorskip("SciQLop.user_api.knobs")
+    from sciqlop_radio.lofar import _build_callback
+
+    specs = {s.name: s for s in knobs.extract_specs_from_callback(_build_callback(tmp_path))}
+    assert set(specs) == {"beam", "sap", "bg_mode", "bg_window_s", "bg_q"}
+    assert specs["beam"].default == 0
+    assert specs["bg_mode"].default == "off"
+
+
+def test_lofar_callback_applies_background_when_asked(monkeypatch, tmp_path):
+    from sciqlop_radio import lofar
+
+    from types import SimpleNamespace
+    sentinel = SimpleNamespace(values=np.zeros((4, 3)))
+    monkeypatch.setattr(lofar, "_entries_in_range",
+                        lambda cache_dir, t0, t1, beam, sap: [object()])
+    monkeypatch.setattr(lofar, "_fits_url_for_entry", lambda entry: "u")
+    monkeypatch.setattr(lofar, "_read_lofar", lambda url: sentinel)
+    monkeypatch.setattr("speasy.products.variable.merge", lambda variables: sentinel)
+    seen = {}
+
+    def _spy(variable, *, mode, window_s, q):
+        seen.update(mode=mode, window_s=window_s, q=q)
+        return variable
+
+    monkeypatch.setattr(lofar, "apply_background", _spy)
+    cb = lofar._build_callback(tmp_path)
+    cb(0.0, 100.0, bg_mode="ratio", bg_window_s=45.0, bg_q=5.0)
+    assert seen == {"mode": "ratio", "window_s": 45.0, "q": 5.0}

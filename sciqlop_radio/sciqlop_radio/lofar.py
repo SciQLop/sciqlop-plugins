@@ -33,6 +33,7 @@ from typing import Annotated, Any, Callable, Optional
 import numpy as np
 
 from .tracing_compat import zone, traced, counter
+from .background import BgMode, BgQ, BgWindow, apply_background
 
 log = logging.getLogger(__name__)
 
@@ -299,6 +300,9 @@ def _build_callback(cache_dir: Path) -> Callable[..., Any]:
         stop: float,
         beam: Annotated[int, Knob(min=0, max=216, step=1, label="Beam")] = 0,
         sap: Annotated[int, Knob(min=0, max=1, step=1, label="SAP")] = 0,
+        bg_mode: BgMode = 'off',
+        bg_window_s: BgWindow = 0.0,
+        bg_q: BgQ = 50.0,
     ):
         from speasy.products.variable import merge
 
@@ -335,6 +339,7 @@ def _build_callback(cache_dir: Path) -> Callable[..., Any]:
             except Exception as exc:  # noqa: BLE001
                 log.warning("lofar: merge failed (%d var(s)): %s", len(variables), exc)
                 return None
+            result = apply_background(result, mode=bg_mode, window_s=bg_window_s, q=bg_q)
             counter("sciqlop_radio.lofar.points", result.values.size, cat="sciqlop_radio")
             return result
 
