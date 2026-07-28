@@ -8,6 +8,7 @@ just chains pieces we test elsewhere).
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -442,4 +443,58 @@ def test_live_ecallisto_focus_code_filter_excludes_other_receivers(tmp_path):
     t0 = datetime(2011, 6, 7, 6, 0, tzinfo=timezone.utc).timestamp()
     t1 = datetime(2011, 6, 7, 7, 0, tzinfo=timezone.utc).timestamp()
     assert _ecallisto_stream_cb("01", tmp_path)(t0, t1) is None
+
+
+def _stub_continuous_pipeline(monkeypatch, variable):
+    """Short-circuit search/fetch/parse so the callback tests exercise only the
+    knob plumbing. Returns the ContinuousSource the callback is built for."""
+    from sciqlop_radio import continuous
+
+    monkeypatch.setattr(continuous, "_search_rows_for_window",
+                        lambda t0, t1, source, cache_dir: [{"url": "u"}])
+    monkeypatch.setattr(continuous, "_filter_rows_for_stream", lambda rows, source: rows)
+    monkeypatch.setattr(continuous, "_fetch_paths", lambda rows, cache_dir: [Path("f.fit")])
+    monkeypatch.setattr(continuous, "_concat_spectrograms", lambda variables: variable)
+    return continuous.CONTINUOUS_SOURCES[0]
+
+
+def test_continuous_callback_exposes_the_background_knobs(tmp_path):
+    """The knobs must reach SciQLop's introspection through the real callback,
+    not just through the probe module — this is what a user actually sees."""
+    knobs = pytest.importorskip("SciQLop.user_api.knobs")
+    from sciqlop_radio.continuous import CONTINUOUS_SOURCES, _build_callback
+
+    cb = _build_callback(CONTINUOUS_SOURCES[0], tmp_path, lambda p: None)
+    specs = {s.name: s for s in knobs.extract_specs_from_callback(cb)}
+    assert {"bg_mode", "bg_window_s", "bg_q"} <= set(specs)
+    assert specs["bg_mode"].default == "off"
+
+
+def test_continuous_callback_default_leaves_data_untouched(monkeypatch, tmp_path,
+                                                           speasy_variable_factory):
+    """Defaults must be bit-identical to the pre-knob behaviour."""
+    from sciqlop_radio.continuous import _build_callback
+
+    v = speasy_variable_factory("2024-01-01T00:00:00", 20, 3)
+    source = _stub_continuous_pipeline(monkeypatch, v)
+    cb = _build_callback(source, tmp_path, lambda p: v)
+    assert cb(0.0, 100.0) is v
+
+
+def test_continuous_callback_applies_background_when_asked(monkeypatch, tmp_path,
+                                                           speasy_variable_factory):
+    from sciqlop_radio.continuous import _build_callback
+
+    v = speasy_variable_factory("2024-01-01T00:00:00", 20, 3)
+    source = _stub_continuous_pipeline(monkeypatch, v)
+    seen = {}
+
+    def _spy(variable, *, mode, window_s, q):
+        seen.update(mode=mode, window_s=window_s, q=q)
+        return variable
+
+    monkeypatch.setattr("sciqlop_radio.continuous.apply_background", _spy)
+    cb = _build_callback(source, tmp_path, lambda p: v)
+    cb(0.0, 100.0, bg_mode="db", bg_window_s=30.0, bg_q=10.0)
+    assert seen == {"mode": "db", "window_s": 30.0, "q": 10.0}
 
