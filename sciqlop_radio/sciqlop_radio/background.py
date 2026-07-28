@@ -56,3 +56,40 @@ BgQ = Annotated[
          description="Percentile of the background estimator. 50 is the "
                      "median; 5-10 when bursts fill much of the view."),
 ]
+
+
+def apply_background(variable, *, mode: str = 'off',
+                     window_s: float = 0.0, q: float = 50.0):
+    """Remove a per-channel background from a spectrogram variable.
+
+    `mode` is 'off' (return the input untouched), 'diff', 'ratio' or 'db'.
+    `window_s` is the sliding-background duration in seconds; 0 estimates one
+    constant background per channel over the whole view. `q` is the estimator
+    percentile.
+
+    Never raises. A processing failure logs and returns the untransformed
+    variable, so a bad knob value degrades to an unprocessed plot rather than
+    a blank one.
+    """
+    if variable is None or mode == 'off':
+        return variable
+
+    if np.ndim(getattr(variable, 'values', None)) != 2:
+        log.warning("background: expected a 2-D spectrogram, got ndim=%s — skipping",
+                    np.ndim(getattr(variable, 'values', None)))
+        return variable
+
+    try:
+        from SciQLop.user_api import dsp
+        window = None if window_s <= 0.0 else np.timedelta64(int(window_s * 1e9), 'ns')
+        out = dsp.background_subtract(variable, q=q, window=window, mode=mode)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("background: mode=%s q=%s window_s=%s failed: %s — returning raw data",
+                    mode, q, window_s, exc)
+        return variable
+
+    # Every radio product declares SCALETYP 'log', which is wrong for all three
+    # modes: diff output goes negative and db is already logarithmic. hints.py's
+    # plot_hints_from_variable reads this back out of the returned variable.
+    out.meta['SCALETYP'] = 'linear'
+    return out
