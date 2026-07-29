@@ -62,11 +62,12 @@ def spectrogram():
     from speasy.core.data_containers import DataContainer, VariableAxis, VariableTimeAxis
     from speasy.products.variable import SpeasyVariable
 
-    def _make(n_time=200, n_freq=4, meta=None):
+    def _make(n_time=200, n_freq=4, meta=None, dtype=np.float64):
         t0 = np.datetime64("2024-01-01T00:00:00", "ns").astype("int64")
         times = (t0 + np.arange(n_time) * 1_000_000_000).astype("datetime64[ns]")
         baselines = 10.0 ** np.arange(n_freq)
-        data = np.tile(baselines, (n_time, 1)) * (1.0 + 0.01 * np.arange(n_time)[:, None])
+        data = (np.tile(baselines, (n_time, 1))
+                * (1.0 + 0.01 * np.arange(n_time)[:, None])).astype(dtype)
         return SpeasyVariable(
             axes=[VariableTimeAxis(values=times),
                   VariableAxis(name="frequency",
@@ -93,17 +94,21 @@ def test_none_passes_through():
 
 
 @pytest.mark.parametrize("mode,units", [("diff", "sfu"), ("ratio", ""), ("db", "dB")])
-def test_each_mode_preserves_axes_and_sets_meta(spectrogram, mode, units):
+@pytest.mark.parametrize("dtype", [np.float64, np.float32])
+def test_each_mode_preserves_axes_and_sets_meta(spectrogram, mode, units, dtype):
     """Shape, both axes and dtype survive; UNITS follows the mode; SCALETYP is
     forced to linear because 'log' is wrong for every mode (diff goes negative,
-    db is already logarithmic)."""
+    db is already logarithmic). dtype is parametrized because the real LOFAR
+    path produces float32 (lofar.py casts FITS values with .astype(np.float32));
+    a silent promotion to float64 would double the remote-transport payload."""
     pytest.importorskip("SciQLop.user_api.dsp")
     from sciqlop_radio.background import apply_background
-    v = spectrogram()
+    v = spectrogram(dtype=dtype)
     out = apply_background(v, mode=mode)
 
     assert out is not v
     assert out.values.shape == v.values.shape
+    assert out.values.dtype == dtype
     assert np.array_equal(out.time, v.time)
     assert np.array_equal(out.axes[1].values, v.axes[1].values)
     assert out.meta["UNITS"] == units
@@ -129,6 +134,11 @@ def test_window_seconds_selects_the_sliding_background(spectrogram):
     v = spectrogram()
     constant = np.abs(np.asarray(apply_background(v, mode="diff", window_s=0.0).values)).mean()
     sliding = np.abs(np.asarray(apply_background(v, mode="diff", window_s=20.0).values)).mean()
+    # Guards against a seconds->nanoseconds magnitude bug (e.g. 1e6 instead of
+    # 1e9): that would collapse a 20s window to a 1-sample background, making
+    # the sliding residual identically zero — which would still satisfy a bare
+    # `sliding < constant` check.
+    assert sliding > 0.0
     assert sliding < constant
 
 
@@ -144,7 +154,7 @@ def test_single_channel_spectrogram_survives_a_sliding_window(spectrogram):
 
 def test_dsp_failure_returns_raw_data_and_logs(spectrogram, monkeypatch, caplog):
     """A bad knob value must degrade to an unprocessed plot, never a blank one."""
-    import SciQLop.user_api.dsp as sciqlop_dsp
+    sciqlop_dsp = pytest.importorskip("SciQLop.user_api.dsp")
     from sciqlop_radio.background import apply_background
 
     def _boom(*args, **kwargs):
@@ -156,6 +166,27 @@ def test_dsp_failure_returns_raw_data_and_logs(spectrogram, monkeypatch, caplog)
         out = apply_background(v, mode="db", window_s=30.0)
     assert out is v
     assert "kernel exploded" in caplog.text
+
+
+def test_scaletyp_assignment_failure_still_returns_raw_data_and_logs(
+        spectrogram, monkeypatch, caplog):
+    """`out.meta['SCALETYP'] = 'linear'` runs after dsp.background_subtract
+    succeeds; if the returned object can't take that assignment (no `.meta`,
+    or a read-only one), the never-raise contract must still hold rather than
+    letting the AttributeError/TypeError escape."""
+    sciqlop_dsp = pytest.importorskip("SciQLop.user_api.dsp")
+    from sciqlop_radio.background import apply_background
+
+    class _NoMeta:
+        pass
+
+    monkeypatch.setattr(sciqlop_dsp, "background_subtract",
+                         lambda *a, **k: _NoMeta())
+    v = spectrogram()
+    with caplog.at_level("WARNING"):
+        out = apply_background(v, mode="db", window_s=30.0)
+    assert out is v
+    assert "background: mode=db" in caplog.text
 
 
 def test_non_2d_variable_is_returned_untouched(spectrogram, caplog):

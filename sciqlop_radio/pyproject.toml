@@ -8,7 +8,7 @@ version = "0.2.0"
 description = "Heliospheric radio dynamic-spectra browser for SciQLop (wraps sunpy.radiospectra)"
 requires-python = ">=3.12"
 dependencies = [
-    "SciQLop>=0.12.0,<0.14.0",
+    "SciQLop>=0.13.0.dev0,<0.14.0",
     # radiospectra >= 0.7.0 ships the sunpy.net.scraper.Scraper(format=...)
     # change (requires sunpy[net] >= 7.0, py >= 3.12) that we previously tracked
     # off a git commit. Now on PyPI, so pin the released version. radiospectra
