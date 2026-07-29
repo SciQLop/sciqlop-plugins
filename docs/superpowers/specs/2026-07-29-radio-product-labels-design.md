@@ -79,28 +79,44 @@ Breaking, and accepted: nobody depends on these paths yet.
 This brings the continuous and stream products in line with the catalog's existing
 `radio/PSP/…`, `radio/Wind/…`, `radio/STEREO-A/…` convention.
 
-### The invariant this must not break
+### One definition per product
 
 `StreamIdentity.vp_path` (`streams.py:64-70`) composes `"radio" / source_key [/ station]
-[/ channel]`, and `CONTINUOUS_SOURCES`' hardcoded `vp_path` values must **collide exactly** with
-what the dock computes for the same stream. That collision is load-bearing: the dock reuses the
-already-registered VP instead of registering a duplicate, which `test_dock.py:313`
-(`test_ilofar_stream_reuses_preexisting_continuous_vp_by_path`) pins.
+[/ channel]`, and `CONTINUOUS_SOURCES` hardcodes `vp_path="radio/ilofar/X"`. Those agree — and
+they agree because **they are the same product**. The vp_path is the product's identity: the
+pre-registered VP and the stream the dock derives from an I-LOFAR X row are one thing, which is
+why `dock.py` reuses the registered entry by path (`test_dock.py:313` pins this) rather than
+registering a second copy.
 
-Rename one side only and the failure is silent — duplicate products in the tree, or a stream that
-never finds its pre-registered VP.
+The defect is therefore not that the two might drift apart. It is that **one product is defined
+twice at all** — and the two definitions have *already* drifted:
 
-`source_key` is *not* the place to fix this: it is also the `STREAM_RULES` key (`rule_for()`), the
-day-cache search signature, and the dock's combo-box identity. Conflating presentation with that
-identity is what creates the trap.
+| | `CONTINUOUS_SOURCES` I-LOFAR | `make_stream_source` |
+|---|---|---|
+| `search_signature` | `"ILOFAR"` | `f"{instrument}\|{server_station}"` → `"ILOFAR\|"` |
 
-**Therefore:** `RadioSource` gains a `path_name: str = ""` field defaulting to `key`, and
-`StreamIdentity.vp_path` uses `path_name`. One table maps key → path segment; `CONTINUOUS_SOURCES`
-and the dock both derive from it rather than repeating a literal.
+Two day-cache keys for the same product's Fido search. It is currently masked: the dock builds a
+full `ContinuousSource` *and* a callback at `dock.py:535-539`, then plots by path and discards them
+when the path is already registered. Masked, not absent.
 
-A regression test asserts, for every entry in `CONTINUOUS_SOURCES` that corresponds to a stream
-rule, that the dock-computed `StreamIdentity.vp_path` equals the registered `vp_path`. That test is
-the point of Part A's structure — it converts a silent failure into a loud one.
+**Therefore:** derive the pre-registered I-LOFAR X/Y and EOVSA entries from the same
+`StreamIdentity` machinery the dock uses, so a radio product is described in exactly one place.
+`RadioSource` gains `path_name: str = ""` (defaulting to `key`) and `StreamIdentity.vp_path` uses
+it, so the path segment can be `I-LOFAR` while `source_key` stays `ilofar`.
+
+`source_key` must *not* absorb the presentation change: it is also the `STREAM_RULES` key
+(`rule_for()`), the day-cache search signature, and the dock's combo-box identity. Separating the
+path segment from the key is what keeps identity and presentation from being conflated again.
+
+Consequences worth stating plainly:
+
+- The rename becomes a single edit in one table rather than a rename on two sides.
+- The `search_signature` drift disappears instead of being preserved. This *changes the day-cache
+  key* for the pre-registered I-LOFAR products, so their first fetch after the change re-searches;
+  cached files on disk are unaffected.
+- A guard test asserting the registry and the dock agree on the path is still worth keeping, but as
+  a cheap consistency check — not as the safety net the previous draft made it, because after this
+  there is no second definition to disagree with.
 
 ## Display names
 
@@ -134,9 +150,12 @@ redundant. Plot unambiguity is worth more than tree brevity, and SciQLop has one
 **sciqlop_radio**
 - Each family registers the expected display name (existing tests already capture `vp_factory`
   kwargs with fakes).
-- The path-collision regression test described under Part A.
+- The registry and the dock agree on both `vp_path` **and** `search_signature` for every
+  pre-registered stream product — the second half is what the current code fails.
+- `test_ilofar_stream_reuses_preexisting_continuous_vp_by_path` still passes: reuse-by-path is the
+  behaviour being preserved, and it should not need changing beyond the new path spelling.
 - Existing tests referencing the old literals (`test_dock.py`, `test_continuous_cache.py`) update
-  to the new paths — they are asserting the invariant, not the spelling.
+  to the new paths — they assert the identity, not the spelling.
 
 Labels are only visible through the GUI, so the automated tests pin the wiring; one manual check
 that a panel reads `I-LOFAR X pol` rather than `X` is worth doing once.
