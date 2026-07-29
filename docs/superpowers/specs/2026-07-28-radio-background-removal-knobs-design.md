@@ -120,9 +120,18 @@ transform re-runs on every pan; that is the accepted cost of option (a).
 
 Both radio metadata dicts declare `SCALETYP: "log"`. That is wrong for every background mode:
 `diff` output contains negatives, and `db` is already logarithmic. `apply_background` therefore
-sets `SCALETYP='linear'` on the returned variable's meta whenever it transforms, which
-`hints.py`'s `plot_hints_from_variable` → `variable_as_istp_meta` → `istp_metadata_to_hints`
-picks up post-fetch.
+sets `SCALETYP='linear'` on the returned variable's meta whenever it transforms.
+
+**Corrected after implementation** (the original draft of this section overstated the effect):
+that override is read back by `hints.py`'s `plot_hints_from_variable` →
+`variable_as_istp_meta` → `istp_metadata_to_hints` **only on the in-process path**. Every radio
+VP registers with `out_of_process=True`, and
+`SciQLop/components/plotting/ui/time_sync_panel.py:666-676` returns on the `is_remote` branch
+without ever reaching `_post_plot`, so plot hints are never constructed for a remote graph;
+the remote protocol transports handles and layout metadata only, so `out.meta` never leaves the
+worker process. On the default remote path the override is therefore inert — harmless, because
+the remote z-axis is already linear by default. Keep the assignment: it is what makes
+`out_of_process=False` correct, and it is what the tests exercise.
 
 `background_subtract` already handles `UNITS` via its `meta_overrides` (`''` for ratio, `'dB'` for
 db, untouched for diff). Only the scale type is the plugin's business.

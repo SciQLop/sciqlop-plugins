@@ -35,6 +35,7 @@ import numpy as np
 
 from .fetch import _row_field
 from .plot import frequency_signature
+from .background import BgMode, BgQ, BgWindow, apply_background
 from .tracing_compat import zone, counter
 
 log = logging.getLogger(__name__)
@@ -442,7 +443,8 @@ def _build_callback(
     will invoke when the user pans/zooms over this product's time range.
     """
 
-    def _callback(start: float, stop: float):
+    def _callback(start: float, stop: float, bg_mode: BgMode = 'off',
+                  bg_window_s: BgWindow = 0.0, bg_q: BgQ = 50.0):
         with zone("sciqlop_radio.continuous.callback", cat="sciqlop_radio",
                  vp_path=source.vp_path):
             t0 = datetime.fromtimestamp(start, tz=timezone.utc)
@@ -496,6 +498,7 @@ def _build_callback(
                              if _frequency_signature_safe(v) == source.freq_signature]
 
             out = _concat_spectrograms(variables)
+            out = apply_background(out, mode=bg_mode, window_s=bg_window_s, q=bg_q)
             if out is None:
                 log.warning("continuous(%s): no usable data after concat", source.vp_path)
             else:
