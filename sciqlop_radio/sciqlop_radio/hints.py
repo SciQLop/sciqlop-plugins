@@ -192,7 +192,8 @@ class RichEasySpectrogram(_EasySpectrogram):
 
 def make_rich_vp(path: str, callback, vp_type, *, metadata: dict,
                  labels: Optional[list[str]] = None,
-                 out_of_process: bool = False):
+                 out_of_process: bool = False,
+                 display_name: Optional[str] = None):
     """Construct the right RichEasy* subclass for `vp_type` with the
     supplied metadata pre-populated on the underlying ProductsModelNode.
 
@@ -201,12 +202,18 @@ def make_rich_vp(path: str, callback, vp_type, *, metadata: dict,
     MultiComponent (any non-empty list); ignored for Spectrogram.
     `out_of_process` is forwarded to the underlying `EasyProvider` so the
     callback runs in SciQLop's remote worker process instead of the GUI thread.
+    `display_name` overrides the node's label; falls back to the path leaf
+    when empty/None. Only forwarded for Spectrogram: EasyScalar/EasyVector/
+    EasyMultiComponent's constructors don't accept it (SciQLop's Task 1 only
+    added the parameter to EasyProvider/EasySpectrogram), so it is silently
+    dropped for the other three types rather than raising.
     """
     from SciQLop.user_api.virtual_products import VirtualProductType
 
     if vp_type == VirtualProductType.Spectrogram:
         return RichEasySpectrogram(path, callback, metadata=metadata,
-                                    out_of_process=out_of_process)
+                                    out_of_process=out_of_process,
+                                    display_name=display_name)
     if vp_type == VirtualProductType.Scalar:
         if not labels:
             raise ValueError("Scalar requires labels=[<one_label>]")

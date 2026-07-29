@@ -69,6 +69,7 @@ LOFAR_META: dict[str, Any] = {
 }
 
 LOFAR_VP_PATH = "radio/LOFAR/LBA"
+LOFAR_DISPLAY_NAME = "LOFAR LBA"
 
 _index_download_lock = threading.Lock()
 
@@ -379,6 +380,7 @@ def register_lofar_product(
         vp = vp_factory(
             LOFAR_VP_PATH, cb, VirtualProductType.Spectrogram,
             metadata=LOFAR_META, out_of_process=out_of_process,
+            display_name=LOFAR_DISPLAY_NAME,
         )
     except Exception as exc:  # noqa: BLE001
         log.exception("lofar: vp_factory failed: %s", exc)

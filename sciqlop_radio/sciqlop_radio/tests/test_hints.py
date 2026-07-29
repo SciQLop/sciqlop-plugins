@@ -383,3 +383,28 @@ def test_make_rich_vp_unknown_type_raises(monkeypatch):
     with pytest.raises(ValueError, match="unknown VirtualProductType"):
         make_rich_vp("radio/x", _no_op_callback, _fake_vp_type("BogusType"),
                       metadata={})
+
+
+def test_make_rich_vp_forwards_display_name():
+    """make_rich_vp is the only registration path in this plugin, so the
+    display name has to survive it to reach the node."""
+    import sciqlop_radio.hints as hints
+
+    captured = {}
+
+    class _Spy:
+        def __init__(self, path, callback, **kwargs):
+            captured.update(path=path, **kwargs)
+
+    monkey = hints.RichEasySpectrogram
+    hints.RichEasySpectrogram = _Spy
+    try:
+        from SciQLop.user_api.virtual_products import VirtualProductType
+        hints.make_rich_vp("radio/I-LOFAR/X", lambda s, e: None,
+                           VirtualProductType.Spectrogram,
+                           metadata={"DISPLAY_TYPE": "spectrogram"},
+                           display_name="I-LOFAR X pol", out_of_process=True)
+    finally:
+        hints.RichEasySpectrogram = monkey
+
+    assert captured["display_name"] == "I-LOFAR X pol"

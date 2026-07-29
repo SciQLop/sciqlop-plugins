@@ -129,7 +129,8 @@ def test_register_continuous_products_passes_static_meta_to_factory(tmp_path, mo
     from sciqlop_radio.continuous import register_continuous_products, CONTINUOUS_SOURCES
     captured = []
 
-    def vp_factory(path, cb, vptype, *, metadata, labels=None, out_of_process=False):
+    def vp_factory(path, cb, vptype, *, metadata, labels=None, out_of_process=False,
+                   display_name=None):
         captured.append((path, vptype, metadata, out_of_process))
         return path
 
@@ -158,7 +159,8 @@ def test_register_continuous_products_out_of_process_can_be_overridden(tmp_path,
     from sciqlop_radio.continuous import register_continuous_products
     captured = []
 
-    def vp_factory(path, cb, vptype, *, metadata, labels=None, out_of_process=False):
+    def vp_factory(path, cb, vptype, *, metadata, labels=None, out_of_process=False,
+                   display_name=None):
         captured.append(out_of_process)
         return path
 
@@ -535,4 +537,22 @@ def test_ilofar_registry_entries_keep_their_static_meta():
         if s.vp_path.startswith("radio/I-LOFAR"):
             assert s.static_meta["DISPLAY_TYPE"] == "spectrogram"
             assert s.static_meta["SCALETYP"] == "log"
+
+
+def test_continuous_registration_passes_display_names(tmp_path):
+    from sciqlop_radio.continuous import register_continuous_products
+
+    seen = {}
+
+    def _vp_factory(path, cb, vptype, *, metadata, display_name=None, **kwargs):
+        seen[path] = display_name
+        return object()
+
+    register_continuous_products(tmp_path, lambda p: None,
+                                 vp_factory=_vp_factory, out_of_process=False)
+    assert seen == {
+        "radio/EOVSA": "EOVSA",
+        "radio/I-LOFAR/X": "I-LOFAR X pol",
+        "radio/I-LOFAR/Y": "I-LOFAR Y pol",
+    }
 

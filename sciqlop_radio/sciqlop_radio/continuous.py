@@ -149,15 +149,13 @@ def make_stream_source(identity, freq_signature) -> ContinuousSource:
     """Build a per-channel streaming source from a dock-fetched group's identity
     (`sciqlop_radio.streams.StreamIdentity`) and its reference frequency grid."""
     rule = rule_for(identity.source_key)
-    label = " ".join(p for p in (identity.instrument, identity.station,
-                                 identity.channel) if p)
     # The search scopes on instrument + (server-side Observatory only). Focus
     # code is a client-side filter, so streams differing only in focus code at
     # one station share a day's cached search.
     server_station = identity.station if rule.server_side else ""
     return ContinuousSource(
         vp_path=identity.vp_path,
-        label=label or identity.source_key,
+        label=identity.display_name,
         attrs_factory=lambda: stream_fido_attrs(identity),
         station=identity.station if rule.per_station else "",
         channel_column=rule.channel_column,
@@ -570,7 +568,8 @@ def register_continuous_products(
         cb = _build_callback(src, cache_dir, open_and_convert)
         try:
             vp = vp_factory(src.vp_path, cb, VirtualProductType.Spectrogram,
-                             metadata=src.static_meta, out_of_process=out_of_process)
+                             metadata=src.static_meta, out_of_process=out_of_process,
+                             display_name=src.label)
         except Exception as exc:  # noqa: BLE001
             log.exception("continuous: vp_factory failed for %s: %s",
                           src.vp_path, exc)

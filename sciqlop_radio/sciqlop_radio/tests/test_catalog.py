@@ -174,7 +174,8 @@ def test_register_entries_registers_resolvable_skips_unresolvable():
     ]
     created = []
 
-    def vp_factory(path, cb, vptype, *, metadata, labels=None, out_of_process=False):
+    def vp_factory(path, cb, vptype, *, metadata, labels=None, out_of_process=False,
+                   display_name=None):
         created.append((path, vptype, metadata, labels, out_of_process))
         return f"VP[{path}]"
 
@@ -193,7 +194,8 @@ def test_register_entries_out_of_process_default_can_be_overridden():
     entries = [CuratedRadioProduct(path="Wind/WAVES/RAD1", speasy_id="amda/ok")]
     captured = []
 
-    def vp_factory(path, cb, vptype, *, metadata, labels=None, out_of_process=False):
+    def vp_factory(path, cb, vptype, *, metadata, labels=None, out_of_process=False,
+                   display_name=None):
         captured.append(out_of_process)
         return path
 
@@ -211,7 +213,8 @@ def test_register_entries_passes_labels_for_non_spectrogram():
     ]
     created = []
 
-    def vp_factory(path, cb, vptype, *, metadata, labels=None, out_of_process=False):
+    def vp_factory(path, cb, vptype, *, metadata, labels=None, out_of_process=False,
+                   display_name=None):
         created.append((path, vptype, metadata, labels))
         return path
 
@@ -233,7 +236,8 @@ def test_register_entries_continues_when_create_vp_raises():
         CuratedRadioProduct(path="Two", speasy_id="amda/b"),
     ]
 
-    def vp_factory(path, cb, vptype, *, metadata, labels=None, out_of_process=False):
+    def vp_factory(path, cb, vptype, *, metadata, labels=None, out_of_process=False,
+                   display_name=None):
         if path == "radio/One":
             raise RuntimeError("boom")
         return path
@@ -252,7 +256,8 @@ def test_register_entries_falls_back_to_minimal_meta_when_extraction_raises(capl
     entries = [CuratedRadioProduct(path="Bad/One", speasy_id="amda/bad")]
     created = []
 
-    def vp_factory(path, cb, vptype, *, metadata, labels=None, out_of_process=False):
+    def vp_factory(path, cb, vptype, *, metadata, labels=None, out_of_process=False,
+                   display_name=None):
         created.append((path, metadata))
         return path
 
@@ -304,3 +309,39 @@ def test_shipped_catalog_loads_and_validates():
     cont = {s.vp_path for s in CONTINUOUS_SOURCES}
     paths = {f"radio/{e.path}" for e in validated}
     assert paths.isdisjoint(cont), f"catalog duplicates continuous VPs: {paths & cont}"
+
+
+def test_register_entries_passes_the_curated_label_as_display_name():
+    """The YAML `label:` was previously unused at registration — catalog.py
+    builds node metadata from `e.labels` (the *component* names), never
+    `e.label`, so the curated string never reached the product tree."""
+    from sciqlop_radio.catalog import CuratedRadioProduct, _register_entries
+    sp = _fake_speasy({"amda": {"ok": _fake_index("ok", "amda")}})
+    entries = [CuratedRadioProduct(path="Wind/WAVES/RAD1", speasy_id="amda/ok",
+                                   label="Wind/WAVES RAD1")]
+    captured = []
+
+    def vp_factory(path, cb, vptype, *, metadata, labels=None,
+                   out_of_process=False, display_name=None):
+        captured.append((path, display_name))
+        return f"VP[{path}]"
+
+    _register_entries(entries, vp_factory, _fake_vp_types(), sp)
+    assert captured == [("radio/Wind/WAVES/RAD1", "Wind/WAVES RAD1")]
+
+
+def test_register_entries_display_name_defaults_to_the_path():
+    """CuratedRadioProduct.__init__ already defaults `label` to `path` when the
+    YAML omits it, so a label-less entry still gets a usable display name."""
+    from sciqlop_radio.catalog import CuratedRadioProduct, _register_entries
+    sp = _fake_speasy({"amda": {"ok": _fake_index("ok", "amda")}})
+    entries = [CuratedRadioProduct(path="Wind/WAVES/RAD1", speasy_id="amda/ok")]
+    captured = []
+
+    def vp_factory(path, cb, vptype, *, metadata, labels=None,
+                   out_of_process=False, display_name=None):
+        captured.append(display_name)
+        return "VP"
+
+    _register_entries(entries, vp_factory, _fake_vp_types(), sp)
+    assert captured == ["Wind/WAVES/RAD1"]

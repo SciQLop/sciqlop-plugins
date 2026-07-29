@@ -249,7 +249,8 @@ def test_register_lofar_product_passes_metadata_and_path(monkeypatch, tmp_path):
     )
     captured = {}
 
-    def vp_factory(path, cb, vptype, *, metadata, labels=None, out_of_process=False):
+    def vp_factory(path, cb, vptype, *, metadata, labels=None, out_of_process=False,
+                   display_name=None):
         captured["path"] = path
         captured["vptype"] = vptype
         captured["metadata"] = metadata
@@ -278,7 +279,8 @@ def test_register_lofar_product_out_of_process_can_be_overridden(monkeypatch, tm
     from sciqlop_radio.lofar import register_lofar_product
     captured = {}
 
-    def vp_factory(path, cb, vptype, *, metadata, labels=None, out_of_process=False):
+    def vp_factory(path, cb, vptype, *, metadata, labels=None, out_of_process=False,
+                   display_name=None):
         captured["out_of_process"] = out_of_process
         return "VP-OBJECT"
 
@@ -421,3 +423,17 @@ def test_lofar_callback_applies_background_when_asked(monkeypatch, tmp_path):
     cb = lofar._build_callback(tmp_path)
     cb(0.0, 100.0, bg_mode="ratio", bg_window_s=45.0, bg_q=5.0)
     assert seen == {"mode": "ratio", "window_s": 45.0, "q": 5.0}
+
+
+def test_lofar_registration_passes_a_display_name(tmp_path):
+    from sciqlop_radio.lofar import register_lofar_product
+
+    seen = {}
+
+    def _vp_factory(path, cb, vptype, *, metadata, display_name=None, **kwargs):
+        seen[path] = display_name
+        return object()
+
+    register_lofar_product(cache_dir=tmp_path, vp_factory=_vp_factory,
+                           out_of_process=False)
+    assert seen == {"radio/LOFAR/LBA": "LOFAR LBA"}
