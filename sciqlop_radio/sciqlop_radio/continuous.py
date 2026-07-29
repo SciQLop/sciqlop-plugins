@@ -26,7 +26,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable, List, Optional
@@ -35,6 +35,7 @@ import numpy as np
 
 from .fetch import _row_field
 from .plot import frequency_signature
+from .streams import StreamIdentity, rule_for, stream_fido_attrs
 from .background import BgMode, BgQ, BgWindow, apply_background
 from .tracing_compat import zone, counter
 
@@ -144,9 +145,44 @@ def _ilofar_meta(pol: str) -> dict:
     }
 
 
+def make_stream_source(identity, freq_signature) -> ContinuousSource:
+    """Build a per-channel streaming source from a dock-fetched group's identity
+    (`sciqlop_radio.streams.StreamIdentity`) and its reference frequency grid."""
+    rule = rule_for(identity.source_key)
+    label = " ".join(p for p in (identity.instrument, identity.station,
+                                 identity.channel) if p)
+    # The search scopes on instrument + (server-side Observatory only). Focus
+    # code is a client-side filter, so streams differing only in focus code at
+    # one station share a day's cached search.
+    server_station = identity.station if rule.server_side else ""
+    return ContinuousSource(
+        vp_path=identity.vp_path,
+        label=label or identity.source_key,
+        attrs_factory=lambda: stream_fido_attrs(identity),
+        station=identity.station if rule.per_station else "",
+        channel_column=rule.channel_column,
+        channel_value=identity.channel,
+        freq_signature=freq_signature,
+        search_signature=f"{identity.instrument}|{server_station}",
+    )
+
+
+def _ilofar_source(pol: str) -> ContinuousSource:
+    """Derived from the same StreamIdentity the dock builds for an I-LOFAR row:
+    the registered VP and that stream are one product, so there is one
+    definition. Only the pre-fetch plot-hints metadata is added on top."""
+    return replace(
+        make_stream_source(
+            StreamIdentity(source_key="ilofar", instrument="ILOFAR",
+                           path_name="I-LOFAR", channel=pol),
+            freq_signature=None),
+        static_meta=_ilofar_meta(pol),
+    )
+
+
 CONTINUOUS_SOURCES: list[ContinuousSource] = [
     ContinuousSource(
-        vp_path="radio/eovsa",
+        vp_path="radio/EOVSA",
         label="EOVSA",
         attrs_factory=_attrs_eovsa,
         static_meta=_EOVSA_META,
@@ -157,24 +193,8 @@ CONTINUOUS_SOURCES: list[ContinuousSource] = [
     # column. Two registry entries, one per channel, share a day's cached
     # Fido search (same search_signature) but each's channel_column filter
     # (below) keeps it from fetching the other's files.
-    ContinuousSource(
-        vp_path="radio/ilofar/X",
-        label="ILOFAR (mode 357 BST, X pol)",
-        attrs_factory=_attrs_ilofar,
-        static_meta=_ilofar_meta("X"),
-        channel_column="Polarisation",
-        channel_value="X",
-        search_signature="ILOFAR",
-    ),
-    ContinuousSource(
-        vp_path="radio/ilofar/Y",
-        label="ILOFAR (mode 357 BST, Y pol)",
-        attrs_factory=_attrs_ilofar,
-        static_meta=_ilofar_meta("Y"),
-        channel_column="Polarisation",
-        channel_value="Y",
-        search_signature="ILOFAR",
-    ),
+    _ilofar_source("X"),
+    _ilofar_source("Y"),
 ]
 
 
@@ -510,30 +530,6 @@ def _build_callback(
             return out
 
     return _callback
-
-
-def make_stream_source(identity, freq_signature) -> ContinuousSource:
-    """Build a per-channel streaming source from a dock-fetched group's identity
-    (`sciqlop_radio.streams.StreamIdentity`) and its reference frequency grid."""
-    from .streams import rule_for, stream_fido_attrs
-
-    rule = rule_for(identity.source_key)
-    label = " ".join(p for p in (identity.instrument, identity.station,
-                                 identity.channel) if p)
-    # The search scopes on instrument + (server-side Observatory only). Focus
-    # code is a client-side filter, so streams differing only in focus code at
-    # one station share a day's cached search.
-    server_station = identity.station if rule.server_side else ""
-    return ContinuousSource(
-        vp_path=identity.vp_path,
-        label=label or identity.source_key,
-        attrs_factory=lambda: stream_fido_attrs(identity),
-        station=identity.station if rule.per_station else "",
-        channel_column=rule.channel_column,
-        channel_value=identity.channel,
-        freq_signature=freq_signature,
-        search_signature=f"{identity.instrument}|{server_station}",
-    )
 
 
 @dataclass

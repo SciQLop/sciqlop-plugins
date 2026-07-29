@@ -305,13 +305,13 @@ def test_curated_source_fetched_files_use_streaming_vp(dock, qtbot, tmp_path, mo
     assert vp_calls == [], "a live stream must not go through create_virtual_product"
     assert len(vs_calls) == 1
     args, kwargs = vs_calls[0]
-    assert args[0] == "radio/ecallisto/AUSTRALIA-ASSA/01"
+    assert args[0] == "radio/e-CALLISTO/AUSTRALIA-ASSA/01"
     assert kwargs.get("out_of_process") is True
     assert panel.plot.call_count == 1
 
 
 def test_ilofar_stream_reuses_preexisting_continuous_vp_by_path(qtbot, tmp_path, monkeypatch):
-    """ILOFAR's per-polarisation stream vp_path ("radio/ilofar/X") collides
+    """ILOFAR's per-polarisation stream vp_path ("radio/I-LOFAR/X") collides
     with the matching per-channel VP that `continuous.py` already registered
     (and passed in as `existing_vps`) at plugin load time.
 
@@ -329,7 +329,7 @@ def test_ilofar_stream_reuses_preexisting_continuous_vp_by_path(qtbot, tmp_path,
 
     svc = FakeFetchService()
     w = RadioSpectraDock(main_window=None, fetch_service=svc,
-                         existing_vps={"radio/ilofar/X": _NotAVirtualProduct()})
+                         existing_vps={"radio/I-LOFAR/X": _NotAVirtualProduct()})
     qtbot.addWidget(w)
 
     for i in range(w.source_combo.count()):
@@ -352,7 +352,7 @@ def test_ilofar_stream_reuses_preexisting_continuous_vp_by_path(qtbot, tmp_path,
     qtbot.wait(50)
 
     assert vp_calls == [], "already-registered path must not be re-created"
-    panel.plot.assert_called_once_with("radio/ilofar/X")
+    panel.plot.assert_called_once_with("radio/I-LOFAR/X")
 
 
 def test_ilofar_x_and_y_polarisation_files_form_separate_streams(qtbot, tmp_path, monkeypatch):
@@ -392,7 +392,7 @@ def test_ilofar_x_and_y_polarisation_files_form_separate_streams(qtbot, tmp_path
     qtbot.wait(50)
 
     assert vp_calls == [], "live streams must not go through create_virtual_product"
-    assert {call[0][0] for call in vs_calls} == {"radio/ilofar/X", "radio/ilofar/Y"}
+    assert {call[0][0] for call in vs_calls} == {"radio/I-LOFAR/X", "radio/I-LOFAR/Y"}
     assert all(call[1].get("out_of_process") is True for call in vs_calls)
     assert panel.plot.call_count == 2
 
@@ -562,7 +562,7 @@ def test_ecallisto_focus_codes_stream_separately(dock, qtbot, tmp_path, monkeypa
 
     assert vp_calls == [], "live streams must not go through create_virtual_product"
     paths = sorted(c[0][0] for c in vs_calls)
-    assert paths == ["radio/ecallisto/BIR/01", "radio/ecallisto/BIR/02"]
+    assert paths == ["radio/e-CALLISTO/BIR/01", "radio/e-CALLISTO/BIR/02"]
     assert all(call[1].get("out_of_process") is True for call in vs_calls)
     assert panel.plot.call_count == 2
 
@@ -623,6 +623,6 @@ def test_ecallisto_same_station_focus_merge_into_one_stream(dock, qtbot, tmp_pat
     qtbot.wait(50)
 
     assert vp_calls == [], "live streams must not go through create_virtual_product"
-    assert [c[0][0] for c in vs_calls] == ["radio/ecallisto/BIR/01"]
+    assert [c[0][0] for c in vs_calls] == ["radio/e-CALLISTO/BIR/01"]
     assert vs_calls[0][1].get("out_of_process") is True
     assert panel.plot.call_count == 1

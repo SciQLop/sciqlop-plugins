@@ -42,7 +42,7 @@ def test_continuous_sources_registry_covers_known_channels():
     registry entries, not one whole-instrument entry."""
     from sciqlop_radio.continuous import CONTINUOUS_SOURCES
     paths = {s.vp_path for s in CONTINUOUS_SOURCES}
-    assert paths == {"radio/eovsa", "radio/ilofar/X", "radio/ilofar/Y"}
+    assert paths == {"radio/EOVSA", "radio/I-LOFAR/X", "radio/I-LOFAR/Y"}
 
 
 def test_ilofar_continuous_sources_filter_by_polarisation():
@@ -51,7 +51,7 @@ def test_ilofar_continuous_sources_filter_by_polarisation():
     guards against: an X-pol image and a Y-pol image spliced together)."""
     from sciqlop_radio.continuous import CONTINUOUS_SOURCES
     ilofar_sources = {s.vp_path: s for s in CONTINUOUS_SOURCES
-                      if s.vp_path.startswith("radio/ilofar")}
+                      if s.vp_path.startswith("radio/I-LOFAR")}
     assert {s.channel_value for s in ilofar_sources.values()} == {"X", "Y"}
     assert all(s.channel_column == "Polarisation" for s in ilofar_sources.values())
 
@@ -222,7 +222,7 @@ def test_ilofar_callback_never_fetches_both_polarisations(
     monkeypatch.setattr(C, "_fido_search", lambda t0, t1, src: [dict(r) for r in rows])
     monkeypatch.setattr(C, "_fetch_paths",
                         lambda rws, cd: (captured.__setitem__("rows", list(rws)) or []))
-    x_source = next(s for s in CONTINUOUS_SOURCES if s.vp_path == "radio/ilofar/X")
+    x_source = next(s for s in CONTINUOUS_SOURCES if s.vp_path == "radio/I-LOFAR/X")
     cb = C._build_callback(x_source, tmp_path, lambda p: None)
     cb(0.0, 100.0)
     assert len(captured["rows"]) == 1
@@ -258,7 +258,7 @@ def test_window_trim_keeps_every_channel_of_the_file_containing_the_start(pol):
     rows = _ilofar_day_rows(["12:00:37", "13:00:37", "14:00:37", "15:00:37"])
     t0 = datetime(2025, 7, 26, 13, 8, 44, tzinfo=timezone.utc)
     t1 = datetime(2025, 7, 26, 14, 8, 44, tzinfo=timezone.utc)
-    source = next(s for s in CONTINUOUS_SOURCES if s.vp_path == f"radio/ilofar/{pol}")
+    source = next(s for s in CONTINUOUS_SOURCES if s.vp_path == f"radio/I-LOFAR/{pol}")
 
     kept = _filter_rows_for_stream(_rows_overlapping(rows, t0, t1), source)
     assert sorted(r["Start Time"][11:] for r in kept) == ["13:00:37", "14:00:37"]
@@ -283,7 +283,7 @@ def test_ilofar_stale_day_cache_without_polarisation_self_heals(
     from sciqlop_radio import continuous as C
     from datetime import datetime, timezone
 
-    x_source = next(s for s in CONTINUOUS_SOURCES if s.vp_path == "radio/ilofar/X")
+    x_source = next(s for s in CONTINUOUS_SOURCES if s.vp_path == "radio/I-LOFAR/X")
     day = datetime(2025, 7, 22, tzinfo=timezone.utc)
     stale_row = {
         "url": "https://data.lofar.ie/2025/07/22/bst/kbt/rcu357_1beam_datastream_fast/"
@@ -497,4 +497,42 @@ def test_continuous_callback_applies_background_when_asked(monkeypatch, tmp_path
     cb = _build_callback(source, tmp_path, lambda p: v)
     cb(0.0, 100.0, bg_mode="db", bg_window_s=30.0, bg_q=10.0)
     assert seen == {"mode": "db", "window_s": 30.0, "q": 10.0}
+
+
+def test_registered_paths_use_the_capitalised_path_names():
+    from sciqlop_radio.continuous import CONTINUOUS_SOURCES
+    paths = {s.vp_path for s in CONTINUOUS_SOURCES}
+    assert paths == {"radio/EOVSA", "radio/I-LOFAR/X", "radio/I-LOFAR/Y"}
+
+
+def test_ilofar_registry_entries_agree_with_the_dock_derived_stream():
+    """The registered VP and the stream the dock derives from an I-LOFAR row
+    are the SAME product — the vp_path is its identity, which is why the dock
+    reuses the registered entry instead of registering a second copy. They must
+    therefore agree on every field that identifies the product, not just the
+    path: search_signature used to be 'ILOFAR' here and 'ILOFAR|' there, giving
+    one product two day-cache keys."""
+    from sciqlop_radio.continuous import CONTINUOUS_SOURCES, make_stream_source
+    from sciqlop_radio.streams import StreamIdentity
+
+    registered = {s.vp_path: s for s in CONTINUOUS_SOURCES}
+    for pol in ("X", "Y"):
+        derived = make_stream_source(
+            StreamIdentity(source_key="ilofar", instrument="ILOFAR",
+                           path_name="I-LOFAR", channel=pol),
+            freq_signature=None)
+        entry = registered[f"radio/I-LOFAR/{pol}"]
+        assert entry.search_signature == derived.search_signature
+        assert entry.channel_column == derived.channel_column
+        assert entry.channel_value == derived.channel_value
+
+
+def test_ilofar_registry_entries_keep_their_static_meta():
+    """Deriving from StreamIdentity must not drop the plot-hints metadata the
+    product tree needs before the first fetch."""
+    from sciqlop_radio.continuous import CONTINUOUS_SOURCES
+    for s in CONTINUOUS_SOURCES:
+        if s.vp_path.startswith("radio/I-LOFAR"):
+            assert s.static_meta["DISPLAY_TYPE"] == "spectrogram"
+            assert s.static_meta["SCALETYP"] == "log"
 

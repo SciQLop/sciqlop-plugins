@@ -93,6 +93,7 @@ def stream_identity_for_row(row, source) -> StreamIdentity:
     return StreamIdentity(
         source_key=source.key,
         instrument=source.fido_instrument or "",
+        path_name=source.path_name,
         station=station,
         channel=channel,
     )

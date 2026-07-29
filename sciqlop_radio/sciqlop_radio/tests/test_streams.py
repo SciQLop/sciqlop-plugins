@@ -20,7 +20,7 @@ def test_ecallisto_identity_includes_station_and_focus_code():
     assert ident.station == "BIR"
     assert ident.channel == "01"
     assert ident.instrument == "eCALLISTO"
-    assert ident.vp_path == "radio/ecallisto/BIR/01"
+    assert ident.vp_path == "radio/e-CALLISTO/BIR/01"
 
 
 def test_ecallisto_focus_codes_get_distinct_paths():
@@ -36,7 +36,7 @@ def test_rstn_identity_is_per_station_no_channel():
     ident = stream_identity_for_row(row, _src("rstn"))
     assert ident.station == "learmonth"
     assert ident.channel == ""
-    assert ident.vp_path == "radio/rstn/learmonth"
+    assert ident.vp_path == "radio/RSTN/learmonth"
 
 
 def test_ilofar_identity_splits_by_polarisation():
@@ -53,21 +53,21 @@ def test_ilofar_identity_splits_by_polarisation():
     assert ident_x.channel == "X"
     assert ident_y.channel == "Y"
     assert ident_x.vp_path != ident_y.vp_path
-    assert ident_x.vp_path == "radio/ilofar/X"
-    assert ident_y.vp_path == "radio/ilofar/Y"
+    assert ident_x.vp_path == "radio/I-LOFAR/X"
+    assert ident_y.vp_path == "radio/I-LOFAR/Y"
 
 
 def test_station_with_space_is_sanitized():
     row = FakeRow({"Observatory": "Sagamore Hill"})
     ident = stream_identity_for_row(row, _src("rstn"))
-    assert ident.vp_path == "radio/rstn/Sagamore_Hill"
+    assert ident.vp_path == "radio/RSTN/Sagamore_Hill"
 
 
 def test_missing_columns_default_to_empty():
     row = FakeRow({})  # real rows can lack a column
     ident = stream_identity_for_row(row, _src("ecallisto"))
     assert ident.station == "" and ident.channel == ""
-    assert ident.vp_path == "radio/ecallisto"
+    assert ident.vp_path == "radio/e-CALLISTO"
 
 
 def test_ecallisto_attrs_include_server_side_observatory():
@@ -135,3 +135,14 @@ def test_display_name_is_self_contained():
     eovsa = StreamIdentity(source_key="eovsa", instrument="EOVSA",
                            path_name="EOVSA")
     assert eovsa.display_name == "EOVSA"
+
+
+def test_identity_from_row_carries_the_source_path_name():
+    """Regression: stream_identity_for_row used to drop RadioSource.path_name,
+    so the dock's derived path stayed lowercase while CONTINUOUS_SOURCES moved
+    — re-splitting the single definition of a product into two that no longer
+    collide, which is the whole defect this rename removes."""
+    row = FakeRow({"Observatory": "IE613", "Polarisation": "X"})
+    ident = stream_identity_for_row(row, _src("ilofar"))
+    assert ident.path_name == "I-LOFAR"
+    assert ident.vp_path == "radio/I-LOFAR/X"
