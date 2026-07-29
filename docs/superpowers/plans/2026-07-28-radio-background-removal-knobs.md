@@ -613,13 +613,14 @@ def test_lofar_callback_exposes_beam_sap_and_background_knobs(tmp_path):
 def test_lofar_callback_applies_background_when_asked(monkeypatch, tmp_path):
     from sciqlop_radio import lofar
 
-    sentinel = object()
+    from types import SimpleNamespace
+
+    sentinel = SimpleNamespace(values=np.zeros((4, 3)))
     monkeypatch.setattr(lofar, "_entries_in_range",
                         lambda cache_dir, t0, t1, beam, sap: [object()])
     monkeypatch.setattr(lofar, "_fits_url_for_entry", lambda entry: "u")
     monkeypatch.setattr(lofar, "_read_lofar", lambda url: sentinel)
     monkeypatch.setattr("speasy.products.variable.merge", lambda variables: sentinel)
-    monkeypatch.setattr(lofar, "counter", lambda *a, **k: None)
     seen = {}
 
     def _spy(variable, *, mode, window_s, q):
@@ -632,7 +633,7 @@ def test_lofar_callback_applies_background_when_asked(monkeypatch, tmp_path):
     assert seen == {"mode": "ratio", "window_s": 45.0, "q": 5.0}
 ```
 
-`counter()` is patched out because the sentinel has no `.values.size`; the existing `test_callback_emits_tracing_zones_and_a_points_counter` demonstrates the pattern this file already uses for that.
+The sentinel carries a real `values` array because the callback's tail evaluates `counter("sciqlop_radio.lofar.points", result.values.size, ...)`. Patching `counter` to a no-op does **not** help — Python evaluates call arguments before the callee runs, so a bare `object()` raises `AttributeError` regardless. Do not add a `None`/attribute guard to `lofar.py` to work around this: unlike `continuous.py`, whose `_concat_spectrograms` genuinely returns `None`, `lofar.py` has no such path (`merge` has returned non-`None` by that line, and `apply_background` only returns `None` for `None` input), so a guard there would be dead code that misleads the next reader.
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
@@ -744,12 +745,12 @@ from sciqlop_radio.background import apply_background
 v = spectrogram_to_speasy_variable(open_spectrogram(
     Path.home() / '.cache/sciqlop_radio/20250726_130037_bst_00X.dat'))
 raw = np.asarray(v.values)
-print('shape', raw.shape, 'raw per-channel spread', np.ptp(raw.mean(axis=0)))
+print('shape', raw.shape, 'raw per-channel std', np.asarray(raw.mean(axis=0)).std())
 
 for mode in ('diff', 'ratio', 'db'):
     out = apply_background(v, mode=mode)
     y = np.asarray(out.values)
-    print(mode, 'spread', float(np.ptp(np.nanmean(y, axis=0))),
+    print(mode, 'std', float(np.nanstd(np.nanmean(y, axis=0))),
           'finite', float(np.isfinite(y).mean()),
           'UNITS', out.meta['UNITS'], 'SCALETYP', out.meta['SCALETYP'])
 
@@ -759,7 +760,9 @@ print('sliding shape', sliding.values.shape,
 assert apply_background(v, mode='off') is v
 ```
 
-Expected: shape `(3565, 488)`; the raw per-channel spread is ~4.3e7 and the `db` spread collapses to well under 1; every mode stays finite; `UNITS`/`SCALETYP` match the table in Task 2; the sliding call returns the same shape. If `20250726_130037_bst_00X.dat` is missing, any other `~/.cache/sciqlop_radio/20250726_*_bst_00X.dat` file works.
+Expected: shape `(3565, 488)`; the raw per-channel **std** is ~4.3e7 and the `db` std collapses to ~0.31; every mode stays finite; `UNITS`/`SCALETYP` match the table in Task 2; the sliding call returns the same shape. If `20250726_130037_bst_00X.dat` is missing, any other `~/.cache/sciqlop_radio/20250726_*_bst_00X.dat` file works.
+
+Use **std**, not `np.ptp`. The earlier phase's 4.3e7 → 0.31 dB figures are standard deviations across channels; `ptp` on the same data reads 7.07e8 → 5.36, because max−min is dominated by a handful of permanently-hot RFI channels (worst: channel 29 at 4.1 dB). Both metrics describe a working transform, but only std is comparable to the recorded baseline — and the `ptp` outliers are exactly what the deferred RFI-flagging work targets.
 
 - [ ] **Step 3: Confirm the knobs render in the running app**
 
