@@ -29,6 +29,7 @@ class StreamRule:
     per_station: bool = False
     server_side: bool = False
     channel_column: str | None = None
+    channel_suffix: str = ""   # rendered after the channel token in display names
 
 
 # Keyed by RadioSource.key. Anything absent is single-channel (one stream).
@@ -39,7 +40,8 @@ STREAM_RULES: dict[str, StreamRule] = {
     # polarisation (see radiospectra's ILOFARMode357Client, "Polarisation"
     # column, values X/Y). Without a channel rule both get folded into one
     # stream, splicing two different channels' data together.
-    "ilofar": StreamRule(per_station=False, server_side=False, channel_column="Polarisation"),
+    "ilofar": StreamRule(per_station=False, server_side=False,
+                         channel_column="Polarisation", channel_suffix="pol"),
 }
 
 _DEFAULT_RULE = StreamRule()
@@ -59,15 +61,28 @@ class StreamIdentity:
     instrument: str       # sunpy a.Instrument value, e.g. "eCALLISTO"
     station: str = ""     # Observatory column value ("" = single-station)
     channel: str = ""     # channel token, e.g. focus code ("" = single-channel)
+    path_name: str = ""   # path/display segment; "" falls back to source_key
 
     @property
     def vp_path(self) -> str:
-        parts = ["radio", self.source_key]
+        parts = ["radio", self.path_name or self.source_key]
         if self.station:
             parts.append(_sanitize(self.station))
         if self.channel:
             parts.append(_sanitize(self.channel))
         return "/".join(parts)
+
+    @property
+    def display_name(self) -> str:
+        """Tree and plot label. Self-contained on purpose: one name serves
+        both, and a panel may stack several instruments."""
+        channel = self.channel
+        if channel:
+            suffix = rule_for(self.source_key).channel_suffix
+            if suffix:
+                channel = f"{channel} {suffix}"
+        parts = [self.path_name or self.source_key, self.station, channel]
+        return " ".join(p for p in parts if p)
 
 
 def stream_identity_for_row(row, source) -> StreamIdentity:

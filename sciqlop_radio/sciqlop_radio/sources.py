@@ -14,6 +14,15 @@ class RadioSource(BaseModel):
 
     key: str = Field(description="Stable identifier used in UI state and tests")
     label: str = Field(description="Human-readable name shown in the dropdown")
+    path_name: str = Field(
+        default="",
+        description=(
+            "Segment used under `radio/` in the product path, e.g. 'I-LOFAR'."
+            " Empty means fall back to `key`. Kept separate from `key` because"
+            " `key` is the identity (STREAM_RULES, search-cache signature, dock"
+            " combo box) and must not move when presentation changes."
+        ),
+    )
     fido_instrument: str | None = Field(
         default=None,
         description=(
@@ -69,6 +78,7 @@ SOURCES: list[RadioSource] = [
     RadioSource(
         key="ecallisto",
         label="e-CALLISTO (network)",
+        path_name="e-CALLISTO",
         fido_instrument="eCALLISTO",
         notes="Worldwide ground-based network; many stations with different frequency windows",
         example_range="2011-06-07",
@@ -76,6 +86,7 @@ SOURCES: list[RadioSource] = [
     RadioSource(
         key="eovsa",
         label="EOVSA (registration required)",
+        path_name="EOVSA",
         fido_instrument=None,
         accepts_local=True,
         unavailable_reason=(
@@ -88,6 +99,7 @@ SOURCES: list[RadioSource] = [
     RadioSource(
         key="ilofar",
         label="I-LOFAR (mode 357 BST)",
+        path_name="I-LOFAR",
         fido_instrument="ILOFAR",
         notes="Irish LOFAR station, beam-formed mode 357; sparse campaign-day coverage",
         example_range="2021-09-07",
@@ -95,6 +107,7 @@ SOURCES: list[RadioSource] = [
     RadioSource(
         key="rstn",
         label="RSTN",
+        path_name="RSTN",
         fido_instrument="RSTN",
         notes="Radio Solar Telescope Network (USAF); data source may be stale",
         example_range="2015-11-04",
