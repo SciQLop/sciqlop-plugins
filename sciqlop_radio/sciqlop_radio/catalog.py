@@ -172,7 +172,8 @@ def _register_entries(
         path = f"radio/{e.path}"
         try:
             vp = vp_factory(path, cb, vptype, metadata=meta, labels=e.labels,
-                             out_of_process=out_of_process)
+                             out_of_process=out_of_process,
+                             display_name=e.label)
         except Exception as exc:  # noqa: BLE001
             log.exception("catalog: vp_factory failed for %s: %s", path, exc)
             continue

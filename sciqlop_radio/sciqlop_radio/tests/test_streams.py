@@ -20,7 +20,7 @@ def test_ecallisto_identity_includes_station_and_focus_code():
     assert ident.station == "BIR"
     assert ident.channel == "01"
     assert ident.instrument == "eCALLISTO"
-    assert ident.vp_path == "radio/ecallisto/BIR/01"
+    assert ident.vp_path == "radio/e-CALLISTO/BIR/01"
 
 
 def test_ecallisto_focus_codes_get_distinct_paths():
@@ -36,7 +36,7 @@ def test_rstn_identity_is_per_station_no_channel():
     ident = stream_identity_for_row(row, _src("rstn"))
     assert ident.station == "learmonth"
     assert ident.channel == ""
-    assert ident.vp_path == "radio/rstn/learmonth"
+    assert ident.vp_path == "radio/RSTN/learmonth"
 
 
 def test_ilofar_identity_splits_by_polarisation():
@@ -53,21 +53,21 @@ def test_ilofar_identity_splits_by_polarisation():
     assert ident_x.channel == "X"
     assert ident_y.channel == "Y"
     assert ident_x.vp_path != ident_y.vp_path
-    assert ident_x.vp_path == "radio/ilofar/X"
-    assert ident_y.vp_path == "radio/ilofar/Y"
+    assert ident_x.vp_path == "radio/I-LOFAR/X"
+    assert ident_y.vp_path == "radio/I-LOFAR/Y"
 
 
 def test_station_with_space_is_sanitized():
     row = FakeRow({"Observatory": "Sagamore Hill"})
     ident = stream_identity_for_row(row, _src("rstn"))
-    assert ident.vp_path == "radio/rstn/Sagamore_Hill"
+    assert ident.vp_path == "radio/RSTN/Sagamore_Hill"
 
 
 def test_missing_columns_default_to_empty():
     row = FakeRow({})  # real rows can lack a column
     ident = stream_identity_for_row(row, _src("ecallisto"))
     assert ident.station == "" and ident.channel == ""
-    assert ident.vp_path == "radio/ecallisto"
+    assert ident.vp_path == "radio/e-CALLISTO"
 
 
 def test_ecallisto_attrs_include_server_side_observatory():
@@ -86,3 +86,63 @@ def test_rstn_attrs_have_no_observatory():
     names = [type(a).__name__ for a in stream_fido_attrs(ident)]
     assert "Instrument" in names
     assert "Observatory" not in names  # RSTN filtered client-side only
+
+
+def test_source_keys_are_unchanged():
+    """path_name is presentation only. source_key stays the identity — it keys
+    STREAM_RULES, the day-cache search signature and the dock's combo box — so
+    adding a display concept must not move it."""
+    from sciqlop_radio.sources import SOURCES
+    assert {s.key for s in SOURCES} == {
+        "psp_rfs", "ecallisto", "eovsa", "ilofar", "rstn", "custom"}
+
+
+def test_curated_sources_carry_the_capitalised_path_names():
+    from sciqlop_radio.sources import SOURCES
+    by_key = {s.key: s for s in SOURCES}
+    assert by_key["ilofar"].path_name == "I-LOFAR"
+    assert by_key["ecallisto"].path_name == "e-CALLISTO"
+    assert by_key["eovsa"].path_name == "EOVSA"
+    assert by_key["rstn"].path_name == "RSTN"
+
+
+def test_vp_path_uses_path_name_not_source_key():
+    from sciqlop_radio.streams import StreamIdentity
+    ident = StreamIdentity(source_key="ilofar", instrument="ILOFAR",
+                           path_name="I-LOFAR", channel="X")
+    assert ident.vp_path == "radio/I-LOFAR/X"
+
+
+def test_vp_path_falls_back_to_source_key_when_path_name_is_unset():
+    from sciqlop_radio.streams import StreamIdentity
+    ident = StreamIdentity(source_key="custom", instrument="", channel="")
+    assert ident.vp_path == "radio/custom"
+
+
+def test_display_name_is_self_contained():
+    """One name serves the tree and the plot, and a panel may stack products
+    from several instruments — so 'X pol' alone would be ambiguous."""
+    from sciqlop_radio.streams import StreamIdentity
+    ilofar = StreamIdentity(source_key="ilofar", instrument="ILOFAR",
+                            path_name="I-LOFAR", channel="X")
+    assert ilofar.display_name == "I-LOFAR X pol"
+
+    ecallisto = StreamIdentity(source_key="ecallisto", instrument="eCALLISTO",
+                               path_name="e-CALLISTO",
+                               station="AUSTRIA-Krumbach", channel="01")
+    assert ecallisto.display_name == "e-CALLISTO AUSTRIA-Krumbach 01"
+
+    eovsa = StreamIdentity(source_key="eovsa", instrument="EOVSA",
+                           path_name="EOVSA")
+    assert eovsa.display_name == "EOVSA"
+
+
+def test_identity_from_row_carries_the_source_path_name():
+    """Regression: stream_identity_for_row used to drop RadioSource.path_name,
+    so the dock's derived path stayed lowercase while CONTINUOUS_SOURCES moved
+    — re-splitting the single definition of a product into two that no longer
+    collide, which is the whole defect this rename removes."""
+    row = FakeRow({"Observatory": "IE613", "Polarisation": "X"})
+    ident = stream_identity_for_row(row, _src("ilofar"))
+    assert ident.path_name == "I-LOFAR"
+    assert ident.vp_path == "radio/I-LOFAR/X"

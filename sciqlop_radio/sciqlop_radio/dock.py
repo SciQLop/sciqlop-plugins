@@ -457,6 +457,7 @@ class RadioSpectraDock(QWidget):
                         # contends with the GUI thread's own Python work.
                         vp = VirtualSpectrogram(
                             g.vp_path, g.callback, out_of_process=True,
+                            display_name=g.display_name,
                         )
                     else:
                         # Bare create_virtual_product (no make_rich_vp/static_meta)
@@ -536,7 +537,8 @@ class RadioSpectraDock(QWidget):
             callback = _build_callback(stream_src, self._cache_dir, _open_and_convert)
             return _PlotGroup(vp_path=identity.vp_path, callback=callback,
                               first_name=paths[0].name, n_files=len(paths),
-                              t0=t0, t1=t1, out_of_process=True)
+                              t0=t0, t1=t1, out_of_process=True,
+                              display_name=identity.display_name)
         merged = (concat_variables_along_time(variables)
                   if len(variables) > 1 else variables[0])
         return _PlotGroup(vp_path=_group_vp_path(static_key, paths),
@@ -586,6 +588,7 @@ class _PlotGroup:
     # with no further per-pan work, so out-of-process would just add pointless
     # IPC overhead for them.
     out_of_process: bool = False
+    display_name: str = ""
 
 
 def _row_basename(row) -> str:

@@ -26,7 +26,7 @@ import pytest
 
 def _ecallisto_source(**over):
     from sciqlop_radio.continuous import ContinuousSource
-    base = dict(vp_path="radio/ecallisto/BIR/01", label="BIR/01",
+    base = dict(vp_path="radio/e-CALLISTO/BIR/01", label="BIR/01",
                 attrs_factory=lambda: [], station="BIR",
                 channel_column="ID", channel_value="01")
     base.update(over)
@@ -103,7 +103,7 @@ def test_concurrent_calls_for_same_window_dedupe_the_live_search(monkeypatch, tm
         return [dict(r) for r in rows]
 
     monkeypatch.setattr(C, "_fido_search", slow_live)
-    source = _ecallisto_source(vp_path="radio/ecallisto/BIR/race",
+    source = _ecallisto_source(vp_path="radio/e-CALLISTO/BIR/race",
                                station="BIR", channel_value="01")
     day = datetime(2024, 5, 1, tzinfo=timezone.utc)
 
