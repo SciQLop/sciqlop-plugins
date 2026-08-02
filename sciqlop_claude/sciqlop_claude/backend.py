@@ -5,11 +5,19 @@ import asyncio
 import base64
 import shutil
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from pathlib import Path
 from typing import AsyncIterator, Callable, List, Optional
 
 from SciQLop.components.agents import BackendContext, SessionEntry
-from SciQLop.components.agents.backend import StreamBlock
+from SciQLop.components.agents.backend import (
+    ContextCategory,
+    Cost,
+    Quota,
+    StreamBlock,
+    TokenCounts,
+    UsageSnapshot,
+)
 from SciQLop.components.agents.chat import (
     ChatMessage,
     ImageBlock,
@@ -18,6 +26,7 @@ from SciQLop.components.agents.chat import (
     ToolActivityBlock,
     write_b64_image,
 )
+from SciQLop.components.agents.model_capabilities import capabilities_for
 
 from . import sessions as _sessions
 
@@ -46,6 +55,23 @@ import logging as _logging  # DESYNC-PROBE (temporary instrumentation)
 from SciQLop.components.sciqlop_logging import getLogger as _getLogger  # DESYNC-PROBE
 _log = _getLogger("sciqlop_claude")  # DESYNC-PROBE
 _log.level = _logging.DEBUG  # DESYNC-PROBE: force-emit probe logs regardless of global level
+
+
+# claude_agent_sdk.types.EffortLevel, in ascending order. This is what the SDK
+# will put on the wire; models.dev narrows it per model.
+SDK_EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max")
+
+
+def remember_session(backend, result) -> None:
+    """Record the live session id so a reconnect resumes instead of starting over.
+
+    Needed because effort can only be applied at connect time, so changing it
+    forces a reconnect. Also hardens `set_model`'s error path, which drops the
+    client on failure.
+    """
+    session_id = getattr(result, "session_id", None)
+    if session_id:
+        backend._resume = session_id
 
 
 _MCP_SERVER_NAME = "sciqlop"
@@ -203,6 +229,7 @@ def sdk_available() -> tuple[bool, Optional[str]]:
 
 
 _INTERRUPT_DRAIN_TIMEOUT_S = 15.0
+_CONTEXT_USAGE_TIMEOUT_S = 10.0
 
 
 class ClaudeBackend:
@@ -221,11 +248,18 @@ class ClaudeBackend:
         self._confirm_cb = ctx.confirm_cb
         self._ask_question_cb = getattr(ctx, "ask_question_cb", None)
         self._model: Optional[str] = None
+        self._effort: Optional[str] = None
         self._allow_writes = ctx.allow_writes
         self._resume: Optional[str] = None
         self._client: Optional[ClaudeSDKClient] = None
         self._lock = asyncio.Lock()
         self._slash_cache: Optional[List[str]] = None
+        self._last_result = None
+        # keyed by rate_limit_type so the 5-hour and weekly windows do not
+        # overwrite each other. Deliberately NOT cleared by reset(): these
+        # windows are account-wide, and starting a new chat does not refill them.
+        self._rate_limits: dict = {}
+        self._effort_dirty = False
 
     async def _ensure_client(self) -> ClaudeSDKClient:
         if self._client is not None:
@@ -247,6 +281,7 @@ class ClaudeBackend:
             allowed_tools=allowed,
             can_use_tool=self._permission_check if permission_gate_active else None,
             model=self._model,
+            effort=self._effort,
             resume=self._resume,
             cwd=str(_sessions.current_workspace_dir()),
             setting_sources=["user", "project"],
@@ -260,6 +295,10 @@ class ClaudeBackend:
         self, prompt: str, image_paths: Optional[List[str]] = None
     ) -> AsyncIterator[StreamBlock]:
         async with self._lock:
+            if self._effort_dirty:
+                # a pending effort change only takes effect on a fresh client
+                await self._disconnect()
+                self._effort_dirty = False
             client = await self._ensure_client()
             await client.query(_build_user_stream(prompt, image_paths or []))
             self._probe_seq = getattr(self, "_probe_seq", 0) + 1  # DESYNC-PROBE
@@ -284,6 +323,14 @@ class ClaudeBackend:
                               if isinstance(_content, list) else None)  # DESYNC-PROBE
                     _log.warning(  # DESYNC-PROBE
                         f"DESYNC-PROBE turn={_seq} msg#{_consumed} {_mtype} blocks={_kinds}")
+                if _mtype == "ResultMessage":
+                    self._last_result = message
+                    remember_session(self, message)
+                elif _mtype == "RateLimitEvent":
+                    info = getattr(message, "rate_limit_info", None)
+                    kind = getattr(info, "rate_limit_type", None)
+                    if kind:
+                        self._rate_limits[kind] = info
                 for block in self._decode_message(message):
                     yield block
             _log.warning(  # DESYNC-PROBE
@@ -294,6 +341,7 @@ class ClaudeBackend:
             await self._disconnect()
             self._resume = None
             self._slash_cache = None
+            self._last_result = None
 
     async def cancel(self) -> None:
         """Interrupt the in-flight turn.
@@ -368,6 +416,35 @@ class ClaudeBackend:
                 except Exception:
                     await self._disconnect()
 
+    def effort_values(self) -> tuple:
+        """SDK-accepted levels, narrowed to what the selected model supports."""
+        caps = capabilities_for("anthropic", self._model or "")
+        if caps is None or not caps.effort_values:
+            return SDK_EFFORT_LEVELS
+        allowed = set(caps.effort_values)
+        return tuple(level for level in SDK_EFFORT_LEVELS if level in allowed)
+
+    async def set_effort(self, effort: Optional[str]) -> None:
+        """Store and force a reconnect — the SDK has no live effort setter, so
+        effort can only be applied through ClaudeAgentOptions at connect time.
+
+        A no-op when `effort` already matches the stored value: without this
+        guard, every backend switch or model change that restores a persisted
+        effort would tear down and reconnect the client even though nothing
+        actually changed.
+        """
+        async with self._lock:
+            if effort == self._effort:
+                return
+            self._effort = effort
+            # Deliberately does NOT drop a live client. Effort is only read when
+            # ClaudeAgentOptions is built, so a client already up cannot honour
+            # the new value anyway — and tearing it down here killed the very
+            # connection the session-info strip reads context from, on every
+            # bind that restored a persisted effort. Recreate lazily instead,
+            # at the next turn, which is the first moment it can matter.
+            self._effort_dirty = self._client is not None
+
     def set_allow_writes(self, allow: bool) -> None:
         self._allow_writes = allow
 
@@ -404,6 +481,51 @@ class ClaudeBackend:
 
     def load_session(self, session_id: str, image_tempdir: Path) -> List[ChatMessage]:
         return _sessions.load_session_messages(session_id, image_tempdir=image_tempdir)
+
+    async def usage_snapshot(self) -> Optional[UsageSnapshot]:
+        """Describe the session as it stands, not merely the last turn.
+
+        Context is meaningful from the moment the client connects — the system
+        prompt, the MCP tool schemas and CLAUDE.md files already occupy real
+        budget before the user types anything, which is why Claude Code can show
+        /context immediately. Returning None until a ResultMessage arrived kept
+        the strip blank through the whole first turn.
+        """
+        snapshot = (result_to_usage(self._last_result)
+                    if self._last_result is not None else UsageSnapshot())
+        snapshot = replace(snapshot, quotas=rate_limits_to_quotas(self._rate_limits))
+        client = self._client
+        if client is None:
+            return _reportable(snapshot)
+        try:
+            # bounded: this is a control request over the CLI's stdio
+            # transport, and a client torn down mid-flight never answers. An
+            # unbounded await wedges UsageRefresher, whose in-flight guard then
+            # drops every later refresh — the strip stays blank permanently.
+            payload = await asyncio.wait_for(
+                client.get_context_usage(), timeout=_CONTEXT_USAGE_TIMEOUT_S)
+            tokens, maximum, categories, model = context_to_breakdown(payload)
+            if tokens is None:
+                # The CLI answers this on a fresh connection (verified: ~38k of
+                # 967k before any query), so an empty reply means something
+                # about *this* connection, not a CLI limitation.
+                _log.debug("context usage reply carried no totals: %r",
+                           sorted(payload) if isinstance(payload, dict) else payload)
+        except Exception as error:
+            # Expected before the first query on some CLI versions; log so a
+            # persistently empty strip can be told apart from an empty session.
+            _log.debug("context usage unavailable: %r", error)
+            return _reportable(snapshot)
+        return _reportable(replace(
+            snapshot,
+            context_tokens=tokens,
+            context_max=maximum,
+            context_categories=categories,
+            # the resolved canonical name wins: /context reports whatever alias
+            # the request carried, which is exactly what canonicalModel exists
+            # to normalise away.
+            model=snapshot.model or model,
+        ))
 
     async def _answer_question(self, tool_input: dict):
         """Render the model's AskUserQuestion and return the user's answers.
@@ -522,6 +644,98 @@ def _result_summary(block) -> str:
     if getattr(block, "is_error", False) and text:
         text = f"error: {text}"
     return text[:200]
+
+
+def result_to_usage(result) -> "UsageSnapshot":
+    """Map a ResultMessage into a UsageSnapshot. Pure — no client needed."""
+    raw = getattr(result, "usage", None) or {}
+    tokens = TokenCounts(
+        input=raw.get("input_tokens"),
+        output=raw.get("output_tokens"),
+        cache_read=raw.get("cache_read_input_tokens"),
+        cache_write=raw.get("cache_creation_input_tokens"),
+    )
+    cost_usd = getattr(result, "total_cost_usd", None)
+    return UsageSnapshot(
+        model=_display_model(result),
+        tokens=tokens,
+        cost=Cost(amount=cost_usd) if cost_usd is not None else None,
+        num_turns=getattr(result, "num_turns", None),
+        duration_api_ms=getattr(result, "duration_api_ms", None),
+        session_id=getattr(result, "session_id", None),
+    )
+
+
+def _display_model(result) -> Optional[str]:
+    """Prefer `model_usage[...].canonicalModel` — a stable resolved name that
+    survives provider-specific aliases (claude-agent-sdk >= 0.2.126)."""
+    model_usage = getattr(result, "model_usage", None) or {}
+    for entry in model_usage.values():
+        if isinstance(entry, dict) and entry.get("canonicalModel"):
+            return entry["canonicalModel"]
+    # a multi-model turn (a subagent on another model) can carry the canonical
+    # name on any entry, so the raw key is only a last resort.
+    return next(iter(model_usage), None)
+
+
+_WINDOW_LABELS = {
+    "five_hour": "5h",
+    "seven_day": "week",
+    "seven_day_opus": "week (opus)",
+    "seven_day_sonnet": "week (sonnet)",
+    "overage": "overage",
+}
+# 5-hour first, then the weekly windows: the tighter window is the one a user
+# is usually about to hit.
+_WINDOW_ORDER = ("five_hour", "seven_day", "seven_day_opus", "seven_day_sonnet",
+                 "overage")
+
+
+def _reportable(snapshot: UsageSnapshot) -> Optional[UsageSnapshot]:
+    """None unless the snapshot actually says something.
+
+    `info_segments` renders any non-None snapshot, so returning an empty one
+    leaves the strip showing the effort segment on its own — a model-less,
+    context-less "high" — which reads as a bug rather than as "nothing known".
+    """
+    if any((snapshot.model, snapshot.tokens, snapshot.cost, snapshot.quotas,
+            snapshot.context_tokens, snapshot.num_turns)):
+        return snapshot
+    return None
+
+
+def rate_limits_to_quotas(rate_limits: dict) -> tuple:
+    """Map the CLI's rate-limit windows into Quotas, tightest window first.
+
+    `utilization` is a fraction of the window consumed, so it becomes
+    `percent_remaining` inverted — a window the CLI reported without a
+    utilization figure is dropped rather than displayed as an unearned 0%.
+    """
+    quotas = []
+    for kind in _WINDOW_ORDER:
+        info = rate_limits.get(kind)
+        utilization = getattr(info, "utilization", None) if info else None
+        if utilization is None:
+            continue
+        quotas.append(Quota(
+            label=_WINDOW_LABELS.get(kind, kind),
+            percent_remaining=100.0 - utilization * 100.0,
+            resets_at=getattr(info, "resets_at", None),
+        ))
+    return tuple(quotas)
+
+
+def context_to_breakdown(payload):
+    """Map a get_context_usage() payload into (tokens, max, categories, model)."""
+    if not isinstance(payload, dict):
+        return None, None, (), None
+    categories = tuple(
+        ContextCategory(name=str(item.get("name", "")), tokens=int(item.get("tokens", 0)))
+        for item in (payload.get("categories") or [])
+        if isinstance(item, dict)
+    )
+    return (payload.get("totalTokens"), payload.get("maxTokens"),
+            categories, payload.get("model"))
 
 
 def _build_user_stream(text: str, image_paths: List[str]):
