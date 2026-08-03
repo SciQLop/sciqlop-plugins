@@ -70,7 +70,13 @@ def _open_db() -> Optional[sqlite3.Connection]:
         return None
 
 
-def list_sessions(limit: int = 50) -> List[SessionEntry]:
+def list_sessions(limit: Optional[int] = None) -> List[SessionEntry]:
+    """Every session for the workspace, most recent first; `limit` truncates.
+
+    Listing is complete by default: SciQLop keeps sessions the user renamed or
+    grouped indefinitely, and a truncation here would hide them before it can
+    decide. (SQLite reads a negative LIMIT as "no limit".)
+    """
     workspace = str(current_workspace_dir())
     conn = _open_db()
     if conn is None:
@@ -81,7 +87,7 @@ def list_sessions(limit: int = 50) -> List[SessionEntry]:
                 "SELECT id, title, time_updated FROM session "
                 "WHERE directory = ? "
                 "ORDER BY time_updated DESC LIMIT ?",
-                (workspace, limit),
+                (workspace, -1 if limit is None else limit),
             ).fetchall()
     except sqlite3.Error:
         return []

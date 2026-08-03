@@ -102,6 +102,18 @@ def test_list_sessions_sorted_by_mtime_desc(tmp_path, monkeypatch):
     assert [s.session_id for s in out] == ["new", "old"]
 
 
+def test_list_sessions_lists_everything_by_default(tmp_path, monkeypatch):
+    data_dir = _make_db(tmp_path)
+    monkeypatch.setenv("OPENCODE_DATA_DIR", str(data_dir))
+    for i in range(60):
+        _insert_session(data_dir, sid=f"s{i:02d}", directory="/w",
+                        title=f"t{i}", mtime_ms=1000 * (i + 1))
+    monkeypatch.setattr(sess, "current_workspace_dir", lambda: Path("/w"))
+
+    assert len(sess.list_sessions()) == 60
+    assert [s.session_id for s in sess.list_sessions(limit=2)] == ["s59", "s58"]
+
+
 def test_list_sessions_returns_empty_when_db_missing(tmp_path, monkeypatch):
     monkeypatch.setenv("OPENCODE_DATA_DIR", str(tmp_path / "does-not-exist"))
     assert sess.list_sessions() == []
