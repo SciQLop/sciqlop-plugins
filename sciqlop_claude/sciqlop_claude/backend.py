@@ -395,6 +395,9 @@ class ClaudeBackend:
     async def resume(self, session_id: str) -> None:
         async with self._lock:
             await self._disconnect()
+            # The CLI resumes from its own projects dir, so an archived
+            # transcript has to be put back there before it can be reached.
+            _sessions.restore_session(session_id)
             self._resume = session_id
             self._slash_cache = None
 
@@ -481,6 +484,12 @@ class ClaudeBackend:
 
     def load_session(self, session_id: str, image_tempdir: Path) -> List[ChatMessage]:
         return _sessions.load_session_messages(session_id, image_tempdir=image_tempdir)
+
+    def archive_sessions(self, session_ids) -> None:
+        _sessions.archive_sessions(session_ids)
+
+    def delete_session(self, session_id: str) -> None:
+        _sessions.delete_session(session_id)
 
     async def usage_snapshot(self) -> Optional[UsageSnapshot]:
         """Describe the session as it stands, not merely the last turn.

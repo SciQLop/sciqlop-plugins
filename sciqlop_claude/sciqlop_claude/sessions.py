@@ -9,9 +9,10 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Sequence
 
 from SciQLop.components.agents.chat import ThinkingBlock, write_b64_image
 
@@ -65,20 +66,54 @@ def _session_dir(cwd: Optional[Path]) -> Path:
     return _projects_dir() / _mangle_cwd(resolved)
 
 
-def list_sessions(cwd: Optional[Path] = None, limit: int = 30) -> List[SessionEntry]:
-    stats: List[tuple[float, Path]] = []
+def _archive_root() -> Path:
+    override = os.environ.get("SCIQLOP_AGENT_ARCHIVE_DIR")
+    if override:
+        return Path(override)
+    return Path(
+        os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share")
+    ) / "sciqlop" / "agent-sessions" / "claude"
+
+
+def _archive_dir(cwd: Optional[Path] = None) -> Path:
+    """Where transcripts SciQLop was told to keep live, mirroring the CLI layout."""
+    resolved = Path(cwd).resolve() if cwd is not None else current_workspace_dir()
+    return _archive_root() / _mangle_cwd(resolved)
+
+
+def _transcripts(directory: Path) -> List[tuple[float, Path]]:
+    found: List[tuple[float, Path]] = []
     try:
-        with os.scandir(_session_dir(cwd)) as it:
+        with os.scandir(directory) as it:
             for entry in it:
                 if not entry.name.endswith(".jsonl") or not entry.is_file():
                     continue
                 try:
-                    stats.append((entry.stat().st_mtime, Path(entry.path)))
+                    found.append((entry.stat().st_mtime, Path(entry.path)))
                 except OSError:
                     continue
     except FileNotFoundError:
-        return []
-    stats.sort(key=lambda t: t[0], reverse=True)
+        pass
+    return found
+
+
+def list_sessions(cwd: Optional[Path] = None,
+                  limit: Optional[int] = None) -> List[SessionEntry]:
+    """Every session for `cwd`, most recent first; `limit` truncates the tail.
+
+    Listing is complete by default: SciQLop keeps sessions the user renamed or
+    grouped indefinitely, and a truncation here would hide them before it can
+    decide. Labelling all of them costs a partial read each — ~0.03s for 200
+    sessions, so there is nothing to save by cutting the list short.
+
+    Archived transcripts are listed alongside the live ones, so a session the
+    CLI has since pruned stays available; a live copy always wins.
+    """
+    live = _transcripts(_session_dir(cwd))
+    known = {path.stem for _mtime, path in live}
+    archived = [(mtime, path) for mtime, path in _transcripts(_archive_dir(cwd))
+                if path.stem not in known]
+    found = sorted(live + archived, key=lambda t: t[0], reverse=True)
     return [
         SessionEntry(
             session_id=path.stem,
@@ -86,8 +121,72 @@ def list_sessions(cwd: Optional[Path] = None, limit: int = 30) -> List[SessionEn
             mtime=mtime,
             label=_extract_label(path),
         )
-        for mtime, path in stats[:limit]
+        for mtime, path in (found[:limit] if limit is not None else found)
     ]
+
+
+def archive_sessions(session_ids: Sequence[str], cwd: Optional[Path] = None) -> None:
+    """Keep these transcripts beyond the CLI's own `cleanupPeriodDays` pruning.
+
+    Idempotent and additive — an id absent from a later call keeps its copy,
+    since un-naming a session is not a request to destroy its transcript.
+    """
+    source_dir, target_dir = _session_dir(cwd), _archive_dir(cwd)
+    for session_id in session_ids:
+        source = source_dir / f"{session_id}.jsonl"
+        if not source.is_file():
+            continue
+        target = target_dir / source.name
+        if _same_content(source, target):
+            continue
+        try:
+            target_dir.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, target)
+        except OSError:
+            continue
+
+
+def _same_content(source: Path, target: Path) -> bool:
+    try:
+        a, b = source.stat(), target.stat()
+    except OSError:
+        return False
+    return (a.st_size, int(a.st_mtime)) == (b.st_size, int(b.st_mtime))
+
+
+def _transcript_path(session_id: str, cwd: Optional[Path] = None) -> Path:
+    """The live transcript, or the archived copy once the CLI has pruned it."""
+    live = _session_dir(cwd) / f"{session_id}.jsonl"
+    archived = _archive_dir(cwd) / f"{session_id}.jsonl"
+    return live if live.is_file() or not archived.is_file() else archived
+
+
+def restore_session(session_id: str, cwd: Optional[Path] = None) -> bool:
+    """Put an archived transcript back where the CLI expects it, so it resumes.
+
+    A live transcript is never overwritten: it is the newer of the two.
+    """
+    target = _session_dir(cwd) / f"{session_id}.jsonl"
+    if target.is_file():
+        return True
+    source = _archive_dir(cwd) / f"{session_id}.jsonl"
+    if not source.is_file():
+        return False
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, target)
+    except OSError:
+        return False
+    return True
+
+
+def delete_session(session_id: str, cwd: Optional[Path] = None) -> None:
+    """Erase a session for good — live transcript and archived copy alike."""
+    for directory in (_session_dir(cwd), _archive_dir(cwd)):
+        try:
+            (directory / f"{session_id}.jsonl").unlink()
+        except OSError:
+            pass
 
 
 def load_session_messages(
@@ -98,7 +197,7 @@ def load_session_messages(
     """Replay a session's JSONL into a list of `ChatMessage` matching the live UI."""
     from SciQLop.components.agents.chat import ChatMessage, ImageBlock, TextBlock
 
-    path = _session_dir(cwd) / f"{session_id}.jsonl"
+    path = _transcript_path(session_id, cwd)
     tempdir = Path(image_tempdir) if image_tempdir else None
     if tempdir is not None:
         tempdir.mkdir(parents=True, exist_ok=True)
