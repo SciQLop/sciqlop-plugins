@@ -485,6 +485,11 @@ class ClaudeBackend:
     def load_session(self, session_id: str, image_tempdir: Path) -> List[ChatMessage]:
         return _sessions.load_session_messages(session_id, image_tempdir=image_tempdir)
 
+    def current_session_id(self) -> Optional[str]:
+        """The id the CLI reported for the live session, recorded so a
+        reconnect resumes it — which also makes it the one being written to."""
+        return self._resume
+
     def archive_sessions(self, session_ids) -> None:
         _sessions.archive_sessions(session_ids)
 

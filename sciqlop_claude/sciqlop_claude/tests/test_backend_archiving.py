@@ -24,6 +24,14 @@ def test_archive_and_delete_reach_the_session_store(monkeypatch):
     assert seen == {"archived": ["a", "b"], "deleted": "a"}
 
 
+def test_the_live_session_is_the_one_the_cli_reported():
+    backend = _backend()
+    backend._resume = None
+    assert backend.current_session_id() is None
+    backend._resume = "live-one"
+    assert backend.current_session_id() == "live-one"
+
+
 def test_resume_restores_the_archived_transcript_first(monkeypatch):
     from sciqlop_claude import backend as be
 
