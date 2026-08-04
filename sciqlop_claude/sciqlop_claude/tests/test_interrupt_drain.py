@@ -58,6 +58,10 @@ class _FakeClient:
 
         return _gen()
 
+    # ask() reads via receive_messages() (so a background task's continuation can
+    # be kept in its own turn); one call drains one buffered turn, same as the SDK.
+    receive_messages = receive_response
+
     async def disconnect(self):
         pass
 

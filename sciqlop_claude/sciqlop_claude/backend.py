@@ -231,6 +231,54 @@ def sdk_available() -> tuple[bool, Optional[str]]:
 _INTERRUPT_DRAIN_TIMEOUT_S = 15.0
 _CONTEXT_USAGE_TIMEOUT_S = 10.0
 
+# Task statuses that mean a background task has finished. Mirrors the SDK's
+# `TERMINAL_TASK_STATUSES`, kept local because the dependency pin still admits
+# 0.1.x, which does not export it. Spans both lifecycle vocabularies:
+# task_notification says "stopped" where task_updated says the raw "killed".
+_TERMINAL_TASK_STATUSES = frozenset({"completed", "failed", "stopped", "killed"})
+
+
+def _update_active_tasks(active: set, message) -> None:
+    """Track background-task lifecycle so a turn knows when its tasks are done.
+
+    A background ``Task``'s continuation is emitted on the shared message stream
+    *after* the foreground ``ResultMessage``. Ending the turn at that first
+    ResultMessage orphans the continuation into the next turn (a one-turn chat
+    desync). We instead keep the turn open until every task it started reports a
+    terminal status — which the SDK documents can arrive on *either* a
+    TaskNotificationMessage or a TaskUpdatedMessage (whose status may sit inside
+    `patch`). https://code.claude.com/docs/en/agent-sdk/python
+    """
+    name = type(message).__name__
+    if name == "TaskStartedMessage":
+        task_id = getattr(message, "task_id", None)
+        if task_id:
+            active.add(task_id)
+    elif name in ("TaskUpdatedMessage", "TaskNotificationMessage"):
+        status = getattr(message, "status", None)
+        if status is None:  # TaskUpdatedMessage carries status inside `patch`
+            patch = getattr(message, "patch", None)
+            if isinstance(patch, dict):
+                status = patch.get("status")
+        if status in _TERMINAL_TASK_STATUSES:
+            active.discard(getattr(message, "task_id", None))
+
+
+def _probe_log_message(seq: int, n: int, message) -> None:  # DESYNC-PROBE
+    mtype = type(message).__name__
+    if mtype == "ResultMessage":
+        _log.warning(
+            f"DESYNC-PROBE turn={seq} msg#{n} ResultMessage "
+            f"subtype={getattr(message, 'subtype', None)!r} "
+            f"is_error={getattr(message, 'is_error', None)!r} "
+            f"num_turns={getattr(message, 'num_turns', None)!r} "
+            f"session={getattr(message, 'session_id', None)!r}")
+    else:
+        content = getattr(message, "content", None)
+        kinds = ([type(b).__name__ for b in content]
+                 if isinstance(content, list) else None)
+        _log.warning(f"DESYNC-PROBE turn={seq} msg#{n} {mtype} blocks={kinds}")
+
 
 class ClaudeBackend:
     display_name = "Claude"
@@ -306,23 +354,10 @@ class ClaudeBackend:
             _log.warning(  # DESYNC-PROBE
                 f"DESYNC-PROBE turn={_seq} START prompt={(prompt or '')[:80]!r}")
             _consumed = 0  # DESYNC-PROBE
-            async for message in client.receive_response():
+            async for message in self._receive_turn(client):
                 _consumed += 1  # DESYNC-PROBE
-                _mtype = type(message).__name__  # DESYNC-PROBE
-                if _mtype == "ResultMessage":  # DESYNC-PROBE
-                    _log.warning(  # DESYNC-PROBE
-                        f"DESYNC-PROBE turn={_seq} msg#{_consumed} ResultMessage "
-                        f"subtype={getattr(message, 'subtype', None)!r} "
-                        f"is_error={getattr(message, 'is_error', None)!r} "
-                        f"num_turns={getattr(message, 'num_turns', None)!r} "
-                        f"session={getattr(message, 'session_id', None)!r} "
-                        f"-> receive_response() TERMINATES here")  # DESYNC-PROBE
-                else:  # DESYNC-PROBE
-                    _content = getattr(message, "content", None)  # DESYNC-PROBE
-                    _kinds = ([type(b).__name__ for b in _content]  # DESYNC-PROBE
-                              if isinstance(_content, list) else None)  # DESYNC-PROBE
-                    _log.warning(  # DESYNC-PROBE
-                        f"DESYNC-PROBE turn={_seq} msg#{_consumed} {_mtype} blocks={_kinds}")
+                _probe_log_message(_seq, _consumed, message)  # DESYNC-PROBE
+                _mtype = type(message).__name__
                 if _mtype == "ResultMessage":
                     self._last_result = message
                     remember_session(self, message)
@@ -335,6 +370,37 @@ class ClaudeBackend:
                     yield block
             _log.warning(  # DESYNC-PROBE
                 f"DESYNC-PROBE turn={_seq} END consumed={_consumed}")
+
+    async def _receive_turn(self, client) -> AsyncIterator:
+        """Yield one turn's messages, keeping the turn open until every
+        background ``Task`` it spawned has finished.
+
+        ``receive_response()`` stops at the first ``ResultMessage``, but a
+        background task's continuation arrives on the shared stream *after* that
+        result. Reading straight from ``receive_messages()`` and ending only on
+        a ``ResultMessage`` reached with no task still active keeps that
+        continuation in its own turn instead of leaking it into the next one.
+
+        This must wait unconditionally, however long a background task takes:
+        giving up doesn't stop the SDK subprocess, so an abandoned task's
+        messages (including its own ``ResultMessage``) still land on the shared
+        stream later, unread — and get misattributed to whichever turn happens
+        to be listening next when they finally arrive, an even worse desync
+        than the one this loop exists to prevent. A stuck task is instead the
+        user's job to interrupt via Stop / ``cancel()``, which works
+        independently of this wait (it does not take ``self._lock``).
+        """
+        active_tasks: set = set()
+        messages = client.receive_messages()
+        while True:
+            try:
+                message = await messages.__anext__()
+            except StopAsyncIteration:
+                return
+            _update_active_tasks(active_tasks, message)
+            yield message
+            if type(message).__name__ == "ResultMessage" and not active_tasks:
+                return
 
     async def reset(self) -> None:
         async with self._lock:

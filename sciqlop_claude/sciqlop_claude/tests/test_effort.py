@@ -87,7 +87,7 @@ def test_a_pending_effort_change_reconnects_on_the_next_turn():
 
     async def fake_ensure():
         be._client = SimpleNamespace(
-            query=lambda *a, **k: _done(), receive_response=_empty_stream)
+            query=lambda *a, **k: _done(), receive_messages=_empty_stream)
         return be._client
 
     be._client = SimpleNamespace()
