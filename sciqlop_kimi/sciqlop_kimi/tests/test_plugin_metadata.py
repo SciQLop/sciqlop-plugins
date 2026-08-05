@@ -10,11 +10,11 @@ def test_plugin_json_parses_and_has_required_fields():
     data = json.loads((_PLUGIN_DIR / "plugin.json").read_text())
     assert data["name"]
     assert data["version"]
-    assert any("kimi-agent-sdk" in dep for dep in data["python_dependencies"])
+    assert any("agent-client-protocol" in dep for dep in data["python_dependencies"])
     assert data["disabled"] is False
 
 
 def test_pyproject_declares_entry_point():
     pyproject = (_PLUGIN_DIR.parent / "pyproject.toml").read_text()
     assert 'sciqlop_kimi = "sciqlop_kimi"' in pyproject
-    assert "kimi-agent-sdk" in pyproject
+    assert "agent-client-protocol" in pyproject

@@ -1,19 +1,23 @@
-"""kimi-agent-sdk adapter — implements `SciQLop.components.agents.AgentBackend`.
+"""Kimi Code (ACP) adapter — implements `SciQLop.components.agents.AgentBackend`.
 
-kimi-agent-sdk runs the Kimi CLI (Python) runtime in-process. SciQLop tools
-are exposed as dynamically created `CallableTool2` subclasses, registered
-through a generated agent file (the only tool-registration channel the SDK
-exposes); approval gating happens inside the tool call itself, the same way
-the Albert backend does it, because custom tools never trigger the runtime's
-own approval requests.
+Kimi Code is the Node.js CLI (`kimi`); it speaks the Agent Client Protocol
+over stdio (`kimi acp`). We spawn it, expose the SciQLop tools through an
+in-process MCP HTTP server (see `mcp_server.py`), and translate ACP session
+updates into SciQLop chat StreamBlocks. Auth, models and session storage all
+belong to the user's own Kimi Code setup — nothing to configure in SciQLop
+beyond running `kimi login` once.
+
+Turn correlation comes free from JSON-RPC (one prompt request, one prompt
+response): the whole class of stream-desync bugs that per-turn ResultMessage
+sniffing invites (see sciqlop_claude) does not exist here.
 """
 from __future__ import annotations
 
 import asyncio
 import base64
-import sys
+import shutil
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterator, List, Optional
+from typing import Any, AsyncIterator, Dict, List, Optional
 
 from SciQLop.components.agents import BackendContext, SessionEntry
 from SciQLop.components.agents.backend import StreamBlock
@@ -27,51 +31,40 @@ from SciQLop.components.agents.chat import (
 )
 
 from . import sessions as _sessions
+from .mcp_server import SciqlopMcpServer
 
 try:
-    from kimi_agent_sdk import (
-        ApprovalRequest,
-        CallableTool2,
-        RunCancelled,
-        Session,
-        TextPart,
-        ThinkPart,
-        ToolCall,
-        ToolError,
-        ToolOk,
-        ToolResult,
-        TurnEnd,
+    import acp
+    from acp import helpers as acp_helpers
+    from acp.schema import (
+        AgentMessageChunk,
+        AgentThoughtChunk,
+        AvailableCommandsUpdate,
+        ClientCapabilities,
+        FileSystemCapabilities,
+        HttpMcpServer,
+        Implementation,
+        RequestPermissionResponse,
+        ToolCallProgress,
+        ToolCallStart,
+        UserMessageChunk,
     )
-    from kaos.path import KaosPath
-    from kosong.message import ImageURLPart
-    from pydantic import Field, create_model
 
-    _SDK_AVAILABLE = True
-    _SDK_IMPORT_ERROR: Optional[str] = None
+    _ACP_AVAILABLE = True
+    _ACP_IMPORT_ERROR: Optional[str] = None
 except Exception as e:  # pragma: no cover
-    _SDK_AVAILABLE = False
-    _SDK_IMPORT_ERROR = str(e)
+    _ACP_AVAILABLE = False
+    _ACP_IMPORT_ERROR = str(e)
 
 
 _DEFAULT_MODEL_CHOICES: List[tuple[str, Optional[str]]] = [
-    ("Default (Kimi)", None),
+    ("Default (Kimi Code)", None),
 ]
-
-# JSON-schema type -> Python type, for building each tool's pydantic params
-# model from the SciQLop tool's input_schema.
-_JSON_TYPE_MAP = {
-    "string": str,
-    "integer": int,
-    "number": float,
-    "boolean": bool,
-    "array": list,
-    "object": dict,
-}
 
 SYSTEM_PROMPT = (
     "You are a helper embedded inside SciQLop, a Qt desktop application for "
     "space-physics time-series visualization. You act on the live running "
-    "instance through a set of in-process tools.\n\n"
+    "instance through a set of tools from the 'sciqlop' MCP server.\n\n"
     "Read tools — call these freely, they never mutate state:\n"
     "  • sciqlop_window_state / sciqlop_list_panels / sciqlop_active_panel — "
     "    live session snapshot, panel names, time ranges, plotted products.\n"
@@ -161,155 +154,412 @@ SYSTEM_PROMPT = (
 )
 
 
+def kimi_cli_available() -> bool:
+    return shutil.which("kimi") is not None
+
+
 def sdk_available() -> tuple[bool, Optional[str]]:
-    return _SDK_AVAILABLE, _SDK_IMPORT_ERROR
-
-
-def _settings_config():
-    """A kimi `Config` built from SciQLop settings, or None to fall back to
-    the Kimi CLI's own configuration (~/.kimi/config.toml + env vars).
-
-    When the user sets an API key in Settings → Plugins → Kimi it takes
-    precedence over the CLI config: the SDK only *augments* an existing
-    provider from KIMI_API_KEY, so a bare key without a configured provider
-    would still fail — building the whole Config here sidesteps that.
-    """
-    from .settings import KimiSettings
-
-    settings = KimiSettings()
-    if not settings.api_key:
-        return None
-    from pydantic import SecretStr
-
-    from kimi_cli.config import Config, LLMModel, LLMProvider
-
-    return Config(
-        default_model=settings.model,
-        providers={
-            "kimi": LLMProvider(
-                type="kimi",
-                base_url=settings.base_url,
-                api_key=SecretStr(settings.api_key),
-            )
-        },
-        models={
-            settings.model: LLMModel(
-                provider="kimi",
-                model=settings.model,
-                max_context_size=settings.max_context_size,
-                capabilities={"image_in", "thinking"},
-            )
-        },
-    )
+    return _ACP_AVAILABLE, _ACP_IMPORT_ERROR
 
 
 def fetch_models() -> List[tuple[str, Optional[str]]]:
-    """Model dropdown choices from the Kimi CLI config's `models` table.
+    """Model dropdown choices from the user's Kimi Code config file.
 
-    kimi-agent-sdk has no API to enumerate provider models, but the user
-    already declares every usable model in their Kimi config file (the CLI
-    validates `default_model` against it). We surface those alongside a
-    "Default (Kimi)" entry that keeps the config's own `default_model`.
-
-    When an API key is set in SciQLop settings, the whole Config is built
-    from settings instead, so the only valid choice is the settings model.
+    The ACP server reports the same list per session, but the dropdown is
+    built before any session exists; parsing the config TOML directly avoids
+    spawning a throwaway agent at plugin load.
     """
     choices: List[tuple[str, Optional[str]]] = list(_DEFAULT_MODEL_CHOICES)
-    if not _SDK_AVAILABLE:
-        return choices
-    from .settings import KimiSettings
-
-    settings = KimiSettings()
-    if settings.api_key:
-        return [(f"{settings.model} (Kimi settings)", None)]
+    config = Path.home() / ".kimi-code" / "config.toml"
     try:
-        from kimi_cli.config import load_config
-        cfg = load_config()
+        import tomllib
+        data = tomllib.loads(config.read_text(encoding="utf-8"))
     except Exception:
         return choices
-    for name in cfg.models:
-        if name and name != cfg.default_model:
-            choices.append((name, name))
+    default = data.get("default_model") or ""
+    for name, spec in (data.get("models") or {}).items():
+        if not name or name == default:
+            continue
+        label = spec.get("display_name") or name if isinstance(spec, dict) else name
+        choices.append((label, name))
     return choices
 
 
-def _tool_class_name(tool_name: str) -> str:
-    return f"SciqlopTool_{tool_name}"
+class _AcpStream:
+    """Translate ACP session updates into SciQLop chat StreamBlocks.
 
-
-def _params_model(tool_name: str, schema: dict):
-    """Build a pydantic model for a tool's JSON input_schema.
-
-    Only flat typed properties are mapped (that is all SciQLop tools use);
-    anything unrecognized degrades to a string, matching how the model
-    serializes its arguments anyway.
+    Chunks are already incremental deltas; they forward as incomplete blocks,
+    closed when the other kind interrupts or the turn ends. ToolCallStart
+    yields the activity block; ToolCallProgress with content yields a
+    result-only activity block the dock merges by tool_call_id, plus
+    ImageBlocks for inline screenshots.
     """
-    properties = schema.get("properties") or {}
-    required = set(schema.get("required") or [])
-    fields: Dict[str, Any] = {}
-    for prop, spec in properties.items():
-        spec = spec if isinstance(spec, dict) else {}
-        py_type = _JSON_TYPE_MAP.get(spec.get("type"), str)
-        description = spec.get("description", "")
-        if prop in required:
-            fields[prop] = (py_type, Field(description=description))
-        else:
-            fields[prop] = (Optional[py_type], Field(default=None, description=description))
-    return create_model(f"{_tool_class_name(tool_name)}_params", **fields)
+
+    def __init__(self, tempdir: Path):
+        self._tempdir = tempdir
+        self._open: Optional[type] = None  # TextBlock | ThinkingBlock | None
+
+    def feed(self, update) -> List[StreamBlock]:
+        if isinstance(update, AgentMessageChunk):
+            return [self._switch(TextBlock),
+                    TextBlock(text=update.content.text, complete=False)]
+        if isinstance(update, AgentThoughtChunk):
+            return [self._switch(ThinkingBlock),
+                    ThinkingBlock(text=update.content.text, complete=False)]
+        if isinstance(update, ToolCallStart):
+            return [self._close(),
+                    ToolActivityBlock(
+                        tool_name=str(update.title or "").split("__")[-1],
+                        tool_input=_raw_input_dict(update.raw_input),
+                        tool_use_id=update.tool_call_id or "",
+                    )]
+        if isinstance(update, ToolCallProgress):
+            blocks: List[StreamBlock] = []
+            text, images = _tool_output(update)
+            for data, mime in images:
+                path = write_b64_image(data, mime, self._tempdir, prefix="tool")
+                if path:
+                    blocks.append(ImageBlock(path=path))
+            if text:
+                blocks.append(ToolActivityBlock(
+                    tool_use_id=update.tool_call_id or "", result=text))
+            return blocks
+        return []
+
+    def flush(self) -> List[StreamBlock]:
+        return [self._close()]
+
+    def _switch(self, kind: type) -> Optional[StreamBlock]:
+        closing = None
+        if self._open is not None and self._open is not kind:
+            closing = self._close()
+        self._open = kind
+        return closing
+
+    def _close(self) -> Optional[StreamBlock]:
+        if self._open is not None:
+            cls = self._open
+            self._open = None
+            return cls(text="", complete=True)
+        return None
 
 
-def _register_tool_class(backend: "KimiBackend", tool: dict) -> None:
-    """Create a CallableTool2 subclass for a SciQLop tool and publish it as a
-    module attribute, so kimi-cli's tool loader (`importlib.import_module` +
-    `getattr`) can resolve its `module:ClassName` path from the agent file.
-
-    The class must not override `__init__`: kimi-cli's loader treats an
-    overridden constructor as a request for dependency injection and fails on
-    annotations it does not know. Class attributes carry name/description/
-    params instead, which `CallableTool2.__init__` picks up.
-    """
-    name = tool["name"]
-
-    async def __call__(self, params):
-        return await backend._run_tool(tool, params)
-
-    cls = type(_tool_class_name(name), (CallableTool2,), {
-        "name": name,
-        "description": tool["description"],
-        "params": _params_model(name, tool.get("input_schema") or {}),
-        "__call__": __call__,
-        "__module__": __name__,
-    })
-    setattr(sys.modules[__name__], _tool_class_name(name), cls)
+def _raw_input_dict(raw_input: Any) -> dict:
+    return raw_input if isinstance(raw_input, dict) else {}
 
 
-def _to_output(result: Any):
-    """Convert a SciQLop tool result into a kimi ToolOk output.
-
-    Handlers return MCP-style dicts: {"content": [{"type": "text", ...},
-    {"type": "image", "data": <b64>, "mimeType": ...}]}. Images become
-    data-URI ImageURLParts so the model actually sees the screenshot.
-    """
-    if isinstance(result, dict) and "content" in result:
-        parts = []
-        for item in result["content"]:
-            if not isinstance(item, dict):
+def _tool_output(update) -> tuple[str, List[tuple[str, str]]]:
+    """Extract (text, [(b64 data, mime)]) from a ToolCallProgress update."""
+    texts: List[str] = []
+    images: List[tuple[str, str]] = []
+    for content in update.content or []:
+        inner = getattr(content, "content", None)
+        items = inner if isinstance(inner, list) else [inner]
+        for item in items:
+            if item is None:
                 continue
-            if item.get("type") == "text":
-                parts.append(TextPart(text=item.get("text", "")))
-            elif item.get("type") == "image":
-                data = item.get("data")
-                if data:
-                    mime = item.get("mimeType", "image/png")
-                    parts.append(ImageURLPart(
-                        image_url=ImageURLPart.ImageURL(url=f"data:{mime};base64,{data}")
-                    ))
-        if parts:
-            if len(parts) == 1 and isinstance(parts[0], TextPart):
-                return parts[0].text
-            return parts
-        return "OK"
-    return result if isinstance(result, str) else str(result)
+            text = getattr(item, "text", None)
+            if text is not None:
+                texts.append(text)
+                continue
+            data = getattr(item, "data", None)
+            if data is not None:
+                images.append((data, getattr(item, "mime_type", None) or "image/png"))
+    raw = update.raw_output
+    if not texts and isinstance(raw, str):
+        texts.append(raw)
+    return "\n".join(t for t in texts if t), images
+
+
+class _SciqlopAcpClient:
+    """The ACP client face Kimi Code talks to (duck-types acp.Client).
+
+    Only session_update and request_permission are meaningful for us: we
+    advertise no fs/terminal capabilities, so the agent has no reason to call
+    those — the stubs below exist purely to answer cleanly if it ever does.
+    """
+
+    def __init__(self, backend: "KimiBackend"):
+        self._backend = backend
+
+    async def session_update(self, session_id: str, update, **kwargs) -> None:
+        self._backend._on_update(update)
+
+    async def request_permission(self, options, session_id: str, tool_call, **kwargs):
+        return await self._backend._decide_permission(options, tool_call)
+
+    def on_connect(self, conn) -> None:
+        pass
+
+    async def read_text_file(self, **kwargs):
+        raise acp.RequestError.method_not_found("fs/read_text_file")
+
+    async def write_text_file(self, **kwargs):
+        raise acp.RequestError.method_not_found("fs/write_text_file")
+
+    async def create_terminal(self, **kwargs):
+        raise acp.RequestError.method_not_found("terminal/create")
+
+    async def terminal_output(self, **kwargs):
+        raise acp.RequestError.method_not_found("terminal/output")
+
+    async def release_terminal(self, **kwargs):
+        raise acp.RequestError.method_not_found("terminal/release")
+
+    async def wait_for_terminal_exit(self, **kwargs):
+        raise acp.RequestError.method_not_found("terminal/wait_for_exit")
+
+    async def kill_terminal(self, **kwargs):
+        raise acp.RequestError.method_not_found("terminal/kill")
+
+
+class KimiBackend:
+    display_name = "Kimi"
+    model_choices: List[tuple[str, Optional[str]]] = list(_DEFAULT_MODEL_CHOICES)
+    supports_sessions = True
+
+    def __init__(self, ctx: BackendContext):
+        if not _ACP_AVAILABLE:
+            raise RuntimeError(f"agent-client-protocol not importable: {_ACP_IMPORT_ERROR}")
+        if not kimi_cli_available():
+            raise RuntimeError(
+                "kimi CLI not found on PATH — install Kimi Code "
+                "(https://www.kimi.com/code) and run `kimi login` once."
+            )
+        self._main_window = ctx.main_window
+        self._tools = list(ctx.tools)
+        self._tool_names = {t["name"] for t in ctx.tools}
+        self._gated_names = {t["name"] for t in ctx.tools if t.get("gated")}
+        self._tempdir = Path(ctx.tempdir)
+        self._tempdir.mkdir(parents=True, exist_ok=True)
+        self._confirm_cb = ctx.confirm_cb
+        self._allow_writes = ctx.allow_writes
+        self._model: Optional[str] = None
+        self._resume: Optional[str] = None
+        self._lock = asyncio.Lock()
+        self._mcp = SciqlopMcpServer(
+            self._tools, self._gated_names,
+            is_write_allowed=lambda: self._allow_writes,
+            confirm_cb=self._confirm_cb,
+        )
+        self._proc: Optional[asyncio.subprocess.Process] = None
+        self._conn = None
+        self._session_id: Optional[str] = None
+        self._updates: Optional[asyncio.Queue] = None
+        self._slash_commands: List[str] = []
+
+    # ------------------------------------------------------------------ ACP
+
+    async def _ensure_connection(self):
+        if self._conn is not None:
+            return
+        mcp_url = await self._mcp.start()
+        self._mcp_servers = [HttpMcpServer(
+            name="sciqlop", url=mcp_url, type="http", headers=[],
+        )]
+        self._proc = await asyncio.create_subprocess_exec(
+            "kimi", "acp",
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        self._conn = acp.connect_to_agent(
+            _SciqlopAcpClient(self), self._proc.stdin, self._proc.stdout,
+        )
+        await self._conn.initialize(
+            protocol_version=acp.PROTOCOL_VERSION,
+            client_capabilities=ClientCapabilities(
+                fs=FileSystemCapabilities(read_text_file=False, write_text_file=False),
+                terminal=False,
+            ),
+            client_info=Implementation(name="sciqlop", title="SciQLop", version="1.0"),
+        )
+
+    async def _apply_model(self) -> None:
+        if (self._model and self._conn is not None
+                and self._session_id is not None):
+            await self._conn.set_config_option(
+                session_id=self._session_id, config_id="model", value=self._model,
+            )
+
+    async def _ensure_session(self):
+        if self._session_id is not None:
+            return
+        await self._ensure_connection()
+        if self._resume:
+            await self._conn.resume_session(
+                cwd=str(_sessions.current_workspace_dir()),
+                session_id=self._resume,
+                mcp_servers=self._mcp_servers,
+            )
+            self._session_id = self._resume
+            self._resume = None
+        else:
+            resp = await self._conn.new_session(
+                cwd=str(_sessions.current_workspace_dir()),
+                mcp_servers=self._mcp_servers,
+            )
+            self._session_id = resp.session_id
+        await self._apply_model()
+
+    def _on_update(self, update) -> None:
+        if isinstance(update, AvailableCommandsUpdate):
+            self._slash_commands = [
+                "/" + c.name.lstrip("/") for c in update.available_commands
+            ]
+            return
+        queue = self._updates
+        if queue is not None:
+            queue.put_nowait(update)
+
+    async def _decide_permission(self, options, tool_call):
+        """Answer Kimi's permission prompts.
+
+        Our MCP tools: non-gated ones auto-approve; gated ones defer to the
+        dock's confirm dialog when writes are enabled, else reject (the same
+        gate also runs inside the tool handler — this layer just stops the
+        call earlier). Kimi's own built-in tools (shell, file edits, …) are
+        always rejected: the embedded chat acts on SciQLop only.
+        """
+        short = str(getattr(tool_call, "title", "") or "").split("__")[-1]
+        if short in self._tool_names:
+            if short not in self._gated_names:
+                return _permission_answer(options, allow=True)
+            if not self._allow_writes or self._confirm_cb is None:
+                return _permission_answer(options, allow=False)
+            try:
+                allowed = await self._confirm_cb(
+                    short, _raw_input_dict(getattr(tool_call, "raw_input", None)))
+            except Exception:
+                allowed = False
+            return _permission_answer(options, allow=allowed)
+        return _permission_answer(options, allow=False)
+
+    # ------------------------------------------------------------- protocol
+
+    async def ask(
+        self, prompt: str, image_paths: Optional[List[str]] = None
+    ) -> AsyncIterator[StreamBlock]:
+        async with self._lock:
+            await self._ensure_session()
+            queue: asyncio.Queue = asyncio.Queue()
+            self._updates = queue
+            blocks = [acp_helpers.text_block(prompt or "")]
+            for path in image_paths or []:
+                try:
+                    data = base64.b64encode(Path(path).read_bytes()).decode("ascii")
+                except OSError:
+                    continue
+                blocks.append(acp_helpers.image_block(data, _mime_for(path)))
+            prompt_task = asyncio.create_task(self._conn.prompt(
+                session_id=self._session_id, prompt=blocks,
+            ))
+            prompt_task.add_done_callback(lambda _t: queue.put_nowait(None))
+            stream = _AcpStream(self._tempdir)
+            try:
+                while True:
+                    update = await queue.get()
+                    if update is None:  # prompt response arrived; turn is over
+                        break
+                    for block in stream.feed(update):
+                        if block is not None:
+                            yield block
+                for block in stream.flush():
+                    if block is not None:
+                        yield block
+                # propagate a protocol-level failure as an exception the dock
+                # renders as an error message
+                await prompt_task
+            finally:
+                self._updates = None
+
+    async def reset(self) -> None:
+        async with self._lock:
+            if self._conn is not None:
+                resp = await self._conn.new_session(
+                    cwd=str(_sessions.current_workspace_dir()),
+                    mcp_servers=self._mcp_servers,
+                )
+                self._session_id = resp.session_id
+            self._resume = None
+
+    async def cancel(self) -> None:
+        # session/cancel is a notification; the in-flight prompt request then
+        # resolves with stopReason 'cancelled', ending ask()'s stream.
+        conn = self._conn
+        if conn is not None and self._session_id is not None:
+            await conn.cancel(session_id=self._session_id)
+
+    async def resume(self, session_id: str) -> None:
+        async with self._lock:
+            self._session_id = None
+            self._resume = session_id
+
+    async def set_model(self, model: Optional[str]) -> None:
+        async with self._lock:
+            self._model = model
+            await self._apply_model()
+
+    def set_allow_writes(self, allow: bool) -> None:
+        self._allow_writes = allow
+
+    async def list_slash_commands(self) -> List[str]:
+        return list(self._slash_commands)
+
+    def list_sessions(self) -> List[SessionEntry]:
+        return _sessions.list_sessions()
+
+    def load_session(self, session_id: str, image_tempdir: Path) -> List[ChatMessage]:
+        return _sessions.load_session_messages(session_id, image_tempdir=image_tempdir)
+
+    def current_session_id(self) -> Optional[str]:
+        return self._session_id
+
+    # -------------------------------------------------------------- teardown
+
+    async def _disconnect(self) -> None:
+        if self._conn is not None:
+            try:
+                await self._conn.close()
+            except Exception:
+                pass
+            self._conn = None
+        self._session_id = None
+        if self._proc is not None:
+            try:
+                self._proc.kill()
+            except ProcessLookupError:
+                pass
+            try:
+                await asyncio.wait_for(self._proc.wait(), timeout=5)
+            except Exception:
+                pass
+            self._proc = None
+        await self._mcp.stop()
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        await self._disconnect()
+
+
+def _permission_answer(options, allow: bool) -> "RequestPermissionResponse":
+    """Pick the best-matching option id (once over always) for an allow/deny."""
+    from acp.schema import AllowedOutcome, DeniedOutcome
+
+    wanted = ("allow_once", "allow_always") if allow else ("reject_once", "reject_always")
+    ids = {getattr(o, "kind", None): getattr(o, "option_id", None) for o in options or []}
+    for kind in wanted:
+        if ids.get(kind):
+            return RequestPermissionResponse(
+                outcome=AllowedOutcome(outcome="selected", option_id=ids[kind]))
+    if ids:
+        return RequestPermissionResponse(
+            outcome=AllowedOutcome(
+                outcome="selected", option_id=next(iter(ids.values()))))
+    # No options to pick from: cancel the request (agent treats it as denied).
+    return RequestPermissionResponse(outcome=DeniedOutcome(outcome="cancelled"))
 
 
 def _mime_for(path: str) -> str:
@@ -320,294 +570,3 @@ def _mime_for(path: str) -> str:
         ".gif": "image/gif",
         ".webp": "image/webp",
     }.get(suffix, "image/png")
-
-
-def _build_user_input(prompt: str, image_paths: Optional[List[str]]):
-    if not image_paths:
-        return prompt
-    parts = [TextPart(text=prompt)]
-    for path in image_paths:
-        try:
-            data = base64.b64encode(Path(path).read_bytes()).decode("ascii")
-        except OSError:
-            continue
-        parts.append(ImageURLPart(
-            image_url=ImageURLPart.ImageURL(url=f"data:{_mime_for(path)};base64,{data}")
-        ))
-    return parts if len(parts) > 1 else prompt
-
-
-class _KimiStream:
-    """Translate kimi-agent-sdk wire messages into SciQLop chat StreamBlocks.
-
-    The wire stream already emits incremental TextPart/ThinkPart deltas
-    (unlike opencode's accumulated snapshots), so deltas forward directly as
-    incomplete blocks. A block is closed when the other kind interrupts it,
-    a tool call arrives, or the turn ends. ToolCall yields the activity
-    block; ToolResult yields a result-only activity block that the dock
-    merges into the matching call by tool_use_id, plus ImageBlocks for any
-    inline screenshots.
-    """
-
-    def __init__(self, tempdir: Path):
-        self._tempdir = tempdir
-        self._open: Optional[type] = None  # TextBlock | ThinkingBlock | None
-
-    def feed(self, msg) -> Iterator[StreamBlock]:
-        if isinstance(msg, TextPart):
-            yield from self._switch(TextBlock)
-            yield TextBlock(text=msg.text, complete=False)
-        elif isinstance(msg, ThinkPart):
-            yield from self._switch(ThinkingBlock)
-            yield ThinkingBlock(text=msg.think, complete=False)
-        elif isinstance(msg, ToolCall):
-            yield from self._close()
-            fn = msg.function
-            yield ToolActivityBlock(
-                tool_name=getattr(fn, "name", "") or "",
-                tool_input=_sessions.parse_tool_args(getattr(fn, "arguments", None)),
-                tool_use_id=msg.id or "",
-            )
-        elif isinstance(msg, ToolResult):
-            text, images = _sessions.split_tool_output(msg.return_value)
-            for url in images:
-                mime, data = _sessions.parse_data_uri(url)
-                if not data:
-                    continue
-                path = write_b64_image(data, mime or "image/png", self._tempdir, prefix="tool")
-                if path:
-                    yield ImageBlock(path=path)
-            yield ToolActivityBlock(tool_use_id=msg.tool_call_id or "", result=text)
-        elif isinstance(msg, TurnEnd):
-            yield from self._close()
-
-    def flush(self) -> Iterator[StreamBlock]:
-        yield from self._close()
-
-    def _switch(self, kind: type) -> Iterator[StreamBlock]:
-        if self._open is not None and self._open is not kind:
-            yield from self._close()
-        self._open = kind
-
-    def _close(self) -> Iterator[StreamBlock]:
-        if self._open is not None:
-            yield self._open(text="", complete=True)
-            self._open = None
-
-
-class KimiBackend:
-    display_name = "Kimi"
-    model_choices: List[tuple[str, Optional[str]]] = list(_DEFAULT_MODEL_CHOICES)
-    supports_sessions = True
-
-    def __init__(self, ctx: BackendContext):
-        if not _SDK_AVAILABLE:
-            raise RuntimeError(f"kimi-agent-sdk not importable: {_SDK_IMPORT_ERROR}")
-        self._main_window = ctx.main_window
-        self._tools = list(ctx.tools)
-        self._gated_names = {t["name"] for t in ctx.tools if t.get("gated")}
-        self._tempdir = Path(ctx.tempdir)
-        self._tempdir.mkdir(parents=True, exist_ok=True)
-        self._confirm_cb = ctx.confirm_cb
-        self._allow_writes = ctx.allow_writes
-        self._model: Optional[str] = None
-        self._resume: Optional[str] = None
-        self._session: Optional[Session] = None
-        self._lock = asyncio.Lock()
-
-    def _check_config(self) -> None:
-        """Fail with an actionable message when no provider is set up.
-
-        Called lazily from `_ensure_session` (not `__init__`) so the plugin
-        still loads and the dock stays usable when auth is missing — the
-        error then surfaces as a chat error message on the first prompt,
-        which the dock renders, instead of a plugin-load failure.
-
-        The SDK reads the Python Kimi CLI config (~/.kimi/config.toml), not
-        the TypeScript Kimi Code one (~/.kimi-code) — a user logged into the
-        latter still needs credentials here, either from SciQLop settings or
-        from the CLI config.
-        """
-        import os
-
-        from .settings import KimiSettings
-
-        if KimiSettings().api_key:
-            return
-        try:
-            from kimi_cli.config import load_config
-            cfg = load_config()
-        except Exception:
-            return  # let Session.create surface config problems verbatim
-        if not cfg.providers and not os.environ.get("KIMI_API_KEY"):
-            raise RuntimeError(
-                "No Kimi API key configured — set it in "
-                "Settings → Plugins → Kimi, or via the KIMI_API_KEY env var, "
-                "or add a provider to ~/.kimi/config.toml."
-            )
-
-    async def _ensure_session(self) -> Session:
-        if self._session is not None:
-            return self._session
-        self._check_config()
-        config = _settings_config()
-        for tool in self._tools:
-            _register_tool_class(self, tool)
-        agent_file = self._write_agent_files()
-        work_dir = KaosPath(str(_sessions.current_workspace_dir()))
-        session = None
-        if self._resume:
-            session = await Session.resume(
-                work_dir, self._resume,
-                config=config,
-                agent_file=agent_file,
-                model=self._model or None,
-            )
-        if session is None:
-            session = await Session.create(
-                work_dir,
-                config=config,
-                agent_file=agent_file,
-                model=self._model or None,
-            )
-        self._session = session
-        return session
-
-    def _write_agent_files(self) -> Path:
-        """Generate the agent spec the SDK loads: only SciQLop tools, with the
-        SciQLop system prompt. kimi-cli renders system prompts as Jinja
-        templates; SYSTEM_PROMPT carries no template syntax, so it renders
-        verbatim."""
-        system_md = self._tempdir / "kimi_agent_system.md"
-        system_md.write_text(SYSTEM_PROMPT, encoding="utf-8")
-        tool_lines = "\n".join(
-            f'    - "{__name__}:{_tool_class_name(t["name"])}"' for t in self._tools
-        )
-        agent_yaml = self._tempdir / "kimi_agent.yaml"
-        agent_yaml.write_text(
-            "version: 1\n"
-            "agent:\n"
-            '  name: "sciqlop"\n'
-            "  system_prompt_path: ./kimi_agent_system.md\n"
-            "  tools:\n"
-            f"{tool_lines}\n",
-            encoding="utf-8",
-        )
-        return agent_yaml
-
-    async def ask(
-        self, prompt: str, image_paths: Optional[List[str]] = None
-    ):
-        async with self._lock:
-            session = await self._ensure_session()
-            stream = _KimiStream(self._tempdir)
-            try:
-                async for msg in session.prompt(_build_user_input(prompt, image_paths)):
-                    if isinstance(msg, ApprovalRequest):
-                        # Custom tools never emit these (approval is a tool's
-                        # own decision in kimi-cli), but resolve any stray one
-                        # so the turn can never block on it.
-                        msg.resolve(await self._decide_approval(msg))
-                        continue
-                    for block in stream.feed(msg):
-                        yield block
-            except RunCancelled:
-                pass
-            for block in stream.flush():
-                yield block
-
-    async def _decide_approval(self, req) -> str:
-        sender = req.sender or ""
-        if sender not in self._gated_names:
-            return "approve"
-        if not self._allow_writes or self._confirm_cb is None:
-            return "reject"
-        try:
-            allowed = await self._confirm_cb(
-                sender, {"action": req.action, "description": req.description}
-            )
-        except Exception:
-            return "reject"
-        return "approve" if allowed else "reject"
-
-    async def _run_tool(self, tool: dict, params):
-        """Tool body invoked by the kimi runtime for a dynamic CallableTool2.
-
-        Gating lives here (Albert pattern): write tools are refused outright
-        when writes are disabled, and otherwise confirmed per call with the
-        user through the dock's confirm callback.
-        """
-        name = tool["name"]
-        args = params.model_dump(exclude_none=True)
-        if name in self._gated_names:
-            if not self._allow_writes:
-                return ToolError(
-                    output="",
-                    message=(
-                        "write actions are disabled — toggle 'Allow write "
-                        "actions' in the SciQLop chat dock"
-                    ),
-                    brief="Writes disabled",
-                )
-            if self._confirm_cb is not None:
-                try:
-                    allowed = await self._confirm_cb(name, args)
-                except Exception as e:
-                    return ToolError(output="", message=f"approval callback failed: {e}",
-                                     brief="Approval failed")
-                if not allowed:
-                    return ToolError(output="", message="user denied the tool call",
-                                     brief="Denied by user")
-        try:
-            result = tool["handler"](args)
-            if asyncio.iscoroutine(result):
-                result = await result
-            return ToolOk(output=_to_output(result))
-        except Exception as e:
-            return ToolError(output="", message=f"{type(e).__name__}: {e}",
-                             brief="Tool call failed")
-
-    async def reset(self) -> None:
-        async with self._lock:
-            await self._close_session()
-            self._resume = None
-
-    async def cancel(self) -> None:
-        # Session.cancel is a synchronous signal; the prompt stream then
-        # raises RunCancelled, which ask() swallows after flushing.
-        session = self._session
-        if session is not None:
-            session.cancel()
-
-    async def resume(self, session_id: str) -> None:
-        async with self._lock:
-            await self._close_session()
-            self._resume = session_id
-
-    async def _close_session(self) -> None:
-        if self._session is None:
-            return
-        try:
-            await self._session.close()
-        except Exception:
-            pass
-        self._session = None
-
-    async def set_model(self, model: Optional[str]) -> None:
-        async with self._lock:
-            self._model = model
-            # The SDK binds the model at session creation; reconnect on next ask.
-            await self._close_session()
-
-    def set_allow_writes(self, allow: bool) -> None:
-        self._allow_writes = allow
-
-    async def list_slash_commands(self) -> List[str]:
-        # kimi-agent-sdk has no API to enumerate slash commands.
-        return []
-
-    def list_sessions(self) -> List[SessionEntry]:
-        return _sessions.list_sessions()
-
-    def load_session(self, session_id: str, image_tempdir: Path) -> List[ChatMessage]:
-        return _sessions.load_session_messages(session_id, image_tempdir=image_tempdir)

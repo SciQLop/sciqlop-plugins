@@ -4,10 +4,15 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "sciqlop-kimi"
-version = "0.1.0"
-description = "Kimi chat dock for SciQLop (powered by the Kimi CLI runtime via kimi-agent-sdk)"
+version = "0.2.0"
+description = "Kimi chat dock for SciQLop (drives the Kimi Code CLI over ACP)"
 requires-python = ">=3.10"
-dependencies = ["SciQLop>=0.12.0,<0.14.0", "kimi-agent-sdk>=0.0.5"]
+dependencies = [
+    "SciQLop>=0.12.0,<0.14.0",
+    "agent-client-protocol>=0.12.0",
+    "mcp>=1.16.0",
+    "uvicorn>=0.30.0",
+]
 
 [project.entry-points."sciqlop.plugins"]
 sciqlop_kimi = "sciqlop_kimi"

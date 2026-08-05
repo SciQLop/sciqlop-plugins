@@ -1,11 +1,11 @@
-"""`_KimiStream` converts kimi-agent-sdk wire messages into the StreamBlocks
-the SciQLop chat consumer expects: text/think deltas forwarded as incomplete
-blocks, closed on interruption or turn end; tool calls and results mapped to
-ToolActivityBlocks correlated by tool_use_id.
+"""`_AcpStream` converts ACP session updates into the StreamBlocks the SciQLop
+chat consumer expects: text/thought chunks forwarded as incomplete blocks,
+closed on interruption or turn end; tool calls and progress mapped to
+ToolActivityBlocks correlated by tool_call_id.
 
 Block classes are monkeypatched to lightweight dataclasses because the real
 ones live in SciQLop's chat package, which may be stubbed in this test env.
-Wire message constructors come from kimi_agent_sdk (skipped if absent).
+Update objects come from the `acp` package (skipped if absent).
 """
 from dataclasses import dataclass, field
 
@@ -49,17 +49,30 @@ def _patch_blocks(monkeypatch):
 
 
 def _stream(bk, tmp_path):
-    return bk._KimiStream(tmp_path)
+    return bk._AcpStream(tmp_path)
 
 
-def test_text_deltas_forward_and_close_on_turn_end(monkeypatch, tmp_path):
-    sdk = pytest.importorskip("kimi_agent_sdk")
+def _text_chunk(text):
+    from acp.helpers import update_agent_message_text
+    return update_agent_message_text(text)
+
+
+def _thought_chunk(text):
+    from acp.helpers import update_agent_thought_text
+    return update_agent_thought_text(text)
+
+
+def _feed(stream, update):
+    return [b for b in stream.feed(update) if b is not None]
+
+
+def test_text_chunks_forward_and_close_on_flush(monkeypatch, tmp_path):
+    pytest.importorskip("acp")
     bk = _patch_blocks(monkeypatch)
     stream = _stream(bk, tmp_path)
-    out = []
-    for delta in ["Hello", " world"]:
-        out.extend(stream.feed(sdk.TextPart(text=delta)))
-    out.extend(stream.feed(sdk.TurnEnd()))
+    out = _feed(stream, _text_chunk("Hello"))
+    out += _feed(stream, _text_chunk(" world"))
+    out += [b for b in stream.flush() if b is not None]
     assert out == [
         _Text(text="Hello", complete=False),
         _Text(text=" world", complete=False),
@@ -67,13 +80,13 @@ def test_text_deltas_forward_and_close_on_turn_end(monkeypatch, tmp_path):
     ]
 
 
-def test_think_and_text_interleave_close_each_other(monkeypatch, tmp_path):
-    sdk = pytest.importorskip("kimi_agent_sdk")
+def test_thought_and_text_interleave_close_each_other(monkeypatch, tmp_path):
+    pytest.importorskip("acp")
     bk = _patch_blocks(monkeypatch)
     stream = _stream(bk, tmp_path)
-    out = list(stream.feed(sdk.ThinkPart(think="hmm")))
-    out += list(stream.feed(sdk.TextPart(text="answer")))
-    out += list(stream.flush())
+    out = _feed(stream, _thought_chunk("hmm"))
+    out += _feed(stream, _text_chunk("answer"))
+    out += [b for b in stream.flush() if b is not None]
     assert out == [
         _Think(text="hmm", complete=False),
         _Think(text="", complete=True),
@@ -82,66 +95,58 @@ def test_think_and_text_interleave_close_each_other(monkeypatch, tmp_path):
     ]
 
 
-def test_tool_call_closes_text_and_emits_activity(monkeypatch, tmp_path):
-    sdk = pytest.importorskip("kimi_agent_sdk")
+def test_tool_call_start_closes_text_and_emits_activity(monkeypatch, tmp_path):
+    helpers = pytest.importorskip("acp.helpers")
     bk = _patch_blocks(monkeypatch)
     stream = _stream(bk, tmp_path)
-    out = list(stream.feed(sdk.TextPart(text="Working")))
-    out += list(stream.feed(sdk.ToolCall(
-        id="t1",
-        function=sdk.ToolCall.FunctionBody(
-            name="sciqlop_screenshot_panel", arguments='{"name": "P1"}'
-        ),
-    )))
+    out = _feed(stream, _text_chunk("Working"))
+    out += _feed(stream, helpers.start_tool_call(
+        "tc1", "sciqlop_screenshot_panel", raw_input={"name": "P1"},
+    ))
     assert out == [
         _Text(text="Working", complete=False),
         _Text(text="", complete=True),
         _Tool(tool_name="sciqlop_screenshot_panel",
-              tool_input={"name": "P1"}, result=None, tool_use_id="t1"),
+              tool_input={"name": "P1"}, result=None, tool_use_id="tc1"),
     ]
 
 
-def test_tool_result_emits_result_only_block(monkeypatch, tmp_path):
-    sdk = pytest.importorskip("kimi_agent_sdk")
+def test_tool_progress_emits_result_only_block(monkeypatch, tmp_path):
+    helpers = pytest.importorskip("acp.helpers")
     bk = _patch_blocks(monkeypatch)
     stream = _stream(bk, tmp_path)
-    out = list(stream.feed(sdk.ToolResult(
-        tool_call_id="t1",
-        return_value=sdk.ToolOk(output="panel PNG captured"),
-    )))
-    assert out == [_Tool(tool_use_id="t1", result="panel PNG captured")]
+    out = _feed(stream, helpers.update_tool_call(
+        "tc1", status="completed", raw_output="panel PNG captured",
+    ))
+    assert out == [_Tool(tool_use_id="tc1", result="panel PNG captured")]
 
 
-def test_tool_result_with_image_writes_image_block(monkeypatch, tmp_path):
-    sdk = pytest.importorskip("kimi_agent_sdk")
-    from kosong.message import ImageURLPart
+def test_tool_progress_with_image_writes_image_block(monkeypatch, tmp_path):
+    helpers = pytest.importorskip("acp.helpers")
     bk = _patch_blocks(monkeypatch)
     monkeypatch.setattr(bk, "write_b64_image", lambda *a, **k: "/tmp/fake.png")
     stream = _stream(bk, tmp_path)
-    out = list(stream.feed(sdk.ToolResult(
-        tool_call_id="t1",
-        return_value=sdk.ToolOk(output=[
-            sdk.TextPart(text="screenshot"),
-            ImageURLPart(image_url=ImageURLPart.ImageURL(url="data:image/png;base64,AAAA")),
-        ]),
-    )))
+    out = _feed(stream, helpers.update_tool_call(
+        "tc1",
+        content=[helpers.tool_content(helpers.text_block("screenshot")),
+                 helpers.tool_content(helpers.image_block("QUJD", "image/png"))],
+    ))
     assert _Image(path="/tmp/fake.png") in out
-    assert _Tool(tool_use_id="t1", result="screenshot") in out
+    assert _Tool(tool_use_id="tc1", result="screenshot") in out
 
 
-def test_flush_is_idempotent(monkeypatch, tmp_path):
-    sdk = pytest.importorskip("kimi_agent_sdk")
+def test_untracked_updates_emit_nothing(monkeypatch, tmp_path):
+    helpers = pytest.importorskip("acp.helpers")
     bk = _patch_blocks(monkeypatch)
     stream = _stream(bk, tmp_path)
-    list(stream.feed(sdk.TextPart(text="partial")))
-    assert list(stream.flush()) == [_Text(text="", complete=True)]
-    assert list(stream.flush()) == []
+    assert _feed(stream, helpers.update_current_mode("yolo")) == []
+    assert _feed(stream, helpers.update_plan([])) == []
 
 
 def test_end_to_end_against_consumer_contract(monkeypatch, tmp_path):
     """The translator's deltas, fed through the dock's text append-merge logic,
     reconstruct the final text with no duplication."""
-    sdk = pytest.importorskip("kimi_agent_sdk")
+    pytest.importorskip("acp")
     bk = _patch_blocks(monkeypatch)
 
     def append_block(blocks, block):  # mirrors AgentChatDock._append_block (text path)
@@ -156,10 +161,11 @@ def test_end_to_end_against_consumer_contract(monkeypatch, tmp_path):
     stream = _stream(bk, tmp_path)
     rendered = []
     for delta in ["Hello", " world", ", plotting now."]:
-        for b in stream.feed(sdk.TextPart(text=delta)):
+        for b in _feed(stream, _text_chunk(delta)):
             append_block(rendered, b)
-    for b in stream.feed(sdk.TurnEnd()):
-        append_block(rendered, b)
+    for b in stream.flush():
+        if b is not None:
+            append_block(rendered, b)
     text = "".join(b.text for b in rendered if isinstance(b, _Text))
     assert text == "Hello world, plotting now."
     assert sum(1 for b in rendered if isinstance(b, _Text)) == 1
