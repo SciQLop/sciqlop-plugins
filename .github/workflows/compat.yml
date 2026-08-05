@@ -32,6 +32,7 @@ jobs:
           - { dir: sciqlop_albert,   pkg: sciqlop_albert }
           - { dir: sciqlop_claude,   pkg: sciqlop_claude }
           - { dir: sciqlop_copilot,  pkg: sciqlop_copilot }
+          - { dir: sciqlop_kimi,     pkg: sciqlop_kimi }
           - { dir: sciqlop_msa,      pkg: sciqlop_msa }
           - { dir: sciqlop_radio,    pkg: sciqlop_radio }
           - { dir: cdf_workbench,    pkg: cdf_workbench }
