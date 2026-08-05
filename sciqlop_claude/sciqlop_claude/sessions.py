@@ -47,6 +47,7 @@ _SKIP_PREFIXES = (
     "<system-reminder",
     "<session-start-hook",
     "<user-prompt-submit-hook",
+    "<task-notification",
     "Caveat:",
 )
 
@@ -195,7 +196,12 @@ def load_session_messages(
     image_tempdir: Optional[Path] = None,
 ):
     """Replay a session's JSONL into a list of `ChatMessage` matching the live UI."""
-    from SciQLop.components.agents.chat import ChatMessage, ImageBlock, TextBlock
+    from SciQLop.components.agents.chat import (
+        ChatMessage,
+        ImageBlock,
+        TextBlock,
+        ToolActivityBlock,
+    )
 
     path = _transcript_path(session_id, cwd)
     tempdir = Path(image_tempdir) if image_tempdir else None
@@ -206,13 +212,15 @@ def load_session_messages(
     try:
         with path.open("r", encoding="utf-8", errors="replace") as f:
             for line in f:
-                _append_record(line, messages, tempdir, ChatMessage, TextBlock, ImageBlock)
+                _append_record(line, messages, tempdir, ChatMessage, TextBlock,
+                               ImageBlock, ToolActivityBlock)
     except OSError:
         return []
     return [m for m in messages if m.blocks]
 
 
-def _append_record(line, messages, tempdir, ChatMessage, TextBlock, ImageBlock):
+def _append_record(line, messages, tempdir, ChatMessage, TextBlock, ImageBlock,
+                   ToolActivityBlock):
     try:
         record = json.loads(line)
     except ValueError:
@@ -223,15 +231,22 @@ def _append_record(line, messages, tempdir, ChatMessage, TextBlock, ImageBlock):
     if record.get("isSidechain") or record.get("isMeta"):
         return
     content = (record.get("message") or {}).get("content")
-    blocks = _render_blocks(content, tempdir, TextBlock, ImageBlock)
+    if kind == "user" and _is_tool_result_only(content):
+        # Handled before the empty-blocks early return: a text-only tool
+        # result renders no blocks of its own but still fills the matching
+        # activity block's result summary.
+        target = _last_assistant(messages)
+        if target is not None:
+            target.blocks.extend(
+                _render_blocks(content, tempdir, TextBlock, ImageBlock,
+                               ToolActivityBlock))
+            _attach_tool_results(content, target, ToolActivityBlock)
+            return
+    blocks = _render_blocks(content, tempdir, TextBlock, ImageBlock, ToolActivityBlock)
     if not blocks:
         return
 
     if kind == "user" and _is_tool_result_only(content):
-        target = _last_assistant(messages)
-        if target is not None:
-            target.blocks.extend(blocks)
-            return
         messages.append(ChatMessage(role="assistant", blocks=blocks, done=True))
         return
 
@@ -244,7 +259,7 @@ def _append_record(line, messages, tempdir, ChatMessage, TextBlock, ImageBlock):
     messages.append(ChatMessage(role=kind, blocks=blocks, done=True))
 
 
-def _render_blocks(content, tempdir, TextBlock, ImageBlock):
+def _render_blocks(content, tempdir, TextBlock, ImageBlock, ToolActivityBlock):
     if isinstance(content, str):
         return [TextBlock(text=content)] if content.strip() else []
     if not isinstance(content, list):
@@ -262,6 +277,12 @@ def _render_blocks(content, tempdir, TextBlock, ImageBlock):
             text = block.get("thinking") or ""
             if text.strip():
                 blocks.append(ThinkingBlock(text=text))
+        elif btype == "tool_use":
+            blocks.append(ToolActivityBlock(
+                tool_name=str(block.get("name") or "").split("__")[-1],
+                tool_input=block.get("input") or {},
+                tool_use_id=block.get("id") or "",
+            ))
         elif btype == "tool_result":
             blocks.extend(_tool_result_images(block, tempdir, ImageBlock))
         elif btype == "image":
@@ -269,6 +290,49 @@ def _render_blocks(content, tempdir, TextBlock, ImageBlock):
             if path:
                 blocks.append(ImageBlock(path=path))
     return blocks
+
+
+def _attach_tool_results(content, message, ToolActivityBlock) -> None:
+    """Fill in each rendered tool call's result summary, correlated by id —
+    the replay counterpart of the dock's live result-only block merge."""
+    for block in content:
+        tool_use_id = block.get("tool_use_id") or ""
+        if not tool_use_id:
+            continue
+        summary = _tool_result_summary(block)
+        if not summary:
+            continue
+        match = next(
+            (b for b in message.blocks
+             if isinstance(b, ToolActivityBlock) and b.tool_use_id == tool_use_id),
+            None,
+        )
+        if match is not None:
+            match.result = summary
+
+
+def _tool_result_summary(block: dict) -> str:
+    """A short one-line summary of a transcript tool_result, for the activity log."""
+    content = block.get("content")
+    if isinstance(content, str):
+        text = content
+    elif isinstance(content, list):
+        parts = []
+        for item in content:
+            if isinstance(item, dict):
+                if item.get("type") == "text":
+                    parts.append(str(item.get("text", "")))
+                elif item.get("type") == "image":
+                    parts.append("[image]")
+            elif isinstance(item, str):
+                parts.append(item)
+        text = " ".join(parts)
+    else:
+        text = ""
+    text = " ".join(text.split())
+    if block.get("is_error") and text:
+        text = f"error: {text}"
+    return text[:200]
 
 
 def _is_tool_result_only(content) -> bool:
