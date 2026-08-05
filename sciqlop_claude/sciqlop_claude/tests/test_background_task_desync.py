@@ -54,9 +54,16 @@ class _TaskNotificationMessage:
         self.status = status
 
 
+class _InitMessage:
+    """SystemMessage(subtype='init') stand-in — the CLI turn boundary marker."""
+
+    subtype = "init"
+
+
 # The backend keys active-task tracking on ``type(message).__name__``.
 _TaskStartedMessage.__name__ = "TaskStartedMessage"
 _TaskNotificationMessage.__name__ = "TaskNotificationMessage"
+_InitMessage.__name__ = "SystemMessage"
 
 
 class _SharedStreamClient:
@@ -192,3 +199,78 @@ def test_slow_background_task_is_not_abandoned_mid_turn(tmp_path):
     assert "BACKGROUND RESULT" in first          # still attributed to the spawning turn
     assert "ANSWER TO NEXT PROMPT" in second
     assert "BACKGROUND RESULT" not in second     # did not leak forward
+
+
+def _phantom_result():
+    """The bookkeeping ResultMessage a fresh client emits when it reconciles a
+    stale background task on resume: success, no model call, no answer."""
+    return ResultMessage(subtype="success", duration_ms=100, duration_api_ms=0,
+                         is_error=False, num_turns=0, session_id="s")
+
+
+def test_stale_task_phantom_result_does_not_close_the_turn(tmp_path):
+    """Stream shape captured from the real CLI (SDK 0.2.128) on resume with a
+    stale background task:
+
+        TaskNotification(stopped, unknown task) -> init -> phantom ResultMessage
+        -> init -> AssistantMessage(real answer) -> ResultMessage
+
+    The phantom result carries no AssistantMessage and no model work. Ending
+    the turn there shows an empty answer and shifts every later turn by one —
+    the persistent one-turn lag. A success result with no AssistantMessage
+    since the last init must not close the turn (slash commands like /clear,
+    /cost, /context were verified to always carry one)."""
+    backend = ClaudeBackend(_ctx(tmp_path))
+    backend._client = _SharedStreamClient([
+        _TaskNotificationMessage("stale1", "stopped"),
+        _InitMessage(),
+        _phantom_result(),                      # bookkeeping — NOT the answer
+        _InitMessage(),
+        _assistant("REAL ANSWER"),
+        _result(),
+        _assistant("ANSWER TO NEXT PROMPT"),
+        _result(),
+    ])
+
+    async def turn(prompt):
+        out = []
+        async for block in backend.ask(prompt):
+            out.append(getattr(block, "text", ""))
+        return "".join(out)
+
+    async def scenario():
+        return await turn("first after resume"), await turn("next")
+
+    first, second = asyncio.run(scenario())
+
+    assert "REAL ANSWER" in first               # not the empty phantom answer
+    assert "ANSWER TO NEXT PROMPT" in second
+    assert "REAL ANSWER" not in second          # no one-turn lag
+
+
+def test_content_free_slash_command_still_closes_its_turn(tmp_path):
+    """Guard the other side: a legit success turn with num_turns=0 (slash
+    command) DOES carry an AssistantMessage and must end normally."""
+    backend = ClaudeBackend(_ctx(tmp_path))
+    backend._client = _SharedStreamClient([
+        _InitMessage(),
+        _assistant("(no content)"),             # /clear's confirmation
+        _phantom_result(),                      # num_turns=0 success result
+        _assistant("ANSWER TO NEXT PROMPT"),
+        _result(),
+    ])
+
+    async def turn(prompt):
+        out = []
+        async for block in backend.ask(prompt):
+            out.append(getattr(block, "text", ""))
+        return "".join(out)
+
+    async def scenario():
+        return await turn("/clear"), await turn("next")
+
+    first, second = asyncio.run(scenario())
+
+    assert "(no content)" in first
+    assert "ANSWER TO NEXT PROMPT" in second
+    assert "(no content)" not in second

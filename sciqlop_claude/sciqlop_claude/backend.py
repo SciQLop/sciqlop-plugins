@@ -51,10 +51,9 @@ except Exception as e:  # pragma: no cover
     _SDK_IMPORT_ERROR = str(e)
 
 
-import logging as _logging  # DESYNC-PROBE (temporary instrumentation)
-from SciQLop.components.sciqlop_logging import getLogger as _getLogger  # DESYNC-PROBE
-_log = _getLogger("sciqlop_claude")  # DESYNC-PROBE
-_log.level = _logging.DEBUG  # DESYNC-PROBE: force-emit probe logs regardless of global level
+from SciQLop.components.sciqlop_logging import getLogger as _getLogger
+
+_log = _getLogger("sciqlop_claude")
 
 
 # claude_agent_sdk.types.EffortLevel, in ascending order. This is what the SDK
@@ -264,22 +263,6 @@ def _update_active_tasks(active: set, message) -> None:
             active.discard(getattr(message, "task_id", None))
 
 
-def _probe_log_message(seq: int, n: int, message) -> None:  # DESYNC-PROBE
-    mtype = type(message).__name__
-    if mtype == "ResultMessage":
-        _log.warning(
-            f"DESYNC-PROBE turn={seq} msg#{n} ResultMessage "
-            f"subtype={getattr(message, 'subtype', None)!r} "
-            f"is_error={getattr(message, 'is_error', None)!r} "
-            f"num_turns={getattr(message, 'num_turns', None)!r} "
-            f"session={getattr(message, 'session_id', None)!r}")
-    else:
-        content = getattr(message, "content", None)
-        kinds = ([type(b).__name__ for b in content]
-                 if isinstance(content, list) else None)
-        _log.warning(f"DESYNC-PROBE turn={seq} msg#{n} {mtype} blocks={kinds}")
-
-
 class ClaudeBackend:
     display_name = "Claude"
     model_choices: List[tuple[str, Optional[str]]] = list(_DEFAULT_MODEL_CHOICES)
@@ -349,14 +332,7 @@ class ClaudeBackend:
                 self._effort_dirty = False
             client = await self._ensure_client()
             await client.query(_build_user_stream(prompt, image_paths or []))
-            self._probe_seq = getattr(self, "_probe_seq", 0) + 1  # DESYNC-PROBE
-            _seq = self._probe_seq  # DESYNC-PROBE
-            _log.warning(  # DESYNC-PROBE
-                f"DESYNC-PROBE turn={_seq} START prompt={(prompt or '')[:80]!r}")
-            _consumed = 0  # DESYNC-PROBE
             async for message in self._receive_turn(client):
-                _consumed += 1  # DESYNC-PROBE
-                _probe_log_message(_seq, _consumed, message)  # DESYNC-PROBE
                 _mtype = type(message).__name__
                 if _mtype == "ResultMessage":
                     self._last_result = message
@@ -368,8 +344,6 @@ class ClaudeBackend:
                         self._rate_limits[kind] = info
                 for block in self._decode_message(message):
                     yield block
-            _log.warning(  # DESYNC-PROBE
-                f"DESYNC-PROBE turn={_seq} END consumed={_consumed}")
 
     async def _receive_turn(self, client) -> AsyncIterator:
         """Yield one turn's messages, keeping the turn open until every
@@ -389,18 +363,41 @@ class ClaudeBackend:
         than the one this loop exists to prevent. A stuck task is instead the
         user's job to interrupt via Stop / ``cancel()``, which works
         independently of this wait (it does not take ``self._lock``).
+
+        A second, subtler leak source: a fresh client that resumes a session
+        with a *stale* background task (the previous client was killed while it
+        ran) first reconciles that task on the stream — a
+        ``TaskNotificationMessage`` followed by a bookkeeping CLI turn: ``init``
+        then a ``ResultMessage`` with ``num_turns=0``, no cost and, crucially,
+        no ``AssistantMessage``. Ending our turn at that phantom result shows an
+        empty answer and pushes the real answer into the next turn — from then
+        on every turn shows the previous turn's answer. Verified against the
+        real CLI that legitimate content-free turns (slash commands such as
+        /clear, /cost, /context) always carry an AssistantMessage, so a
+        ``success`` result with no AssistantMessage since the last ``init`` is
+        never the answer to the user's prompt: keep reading.
         """
         active_tasks: set = set()
         messages = client.receive_messages()
+        assistant_seen = False  # since the last init (CLI turn boundary)
         while True:
             try:
                 message = await messages.__anext__()
             except StopAsyncIteration:
                 return
             _update_active_tasks(active_tasks, message)
+            mtype = type(message).__name__
+            if mtype == "AssistantMessage":
+                assistant_seen = True
+            elif (mtype == "SystemMessage"
+                  and getattr(message, "subtype", None) == "init"):
+                assistant_seen = False
             yield message
-            if type(message).__name__ == "ResultMessage" and not active_tasks:
-                return
+            if mtype == "ResultMessage" and not active_tasks:
+                if (getattr(message, "subtype", None) != "success"
+                        or assistant_seen):
+                    return
+                # phantom bookkeeping result — the real answer is still coming
 
     async def reset(self) -> None:
         async with self._lock:
