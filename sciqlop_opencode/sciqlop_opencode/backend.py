@@ -290,10 +290,18 @@ class _OpencodeStream:
     ToolActivityBlock each. Thinking is not separable here: the SDK flattens
     agent_thought_chunk into the same AssistantMessage/TextBlock channel as the
     answer, so it renders inline as text.
+
+    To avoid rendering text character-by-character (which causes visual
+    glitches and excessive markdown re-parsing), we buffer deltas and only emit
+    a TextBlock when the buffer ends at a natural break (whitespace, newline,
+    sentence boundary) or on flush/turn-end.
     """
+
+    _BREAK_CHARS = ("\n", " ", ".", ",", ";", ":", "!", "?", ")", "]", "}", '"', "'")
 
     def __init__(self):
         self._acc = ""  # text already emitted for the open text block
+        self._buf = ""  # buffered delta waiting for a natural break
         self._open = False  # an incomplete TextBlock is open in the consumer
 
     def feed(self, message) -> Iterator[StreamBlock]:
@@ -314,20 +322,61 @@ class _OpencodeStream:
                     yield from self._emit_text(text)
 
     def flush(self) -> Iterator[StreamBlock]:
+        yield from self._flush_buf()
         yield from self._close_text()
 
     def _emit_text(self, snapshot: str) -> Iterator[StreamBlock]:
-        if snapshot == self._acc:
+        if snapshot == self._acc + self._buf:
             return
         if not snapshot.startswith(self._acc):
             yield from self._close_text()  # buffer reset -> new block
-        delta = snapshot[len(self._acc) :]
-        self._acc = snapshot
-        self._open = True
-        yield TextBlock(text=delta, complete=False)
+        # New text since last emit (excluding what's already buffered)
+        new_text = snapshot[len(self._acc) + len(self._buf) :]
+        self._buf += new_text
+        # If buffer was empty before this delta, emit immediately (first chunk)
+        # to maintain the existing contract for simple cases. Otherwise, buffer
+        # until we hit a natural break character.
+        if not self._acc:
+            yield from self._flush_buf()
+        else:
+            yield from self._maybe_flush_buf()
+
+    def _maybe_flush_buf(self) -> Iterator[StreamBlock]:
+        """Emit buffer up to the last natural break character."""
+        if not self._buf:
+            return
+        # Find the last break character in the buffer
+        last_break = -1
+        for i, ch in enumerate(self._buf):
+            if ch in self._BREAK_CHARS:
+                last_break = i
+        # If buffer ends with a break, emit all of it
+        if last_break == len(self._buf) - 1:
+            to_emit = self._buf
+            self._buf = ""
+        elif last_break > 0:
+            # Emit up to and including the break
+            to_emit = self._buf[: last_break + 1]
+            self._buf = self._buf[last_break + 1 :]
+        else:
+            # No break yet, keep buffering
+            return
+        if to_emit:
+            self._acc += to_emit
+            self._open = True
+            yield TextBlock(text=to_emit, complete=False)
+
+    def _flush_buf(self) -> Iterator[StreamBlock]:
+        """Emit any remaining buffered text."""
+        if self._buf:
+            self._acc += self._buf
+            self._open = True
+            yield TextBlock(text=self._buf, complete=False)
+            self._buf = ""
 
     def _close_text(self) -> Iterator[StreamBlock]:
-        if self._open:
+        if self._open or self._buf:
+            self._buf = ""
             self._open = False
             self._acc = ""
             yield TextBlock(text="", complete=True)
