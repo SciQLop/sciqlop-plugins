@@ -18,6 +18,7 @@ from SciQLop.components.agents.chat import (
     TextBlock,
     write_b64_image,
 )
+from SciQLop.components.agents.settings import AgentWriteMode
 
 from .settings import AlbertSettings
 
@@ -168,7 +169,7 @@ class AlbertBackend:
         }
         self._gated_names = {t["name"] for t in ctx.tools if t.get("gated")}
         self._confirm_cb = ctx.confirm_cb
-        self._allow_writes = ctx.allow_writes
+        self._write_mode = ctx.write_mode
         self._tempdir = Path(ctx.tempdir)
         self._tempdir.mkdir(parents=True, exist_ok=True)
         self._model: Optional[str] = None
@@ -242,8 +243,12 @@ class AlbertBackend:
     async def set_model(self, model: Optional[str]) -> None:
         self._model = model
 
-    def set_allow_writes(self, allow: bool) -> None:
-        self._allow_writes = allow
+    def set_write_mode(self, mode: str) -> None:
+        self._write_mode = mode
+
+    @property
+    def _allow_writes(self) -> bool:
+        return self._write_mode not in (AgentWriteMode.NONE, AgentWriteMode.NONE.value)
 
     async def list_slash_commands(self) -> List[str]:
         return []
@@ -280,18 +285,23 @@ class AlbertBackend:
         images: List[ImageBlock] = []
 
         if name in self._gated_names:
-            if not self._allow_writes:
+            mode = self._write_mode
+            if mode == AgentWriteMode.NONE:
                 return (
-                    "write actions disabled — ask user to toggle 'Allow write actions'",
+                    "write actions disabled — ask user to enable write actions",
                     images,
                 )
-            if self._confirm_cb:
+            if mode == AgentWriteMode.YOLO:
+                pass  # auto-approved
+            elif self._confirm_cb:
                 try:
                     allowed = await self._confirm_cb(name, args)
                 except Exception as e:
                     return f"approval callback failed: {e}", images
                 if not allowed:
                     return "user denied the tool call", images
+            else:
+                return "no approval callback available", images
 
         handler = self._handlers.get(name)
         if handler is None:

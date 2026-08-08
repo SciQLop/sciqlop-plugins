@@ -10,7 +10,7 @@ requires-python = ">=3.10"
 dependencies = [
     "SciQLop>=0.13.0,<0.14.0",
     "agent-client-protocol>=0.12.0",
-    "mcp>=1.16.0",
+    "mcp>=1.19.0,<2",  # <1.19 mangles a CallToolResult from a call_tool handler; 2.0 drops the low-level decorators
     "uvicorn>=0.30.0",
 ]
 

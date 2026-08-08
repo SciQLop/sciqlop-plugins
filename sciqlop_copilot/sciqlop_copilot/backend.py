@@ -16,6 +16,7 @@ import httpx
 
 from SciQLop.components.agents import BackendContext, SessionEntry
 from SciQLop.components.agents.backend import StreamBlock
+from SciQLop.components.agents.settings import AgentWriteMode
 from SciQLop.components.agents.chat import (
     ChatMessage,
     ImageBlock,
@@ -114,7 +115,7 @@ class CopilotBackend:
         }
         self._gated_names = {t["name"] for t in ctx.tools if t.get("gated")}
         self._confirm_cb = ctx.confirm_cb
-        self._allow_writes = ctx.allow_writes
+        self._write_mode = ctx.write_mode
         self._tempdir = Path(ctx.tempdir)
         self._tempdir.mkdir(parents=True, exist_ok=True)
         self._model: Optional[str] = None
@@ -207,8 +208,8 @@ class CopilotBackend:
     async def set_model(self, model: Optional[str]) -> None:
         self._model = model
 
-    def set_allow_writes(self, allow: bool) -> None:
-        self._allow_writes = allow
+    def set_write_mode(self, mode: str) -> None:
+        self._write_mode = mode
 
     async def list_slash_commands(self) -> List[str]:
         return []
@@ -238,7 +239,7 @@ class CopilotBackend:
         settings = CopilotSettings()
         req = {
             "model": model,
-            "messages": [{"role": "system", "content": _system_prompt(self._allow_writes)}] + self._history,
+            "messages": [{"role": "system", "content": _system_prompt(self._write_mode != AgentWriteMode.NONE)}] + self._history,
             "stream": True,
             "tools": self._tools_defs,
             "tool_choice": "auto",
@@ -255,12 +256,12 @@ class CopilotBackend:
         images: List[ImageBlock] = []
 
         if name in self._gated_names:
-            if not self._allow_writes:
+            if self._write_mode == AgentWriteMode.NONE:
                 return (
                     "write actions disabled — ask user to toggle 'Allow write actions'",
                     images,
                 )
-            if self._confirm_cb:
+            if self._write_mode != AgentWriteMode.YOLO and self._confirm_cb:
                 try:
                     allowed = await self._confirm_cb(name, args)
                 except Exception as e:

@@ -5,10 +5,17 @@ install (e.g. PySide6), which would break pytest-qt.
 """
 import importlib
 import sys
+from enum import StrEnum
 from typing import ClassVar
 from unittest.mock import MagicMock
 
 from pydantic import BaseModel
+
+
+class AgentWriteMode(StrEnum):
+    NONE = "none"
+    CONFIRM = "confirm"
+    YOLO = "yolo"
 
 _OPTIONAL = [
     "PySide6QtAds",
@@ -17,6 +24,7 @@ _OPTIONAL = [
     "SciQLop.components.agents",
     "SciQLop.components.agents.backend",
     "SciQLop.components.agents.chat",
+    "SciQLop.components.agents.settings",
     "SciQLop.components.settings",
     "SciQLop.components.settings.backend",
     "SciQLop.components.theming",
@@ -44,3 +52,7 @@ if isinstance(_settings_backend, MagicMock):
     sys.modules["SciQLop.components.settings"].SettingsCategory = type(
         "SettingsCategory", (), {"PLUGINS": "plugins"}
     )
+
+_agents_settings = sys.modules["SciQLop.components.agents.settings"]
+if isinstance(_agents_settings, MagicMock):
+    _agents_settings.AgentWriteMode = AgentWriteMode

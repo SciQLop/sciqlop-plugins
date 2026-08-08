@@ -24,6 +24,7 @@ def test_ensure_client_allows_web_tools(monkeypatch):
     inst._tools = []
     inst._model = None
     inst._effort = None
+    inst._write_mode = "confirm"
     inst._resume = None
     inst._confirm_cb = None
     inst._ask_question_cb = None

@@ -27,7 +27,7 @@ pytestmark = pytest.mark.skipif(not _SDK_AVAILABLE, reason="claude-agent-sdk not
 def _ctx(tmp_path):
     return SimpleNamespace(
         main_window=None, tools=[], tempdir=str(tmp_path),
-        confirm_cb=None, allow_writes=False, ask_question_cb=None,
+        confirm_cb=None, write_mode="none", ask_question_cb=None,
     )
 
 

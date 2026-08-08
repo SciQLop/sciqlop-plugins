@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import AsyncIterator, Callable, List, Optional
 
 from SciQLop.components.agents import BackendContext, SessionEntry
+from SciQLop.components.agents.settings import AgentWriteMode
 from SciQLop.components.agents.backend import (
     ContextCategory,
     Cost,
@@ -280,7 +281,7 @@ class ClaudeBackend:
         self._ask_question_cb = getattr(ctx, "ask_question_cb", None)
         self._model: Optional[str] = None
         self._effort: Optional[str] = None
-        self._allow_writes = ctx.allow_writes
+        self._write_mode = ctx.write_mode
         self._resume: Optional[str] = None
         self._client: Optional[ClaudeSDKClient] = None
         self._lock = asyncio.Lock()
@@ -307,7 +308,7 @@ class ClaudeBackend:
         ]
         allowed += ["WebSearch", "WebFetch"]  # built-in web search + page fetch (ungated)
         options = ClaudeAgentOptions(
-            system_prompt=SYSTEM_PROMPT,
+            system_prompt=self._system_prompt(),
             mcp_servers={_MCP_SERVER_NAME: server},
             allowed_tools=allowed,
             can_use_tool=self._permission_check if permission_gate_active else None,
@@ -511,8 +512,37 @@ class ClaudeBackend:
             # at the next turn, which is the first moment it can matter.
             self._effort_dirty = self._client is not None
 
-    def set_allow_writes(self, allow: bool) -> None:
-        self._allow_writes = allow
+    def set_write_mode(self, mode: str) -> None:
+        self._write_mode = mode
+
+    def _system_prompt(self) -> str:
+        """Return the system prompt with a write-tools header matching the
+        current ``write_mode``.
+
+        The base prompt is static; only the leading sentence describing write
+        tools changes with the mode so the model knows whether it may mutate
+        state and whether each call requires approval.
+        """
+        if self._write_mode == AgentWriteMode.NONE:
+            write_intro = (
+                "Write tools are currently disabled. Do not attempt to create "
+                "panels, set time ranges, run Python, install packages, or edit "
+                "notebooks."
+            )
+        elif self._write_mode == AgentWriteMode.YOLO:
+            write_intro = (
+                "Write tools are available and auto-approved (no per-call "
+                "confirmation):"
+            )
+        else:
+            write_intro = (
+                "Write tools are available and gated by per-call approval:"
+            )
+        return SYSTEM_PROMPT.replace(
+            "Write tools (only present when the user enabled 'Allow write actions' "
+            "and gated by per-call approval):",
+            write_intro,
+        )
 
     async def list_slash_commands(self) -> List[str]:
         if self._slash_cache is not None:
@@ -623,13 +653,15 @@ class ClaudeBackend:
             return await self._answer_question(tool_input)
         if short not in self._gated_names:
             return PermissionResultAllow(updated_input=tool_input)
-        if not self._allow_writes:
+        if self._write_mode == AgentWriteMode.NONE:
             return PermissionResultDeny(
                 message=(
                     "write actions are currently disabled — ask the user to "
-                    "toggle 'Allow write actions' in the SciQLop chat dock"
+                    "enable write mode in the SciQLop chat dock"
                 )
             )
+        if self._write_mode == AgentWriteMode.YOLO:
+            return PermissionResultAllow(updated_input=tool_input)
         try:
             allowed = await self._confirm_cb(short, tool_input)
         except Exception as e:

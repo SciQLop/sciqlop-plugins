@@ -27,10 +27,10 @@ _TOOLS = [
 ]
 
 
-def _ctx(tmp_path, confirm_cb=None, ask_question_cb=None):
+def _ctx(tmp_path, confirm_cb=None, ask_question_cb=None, write_mode="confirm"):
     return SimpleNamespace(
         main_window=None, tools=_TOOLS, tempdir=str(tmp_path),
-        confirm_cb=confirm_cb, allow_writes=True, ask_question_cb=ask_question_cb,
+        confirm_cb=confirm_cb, write_mode=write_mode, ask_question_cb=ask_question_cb,
     )
 
 
@@ -95,3 +95,31 @@ def test_gated_tool_call_actually_reaches_permission_check(tmp_path):
     assert seen["name"] == "sciqlop_exec_python"
     from claude_agent_sdk import PermissionResultDeny
     assert isinstance(res, PermissionResultDeny)
+
+
+def test_write_mode_none_denies_gated_tool(tmp_path):
+    async def confirm(name, tool_input):
+        return True
+
+    backend = ClaudeBackend(_ctx(tmp_path, confirm_cb=confirm, write_mode="none"))
+    res = asyncio.run(
+        backend._permission_check("mcp__sciqlop__sciqlop_exec_python", {"code": "1"}, None)
+    )
+    from claude_agent_sdk import PermissionResultDeny
+    assert isinstance(res, PermissionResultDeny)
+
+
+def test_write_mode_yolo_allows_gated_tool_without_confirm(tmp_path):
+    seen = {}
+
+    async def confirm(name, tool_input):
+        seen["called"] = True
+        return False
+
+    backend = ClaudeBackend(_ctx(tmp_path, confirm_cb=confirm, write_mode="yolo"))
+    res = asyncio.run(
+        backend._permission_check("mcp__sciqlop__sciqlop_exec_python", {"code": "1"}, None)
+    )
+    from claude_agent_sdk import PermissionResultAllow
+    assert isinstance(res, PermissionResultAllow)
+    assert "called" not in seen
