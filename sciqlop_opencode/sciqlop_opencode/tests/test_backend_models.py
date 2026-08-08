@@ -32,22 +32,38 @@ def test_fetch_models_appends_config_and_session_specs(monkeypatch):
     monkeypatch.setattr(
         "sciqlop_opencode.sessions.configured_models",
         lambda: [
-            {"id": "qwen3.8-max", "providerID": "opencode-go"},
+            {
+                "id": "qwen3.8-max",
+                "providerID": "opencode-go",
+                "name": "Qwen",
+                "cost_input": 0,
+                "cost_output": 0,
+            },
         ],
     )
     monkeypatch.setattr(
         "sciqlop_opencode.sessions.known_session_models",
         lambda: [
-            {"id": "free-a", "providerID": "opencode"},
-            {"id": "gpt-4o", "providerID": "openai"},
+            {
+                "id": "free-a",
+                "providerID": "opencode",
+                "cost_input": 0,
+                "cost_output": 0,
+            },
+            {
+                "id": "gpt-4o",
+                "providerID": "openai",
+                "cost_input": 0.5,
+                "cost_output": 2,
+            },
         ],
     )
     out = bk.fetch_models()
     assert out == [
         ("Default (opencode)", None),
-        ("Qwen3.8 Max (opencode-go)", "opencode-go/qwen3.8-max"),
-        ("Free A (opencode)", "opencode/free-a"),
-        ("Gpt 4o (openai)", "openai/gpt-4o"),
+        ("Qwen (opencode-go) — FREE", "opencode-go/qwen3.8-max"),
+        ("Free A (opencode) — FREE", "opencode/free-a"),
+        ("Gpt 4o (openai) — $2.00/1M out", "openai/gpt-4o"),
     ]
 
 
@@ -55,16 +71,31 @@ def test_fetch_models_dedupes_config_vs_session_overlap(monkeypatch):
     monkeypatch.setattr(bk, "_DEFAULT_MODEL_CHOICES", [("Default (opencode)", None)])
     monkeypatch.setattr(
         "sciqlop_opencode.sessions.configured_models",
-        lambda: [{"id": "longcat-2.0-free", "providerID": "opencode"}],
+        lambda: [
+            {
+                "id": "longcat-2.0-free",
+                "providerID": "opencode",
+                "name": "Longcat",
+                "cost_input": 0,
+                "cost_output": 0,
+            }
+        ],
     )
     monkeypatch.setattr(
         "sciqlop_opencode.sessions.known_session_models",
-        lambda: [{"id": "longcat-2.0-free", "providerID": "opencode"}],
+        lambda: [
+            {
+                "id": "longcat-2.0-free",
+                "providerID": "opencode",
+                "cost_input": 0,
+                "cost_output": 0,
+            }
+        ],
     )
     out = bk.fetch_models()
     assert out == [
         ("Default (opencode)", None),
-        ("Longcat 2.0 Free (opencode)", "opencode/longcat-2.0-free"),
+        ("Longcat (opencode) — FREE", "opencode/longcat-2.0-free"),
     ]
 
 

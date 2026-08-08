@@ -347,7 +347,24 @@ def configured_models() -> List[dict]:
             if key in seen:
                 continue
             seen.add(key)
-            models.append({"providerID": canonical_provider, "id": canonical_id})
+            cost = model_spec.get("cost") or {}
+            models.append(
+                {
+                    "providerID": canonical_provider,
+                    "id": canonical_id,
+                    "name": model_spec.get("name") or model_id,
+                    "cost_input": cost.get("input", 0) or 0,
+                    "cost_output": cost.get("output", 0) or 0,
+                }
+            )
+
+    # Sort: free models (input=0, output=0) first, then by output cost ascending
+    models.sort(
+        key=lambda m: (
+            not (m["cost_input"] == 0 and m["cost_output"] == 0),
+            m["cost_output"],
+        )
+    )
     return models
 
 

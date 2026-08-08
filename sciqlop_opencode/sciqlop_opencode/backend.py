@@ -248,7 +248,14 @@ def fetch_models(timeout: float = 10.0) -> List[tuple[str, Optional[str]]]:
         if key in seen:
             continue
         seen.add(key)
-        label = f"{_pretty_model(model_id)} ({provider})"
+        name = spec.get("name") or _pretty_model(model_id)
+        cost_in = spec.get("cost_input", 0) or 0
+        cost_out = spec.get("cost_output", 0) or 0
+        if cost_in == 0 and cost_out == 0:
+            price_tag = "FREE"
+        else:
+            price_tag = f"${cost_out:.2f}/1M out"
+        label = f"{name} ({provider}) — {price_tag}"
         value = f"{provider}/{model_id}"
         choices.append((label, value))
     return choices

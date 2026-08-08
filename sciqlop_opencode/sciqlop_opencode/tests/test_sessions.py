@@ -339,10 +339,18 @@ def test_configured_models_reads_cache(tmp_path, monkeypatch):
     monkeypatch.setenv("OPENCODE_MODELS_PATH", str(cache_path))
 
     out = sess.configured_models()
-    # opencode providers first, then opencode-go
     assert len(out) == 3
-    assert out[0]["providerID"] == "opencode"
-    assert out[2] == {"providerID": "opencode-go", "id": "qwen3.8-max"}
+    # All three have no cost field (defaults to 0), so all are "free"
+    # Free tier sorts first; within same tier, opencode* providers come first
+    # opencode has 2 models, opencode-go has 1
+    providers = [m["providerID"] for m in out]
+    assert providers == ["opencode", "opencode", "opencode-go"]
+    # All should have cost fields added by the parser
+    for m in out:
+        assert "cost_input" in m
+        assert "cost_output" in m
+        assert m["cost_input"] == 0
+        assert m["cost_output"] == 0
 
 
 def test_configured_models_filters_to_configured_providers(tmp_path, monkeypatch):
