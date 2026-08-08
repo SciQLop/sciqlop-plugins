@@ -215,6 +215,54 @@ def known_session_models() -> List[dict]:
     return models
 
 
+def _opencode_data_dir() -> Path:
+    """Resolve opencode's data directory (cross-platform).
+
+    opencode stores credentials, sessions, and config under:
+    - Linux: ``~/.local/share/opencode`` (``$XDG_DATA_HOME/opencode``)
+    - macOS: ``~/Library/Application Support/opencode``
+    - Windows: ``%APPDATA%\\opencode``
+    Falls back to XDG_DATA_HOME or ``~/.local/share/opencode``.
+    """
+    xdg_data = os.environ.get("XDG_DATA_HOME")
+    if xdg_data:
+        return Path(xdg_data) / "opencode"
+    try:
+        from platformdirs import user_data_path
+
+        return Path(str(user_data_path("opencode", ensure_exists=False)))
+    except ImportError:
+        return Path.home() / ".local" / "share" / "opencode"
+
+
+def _auth_path() -> Optional[Path]:
+    """Path to opencode's auth.json (stores provider API keys)."""
+    p = _opencode_data_dir() / "auth.json"
+    return p if p.is_file() else None
+
+
+def configured_providers() -> set[str]:
+    """Return provider IDs that the user has credentials for.
+
+    Reads ``auth.json`` and extracts provider IDs. Also always includes
+    ``opencode`` (the default provider, no key needed).
+    """
+    providers = {"opencode"}
+    auth_file = _auth_path()
+    if auth_file is None:
+        return providers
+    try:
+        auth = json.loads(auth_file.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        return providers
+    if not isinstance(auth, dict):
+        return providers
+    for provider_id in auth:
+        if isinstance(provider_id, str) and provider_id not in providers:
+            providers.add(provider_id)
+    return providers
+
+
 def _models_cache_path() -> Optional[Path]:
     """Locate opencode's cached models.json.
 
@@ -244,19 +292,20 @@ def _models_cache_path() -> Optional[Path]:
     return models_file if models_file.is_file() else None
 
 
-def configured_models(timeout: float = 5.0) -> List[dict]:
-    """Return every model opencode can serve, by reading its cached models.json.
+def configured_models() -> List[dict]:
+    """Return models from providers the user has configured.
 
-    opencode maintains a cache at ``~/.cache/opencode/models.json`` (or
-    ``$OPENCODE_MODELS_PATH``) fetched from https://models.dev. The file is a
-    JSON object keyed by provider ID, each containing a ``models`` dict. We
-    flatten this into ``{"providerID": ..., "id": ...}`` entries, preserving
-    opencode's provider ordering (opencode providers first, then rest
-    alphabetically).
+    Reads opencode's cached models.json (same source as `opencode models --verbose`)
+    but filters to:
+    1. Only providers the user has credentials for (from auth.json), plus the
+       default ``opencode`` provider.
+    2. Only models with ``status == "active"`` (skip deprecated/alpha/beta).
 
-    This avoids subprocess calls (won't work on Windows, requires opencode on
-    PATH) and reads the same source the CLI uses. Falls back to [] if the
+    This keeps the dropdown to a manageable size (typically dozens, not thousands)
+    while showing everything the user can actually use. Falls back to [] if the
     cache is missing or unreadable.
+
+    Provider ordering: opencode* first, then alphabetical (matches `opencode models`).
     """
     cache_path = _models_cache_path()
     if cache_path is None:
@@ -267,14 +316,18 @@ def configured_models(timeout: float = 5.0) -> List[dict]:
         return []
     if not isinstance(data, dict):
         return []
+
+    allowed_providers = configured_providers()
+
     models: list = []
     seen: set = set()
-    # Sort providers: opencode* first, then alphabetical (matches `opencode models` output)
     provider_ids = sorted(
         data.keys(),
         key=lambda pid: (not pid.startswith("opencode"), pid),
     )
     for provider_id in provider_ids:
+        if provider_id not in allowed_providers:
+            continue
         provider_data = data.get(provider_id)
         if not isinstance(provider_data, dict):
             continue
@@ -284,10 +337,11 @@ def configured_models(timeout: float = 5.0) -> List[dict]:
         for model_id, model_spec in sorted(models_dict.items()):
             if not isinstance(model_spec, dict):
                 continue
-            # Use canonical providerID/id from the spec if present, else fall back to keys
             canonical_provider = model_spec.get("providerID") or provider_id
             canonical_id = model_spec.get("id") or model_id
             if not canonical_provider or not canonical_id:
+                continue
+            if model_spec.get("status", "active") != "active":
                 continue
             key = (canonical_provider, canonical_id)
             if key in seen:

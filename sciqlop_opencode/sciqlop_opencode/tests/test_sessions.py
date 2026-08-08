@@ -345,8 +345,8 @@ def test_configured_models_reads_cache(tmp_path, monkeypatch):
     assert out[2] == {"providerID": "opencode-go", "id": "qwen3.8-max"}
 
 
-def test_configured_models_opencode_providers_first(tmp_path, monkeypatch):
-    """opencode* providers sort before others."""
+def test_configured_models_filters_to_configured_providers(tmp_path, monkeypatch):
+    """Only shows models from providers the user has configured."""
     fake_data = {
         "openai": {
             "models": {"gpt-4o": {"id": "gpt-4o", "providerID": "openai"}},
@@ -360,11 +360,55 @@ def test_configured_models_opencode_providers_first(tmp_path, monkeypatch):
     }
     cache_path = _fake_models_cache(tmp_path, fake_data)
     monkeypatch.setenv("OPENCODE_MODELS_PATH", str(cache_path))
+    # Only opencode and anthropic are configured (opencode is always included)
+    monkeypatch.setattr(sess, "configured_providers", lambda: {"opencode", "anthropic"})
 
     out = sess.configured_models()
-    assert out[0]["providerID"] == "opencode"
     providers = [m["providerID"] for m in out]
-    assert providers == ["opencode", "anthropic", "openai"]
+    # opencode first (starts with "opencode"), then anthropic alphabetically
+    assert providers == ["opencode", "anthropic"]
+    assert len(out) == 2
+
+
+def test_configured_models_shows_nothing_when_only_unconfigured(tmp_path, monkeypatch):
+    """Returns [] when cache only has unconfigured providers."""
+    fake_data = {
+        "openai": {
+            "models": {"gpt-4o": {"id": "gpt-4o", "providerID": "openai"}},
+        },
+        "anthropic": {
+            "models": {"claude": {"id": "claude", "providerID": "anthropic"}},
+        },
+    }
+    cache_path = _fake_models_cache(tmp_path, fake_data)
+    monkeypatch.setenv("OPENCODE_MODELS_PATH", str(cache_path))
+    # Neither provider is configured
+    monkeypatch.setattr(sess, "configured_providers", lambda: {"opencode"})
+
+    out = sess.configured_models()
+    assert out == []
+
+
+def test_configured_providers_reads_auth_json(tmp_path, monkeypatch):
+    """configured_providers() reads provider IDs from auth.json."""
+    auth_data = {
+        "opencode-go": {"type": "api_key", "key": "fake123"},
+        "openai": {"type": "oauth"},
+    }
+    auth_file = tmp_path / "auth.json"
+    auth_file.write_text(json.dumps(auth_data), encoding="utf-8")
+    monkeypatch.setattr(sess, "_auth_path", lambda: auth_file)
+
+    providers = sess.configured_providers()
+    assert providers == {"opencode", "opencode-go", "openai"}
+
+
+def test_configured_providers_default_opencode_only(tmp_path, monkeypatch):
+    """Always includes opencode even with no auth.json."""
+    monkeypatch.setattr(sess, "_auth_path", lambda: None)
+
+    providers = sess.configured_providers()
+    assert providers == {"opencode"}
 
 
 def test_configured_models_returns_empty_when_cache_missing(tmp_path, monkeypatch):
