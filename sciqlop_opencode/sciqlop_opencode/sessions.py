@@ -13,6 +13,7 @@ and replay them by joining message → part, keeping only the renderable
 ``text`` parts (reasoning/tool/step-* parts belong to the agent loop and
 have no place in a replay).
 """
+
 from __future__ import annotations
 
 import json
@@ -27,6 +28,7 @@ from typing import List, Optional
 def current_workspace_dir() -> Path:
     try:
         from SciQLop.components.workspaces import workspaces_manager_instance
+
         mgr = workspaces_manager_instance()
         ws = getattr(mgr, "workspace", None)
         wdir = getattr(ws, "workspace_dir", None) if ws is not None else None
@@ -136,8 +138,7 @@ def load_session_messages(
                 if role is None:
                     continue
                 part_rows = conn.execute(
-                    "SELECT data FROM part "
-                    "WHERE message_id = ? ORDER BY time_created",
+                    "SELECT data FROM part WHERE message_id = ? ORDER BY time_created",
                     (msg_id,),
                 ).fetchall()
                 blocks = _blocks_from_parts(part_rows, TextBlock)
@@ -211,6 +212,88 @@ def known_session_models() -> List[dict]:
             continue
         seen.add(key)
         models.append(spec)
+    return models
+
+
+def _models_cache_path() -> Optional[Path]:
+    """Locate opencode's cached models.json.
+
+    opencode fetches https://models.dev/api.json and caches it locally at
+    ``Global.Path.cache/models.json`` (where the cache dir follows platform
+    conventions). Resolution order:
+    1. ``$OPENCODE_MODELS_PATH`` env var (opencode's own override)
+    2. Platform-native cache dir for ``opencode`` (via platformdirs)
+    """
+    env = os.environ.get("OPENCODE_MODELS_PATH")
+    if env:
+        p = Path(env)
+        if p.is_file():
+            return p
+    try:
+        from platformdirs import user_cache_path
+
+        cache_dir = user_cache_path("opencode", ensure_exists=False)
+    except ImportError:
+        # Fallback: mimic opencode's xdgCache resolution
+        xdg_cache = os.environ.get("XDG_CACHE_HOME")
+        if xdg_cache:
+            cache_dir = Path(xdg_cache) / "opencode"
+        else:
+            cache_dir = Path.home() / ".cache" / "opencode"
+    models_file = Path(cache_dir) / "models.json"
+    return models_file if models_file.is_file() else None
+
+
+def configured_models(timeout: float = 5.0) -> List[dict]:
+    """Return every model opencode can serve, by reading its cached models.json.
+
+    opencode maintains a cache at ``~/.cache/opencode/models.json`` (or
+    ``$OPENCODE_MODELS_PATH``) fetched from https://models.dev. The file is a
+    JSON object keyed by provider ID, each containing a ``models`` dict. We
+    flatten this into ``{"providerID": ..., "id": ...}`` entries, preserving
+    opencode's provider ordering (opencode providers first, then rest
+    alphabetically).
+
+    This avoids subprocess calls (won't work on Windows, requires opencode on
+    PATH) and reads the same source the CLI uses. Falls back to [] if the
+    cache is missing or unreadable.
+    """
+    cache_path = _models_cache_path()
+    if cache_path is None:
+        return []
+    try:
+        data = json.loads(cache_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        return []
+    if not isinstance(data, dict):
+        return []
+    models: list = []
+    seen: set = set()
+    # Sort providers: opencode* first, then alphabetical (matches `opencode models` output)
+    provider_ids = sorted(
+        data.keys(),
+        key=lambda pid: (not pid.startswith("opencode"), pid),
+    )
+    for provider_id in provider_ids:
+        provider_data = data.get(provider_id)
+        if not isinstance(provider_data, dict):
+            continue
+        models_dict = provider_data.get("models")
+        if not isinstance(models_dict, dict):
+            continue
+        for model_id, model_spec in sorted(models_dict.items()):
+            if not isinstance(model_spec, dict):
+                continue
+            # Use canonical providerID/id from the spec if present, else fall back to keys
+            canonical_provider = model_spec.get("providerID") or provider_id
+            canonical_id = model_spec.get("id") or model_id
+            if not canonical_provider or not canonical_id:
+                continue
+            key = (canonical_provider, canonical_id)
+            if key in seen:
+                continue
+            seen.add(key)
+            models.append({"providerID": canonical_provider, "id": canonical_id})
     return models
 
 

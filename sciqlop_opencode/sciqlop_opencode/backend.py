@@ -1,4 +1,5 @@
 """opencode-agent-sdk adapter — implements `SciQLop.components.agents.AgentBackend`."""
+
 from __future__ import annotations
 
 import asyncio
@@ -9,6 +10,7 @@ from typing import Callable, Iterator, List, Optional
 from SciQLop.components.agents import BackendContext, SessionEntry
 from SciQLop.components.agents.backend import StreamBlock
 from SciQLop.components.agents.chat import ChatMessage, TextBlock, ToolActivityBlock
+from SciQLop.components.agents.settings import AgentWriteMode
 
 from . import sessions as _sessions
 
@@ -20,6 +22,7 @@ try:
         create_sdk_mcp_server,
         tool as sdk_tool,
     )
+
     _SDK_AVAILABLE = True
     _SDK_IMPORT_ERROR: Optional[str] = None
 except Exception as e:  # pragma: no cover
@@ -84,8 +87,8 @@ SYSTEM_PROMPT = (
     "    Jupyter notebooks in the active workspace directory. Paths are "
     "    workspace-relative. Code cells come back in ```python fences, "
     "    markdown cells verbatim.\n\n"
-    "Write tools (only present when the user enabled 'Allow write actions' "
-    "and gated by per-call approval):\n"
+    "Write tools (only present when write mode is 'confirm' or 'yolo'; "
+    "gated by per-call approval in 'confirm' mode):\n"
     "  • sciqlop_create_panel() — create a new empty plot panel; returns "
     "    its name. Use the returned name to target that panel in subsequent "
     "    calls so you never rely on which panel happens to be active.\n"
@@ -130,7 +133,7 @@ SYSTEM_PROMPT = (
     "a published result from your own inference; when a value should be checked "
     "against published work, say so rather than asserting it.\n"
     "  • Never invent data, time ranges, event times, or physical values. If "
-    "you don't know, say \"I don't know\" or \"this needs verification\" — read "
+    'you don\'t know, say "I don\'t know" or "this needs verification" — read '
     "the live state or the data first.\n"
     "  • Write correct, reproducible code: verify API signatures before "
     "calling, run and check rather than claim something works, keep it simple.\n"
@@ -140,11 +143,38 @@ SYSTEM_PROMPT = (
 )
 
 
+def _normalize_schema_types(schema):
+    """Recursively normalize a JSON schema so opencode-agent-sdk can consume it.
+
+    The SDK's ``_json_type_to_python`` only handles scalar type strings; it
+    crashes with ``TypeError: unhashable type: 'list'`` on union types like
+    ``{"type": ["string", "number"]}``. We collapse a union to its first
+    non-"null" member — sufficient for signature generation; runtime values
+    still flow through as-is.
+    """
+    if not isinstance(schema, dict):
+        return schema
+    normalized = {}
+    for key, value in schema.items():
+        if key == "type" and isinstance(value, list):
+            non_null = [t for t in value if t != "null"]
+            normalized[key] = non_null[0] if non_null else value[0]
+        elif isinstance(value, dict):
+            normalized[key] = _normalize_schema_types(value)
+        elif isinstance(value, list):
+            normalized[key] = [
+                _normalize_schema_types(v) if isinstance(v, dict) else v for v in value
+            ]
+        else:
+            normalized[key] = value
+    return normalized
+
+
 def _wrap_tool(tool: dict):
     """Wrap a SciQLop tool dict as an in-process opencode SDK tool."""
     name = tool["name"]
     description = tool["description"]
-    schema = _reorder_required_first(tool["input_schema"])
+    schema = _normalize_schema_types(_reorder_required_first(tool["input_schema"]))
     handler: Callable = tool["handler"]
 
     @sdk_tool(name, description, schema)
@@ -185,10 +215,12 @@ def _reorder_required_first(schema: dict) -> dict:
 def fetch_models(timeout: float = 10.0) -> List[tuple[str, Optional[str]]]:
     """Return the model dropdown choices for the SciQLop chat dock.
 
-    opencode-agent-sdk 0.4.x has no API to enumerate available models, but
-    opencode itself records every (provider, model) pair the user has run
-    in its sessions table. We surface those alongside a "Default (opencode)"
-    entry that lets opencode fall back to whatever its own config picks.
+    Sources, merged in order:
+    1. ``"Default (opencode)"`` — falls back to opencode's own config.
+    2. Models from the opencode config (``model``, ``small_model``,
+       ``agent.<name>.model``) — everything the user has access to.
+    3. Models seen in prior session history — anything run before that
+       might not appear in the current config.
 
     The dropdown value is the fully-qualified ``"<provider>/<model>"`` string;
     ``_ensure_client`` splits it back into ``provider_id`` and ``model`` for
@@ -197,15 +229,25 @@ def fetch_models(timeout: float = 10.0) -> List[tuple[str, Optional[str]]]:
     from . import sessions as _sessions
 
     choices: List[tuple[str, Optional[str]]] = list(_DEFAULT_MODEL_CHOICES)
+    seen: set = set()
+    configs: List[dict] = []
     try:
-        specs = _sessions.known_session_models()
+        configs = _sessions.configured_models()
     except Exception:
-        return choices
-    for spec in specs:
+        pass
+    try:
+        configs.extend(_sessions.known_session_models())
+    except Exception:
+        pass
+    for spec in configs:
         provider = spec.get("providerID")
         model_id = spec.get("id")
-        if not provider or not model_id:
+        if not provider or not model_id or not isinstance(model_id, str):
             continue
+        key = (provider, model_id)
+        if key in seen:
+            continue
+        seen.add(key)
         label = f"{_pretty_model(model_id)} ({provider})"
         value = f"{provider}/{model_id}"
         choices.append((label, value))
@@ -244,7 +286,7 @@ class _OpencodeStream:
     """
 
     def __init__(self):
-        self._acc = ""      # text already emitted for the open text block
+        self._acc = ""  # text already emitted for the open text block
         self._open = False  # an incomplete TextBlock is open in the consumer
 
     def feed(self, message) -> Iterator[StreamBlock]:
@@ -272,7 +314,7 @@ class _OpencodeStream:
             return
         if not snapshot.startswith(self._acc):
             yield from self._close_text()  # buffer reset -> new block
-        delta = snapshot[len(self._acc):]
+        delta = snapshot[len(self._acc) :]
         self._acc = snapshot
         self._open = True
         yield TextBlock(text=delta, complete=False)
@@ -291,7 +333,9 @@ class OpencodeBackend:
 
     def __init__(self, ctx: BackendContext):
         if not _SDK_AVAILABLE:
-            raise RuntimeError(f"opencode-agent-sdk not importable: {_SDK_IMPORT_ERROR}")
+            raise RuntimeError(
+                f"opencode-agent-sdk not importable: {_SDK_IMPORT_ERROR}"
+            )
         if not opencode_cli_available():
             raise RuntimeError(
                 "opencode CLI not found on PATH — install from https://opencode.ai "
@@ -304,7 +348,7 @@ class OpencodeBackend:
         self._tempdir.mkdir(parents=True, exist_ok=True)
         self._confirm_cb = ctx.confirm_cb
         self._model: Optional[str] = None
-        self._allow_writes = ctx.allow_writes
+        self._write_mode = ctx.write_mode
         self._resume: Optional[str] = None
         self._client: Optional[SDKClient] = None
         self._lock = asyncio.Lock()
@@ -315,11 +359,15 @@ class OpencodeBackend:
         sdk_tools = [_wrap_tool(t) for t in self._tools]
         server = create_sdk_mcp_server(name=_MCP_SERVER_NAME, tools=sdk_tools)
         allowed = [f"mcp__{_MCP_SERVER_NAME}__{t['name']}" for t in self._tools]
-        hooks_cfg = {
-            "PreToolUse": [
-                HookMatcher(matcher=None, hooks=[self._pre_tool_use_hook]),
-            ],
-        } if self._confirm_cb else {}
+        hooks_cfg = (
+            {
+                "PreToolUse": [
+                    HookMatcher(matcher=None, hooks=[self._pre_tool_use_hook]),
+                ],
+            }
+            if self._gated_names
+            else {}
+        )
         provider_id, model_id = _split_provider_model(self._model)
         options = AgentOptions(
             system_prompt=SYSTEM_PROMPT,
@@ -382,8 +430,8 @@ class OpencodeBackend:
             # SDK has no live set_model; reconnect on next ask.
             await self._disconnect()
 
-    def set_allow_writes(self, allow: bool) -> None:
-        self._allow_writes = allow
+    def set_write_mode(self, mode: str) -> None:
+        self._write_mode = mode
 
     async def list_slash_commands(self) -> List[str]:
         # opencode-agent-sdk has no API for the slash-command list (no
@@ -412,13 +460,18 @@ class OpencodeBackend:
         short = tool_name.split("__")[-1]
         if short not in self._gated_names:
             return None
-        if not self._allow_writes:
+        if self._write_mode == AgentWriteMode.NONE:
             return {
                 "permissionDecision": "deny",
                 "permissionDecisionReason": (
-                    "write actions are disabled — toggle 'Allow write actions' "
-                    "in the SciQLop chat dock"
+                    "write actions are disabled — set write mode to 'confirm' or "
+                    "'yolo' in the SciQLop chat dock"
                 ),
+            }
+        if self._write_mode == AgentWriteMode.YOLO:
+            return {
+                "permissionDecision": "allow",
+                "permissionDecisionReason": "auto-approved (yolo mode)",
             }
         tool_input = input_data.get("tool_input") or {}
         try:
@@ -432,4 +485,3 @@ class OpencodeBackend:
             "permissionDecision": "allow" if allowed else "deny",
             "permissionDecisionReason": "user approval" if allowed else "user denied",
         }
-

@@ -42,4 +42,26 @@ for name in _OPTIONAL:
     try:
         importlib.import_module(name)
     except Exception:
-        sys.modules[name] = MagicMock()
+        mock = MagicMock()
+        # Make stubbed packages look package-like so subpackage imports work.
+        mock.__path__ = []
+        sys.modules[name] = mock
+
+# Backend implementations import AgentWriteMode from SciQLop.components.agents.settings.
+# Provide a real StrEnum stub when the real module is unavailable so string
+# comparisons like `mode == AgentWriteMode.NONE` work in tests.
+try:
+    from SciQLop.components.agents.settings import AgentWriteMode
+    if not isinstance(AgentWriteMode, type) or not issubclass(AgentWriteMode, str):
+        raise ImportError("AgentWriteMode is not a usable StrEnum")
+except Exception:
+    from enum import StrEnum
+
+    class AgentWriteMode(StrEnum):
+        NONE = "none"
+        CONFIRM = "confirm"
+        YOLO = "yolo"
+
+    settings_mod = sys.modules.setdefault("SciQLop.components.agents.settings", MagicMock())
+    settings_mod.__path__ = []
+    settings_mod.AgentWriteMode = AgentWriteMode

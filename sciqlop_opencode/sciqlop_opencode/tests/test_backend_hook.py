@@ -18,10 +18,10 @@ class _StubConfirm:
         return self.decision
 
 
-def _make_backend(*, gated, allow_writes, confirm_decision=True):
+def _make_backend(*, gated, write_mode, confirm_decision=True):
     inst = bk.OpencodeBackend.__new__(bk.OpencodeBackend)
     inst._gated_names = set(gated)
-    inst._allow_writes = allow_writes
+    inst._write_mode = write_mode
     inst._confirm_cb = _StubConfirm(confirm_decision)
     return inst
 
@@ -36,26 +36,33 @@ def _call_hook(inst, input_data):
 
 
 def test_ungated_tool_is_allowed():
-    inst = _make_backend(gated={"sciqlop_exec_python"}, allow_writes=False)
+    inst = _make_backend(gated={"sciqlop_exec_python"}, write_mode="none")
     result = _call_hook(inst, _input("sciqlop_window_state"))
     assert result is None  # None / no decision = allow
 
 
 def test_gated_tool_denied_when_writes_disabled():
-    inst = _make_backend(gated={"sciqlop_exec_python"}, allow_writes=False)
+    inst = _make_backend(gated={"sciqlop_exec_python"}, write_mode="none")
     result = _call_hook(inst, _input("sciqlop_exec_python", code="print(1)"))
     assert result["permissionDecision"] == "deny"
-    assert "Allow write actions" in result["permissionDecisionReason"]
+    assert "write mode" in result["permissionDecisionReason"].lower()
 
 
 def test_gated_tool_allowed_when_user_confirms():
-    inst = _make_backend(gated={"sciqlop_exec_python"}, allow_writes=True, confirm_decision=True)
+    inst = _make_backend(gated={"sciqlop_exec_python"}, write_mode="confirm", confirm_decision=True)
     result = _call_hook(inst, _input("sciqlop_exec_python", code="print(1)"))
     assert result["permissionDecision"] == "allow"
     assert inst._confirm_cb.calls == [("sciqlop_exec_python", {"code": "print(1)"})]
 
 
 def test_gated_tool_denied_when_user_refuses():
-    inst = _make_backend(gated={"sciqlop_exec_python"}, allow_writes=True, confirm_decision=False)
+    inst = _make_backend(gated={"sciqlop_exec_python"}, write_mode="confirm", confirm_decision=False)
     result = _call_hook(inst, _input("sciqlop_exec_python", code="print(1)"))
     assert result["permissionDecision"] == "deny"
+
+
+def test_gated_tool_auto_allowed_in_yolo_mode():
+    inst = _make_backend(gated={"sciqlop_exec_python"}, write_mode="yolo")
+    result = _call_hook(inst, _input("sciqlop_exec_python", code="print(1)"))
+    assert result["permissionDecision"] == "allow"
+    assert inst._confirm_cb.calls == []

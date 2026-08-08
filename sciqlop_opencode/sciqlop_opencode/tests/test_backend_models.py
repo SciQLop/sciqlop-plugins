@@ -1,4 +1,5 @@
 """Tests for fetch_models + _split_provider_model wiring."""
+
 from sciqlop_opencode import backend as bk
 
 
@@ -21,12 +22,19 @@ def test_split_provider_model_handles_model_without_provider_prefix():
 def test_fetch_models_includes_default_first(monkeypatch):
     monkeypatch.setattr(bk, "_DEFAULT_MODEL_CHOICES", [("Default (opencode)", None)])
     monkeypatch.setattr("sciqlop_opencode.sessions.known_session_models", lambda: [])
+    monkeypatch.setattr("sciqlop_opencode.sessions.configured_models", lambda: [])
     out = bk.fetch_models()
     assert out == [("Default (opencode)", None)]
 
 
-def test_fetch_models_appends_known_specs(monkeypatch):
+def test_fetch_models_appends_config_and_session_specs(monkeypatch):
     monkeypatch.setattr(bk, "_DEFAULT_MODEL_CHOICES", [("Default (opencode)", None)])
+    monkeypatch.setattr(
+        "sciqlop_opencode.sessions.configured_models",
+        lambda: [
+            {"id": "qwen3.8-max", "providerID": "opencode-go"},
+        ],
+    )
     monkeypatch.setattr(
         "sciqlop_opencode.sessions.known_session_models",
         lambda: [
@@ -37,8 +45,26 @@ def test_fetch_models_appends_known_specs(monkeypatch):
     out = bk.fetch_models()
     assert out == [
         ("Default (opencode)", None),
+        ("Qwen3.8 Max (opencode-go)", "opencode-go/qwen3.8-max"),
         ("Free A (opencode)", "opencode/free-a"),
         ("Gpt 4o (openai)", "openai/gpt-4o"),
+    ]
+
+
+def test_fetch_models_dedupes_config_vs_session_overlap(monkeypatch):
+    monkeypatch.setattr(bk, "_DEFAULT_MODEL_CHOICES", [("Default (opencode)", None)])
+    monkeypatch.setattr(
+        "sciqlop_opencode.sessions.configured_models",
+        lambda: [{"id": "longcat-2.0-free", "providerID": "opencode"}],
+    )
+    monkeypatch.setattr(
+        "sciqlop_opencode.sessions.known_session_models",
+        lambda: [{"id": "longcat-2.0-free", "providerID": "opencode"}],
+    )
+    out = bk.fetch_models()
+    assert out == [
+        ("Default (opencode)", None),
+        ("Longcat 2.0 Free (opencode)", "opencode/longcat-2.0-free"),
     ]
 
 
@@ -79,14 +105,56 @@ def test_reorder_required_first_noop_when_already_correct():
 
 
 def test_reorder_required_first_passes_through_when_no_required():
-    schema = {"type": "object", "properties": {"name": {"type": "string"}}, "required": []}
+    schema = {
+        "type": "object",
+        "properties": {"name": {"type": "string"}},
+        "required": [],
+    }
     out = bk._reorder_required_first(schema)
     assert out is schema  # untouched
 
 
 def test_fetch_models_falls_back_on_db_error(monkeypatch):
     monkeypatch.setattr(bk, "_DEFAULT_MODEL_CHOICES", [("Default (opencode)", None)])
+
     def boom():
         raise RuntimeError("db locked")
+
     monkeypatch.setattr("sciqlop_opencode.sessions.known_session_models", boom)
+    monkeypatch.setattr("sciqlop_opencode.sessions.configured_models", boom)
     assert bk.fetch_models() == [("Default (opencode)", None)]
+
+
+def test_normalize_schema_types_collapses_union():
+    schema = {
+        "type": "object",
+        "properties": {
+            "start": {"type": ["string", "number"]},
+            "stop": {"type": ["string", "number"]},
+            "name": {"type": "string"},
+        },
+        "required": ["start"],
+    }
+    out = bk._normalize_schema_types(schema)
+    assert out["properties"]["start"]["type"] == "string"
+    assert out["properties"]["stop"]["type"] == "string"
+    assert out["properties"]["name"]["type"] == "string"
+
+
+def test_normalize_schema_types_handles_nullable():
+    schema = {"type": ["number", "null"]}
+    assert bk._normalize_schema_types(schema)["type"] == "number"
+
+
+def test_normalize_schema_types_recurses_into_nested():
+    schema = {
+        "type": "object",
+        "properties": {
+            "nested": {
+                "type": "object",
+                "properties": {"v": {"type": ["string", "null"]}},
+            },
+        },
+    }
+    out = bk._normalize_schema_types(schema)
+    assert out["properties"]["nested"]["properties"]["v"]["type"] == "string"
