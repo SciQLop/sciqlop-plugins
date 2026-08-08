@@ -421,9 +421,11 @@ def test_configured_providers_default_opencode_only(tmp_path, monkeypatch):
 
 def test_configured_models_returns_empty_when_cache_missing(tmp_path, monkeypatch):
     """Returns [] if the cache file doesn't exist."""
-    monkeypatch.setenv(
-        "OPENCODE_MODELS_PATH", str(tmp_path / "nonexistent" / "models.json")
-    )
+    # Use a dedicated cache dir that doesn't exist to avoid real cache interference
+    fake_cache_dir = tmp_path / "isolated-cache"
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+    monkeypatch.delenv("OPENCODE_MODELS_PATH", raising=False)
+    # Ensure no cache file exists in the platformdirs path
     assert sess.configured_models() == []
 
 
