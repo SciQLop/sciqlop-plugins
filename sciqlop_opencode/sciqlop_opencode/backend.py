@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 import shutil
 from pathlib import Path
 from typing import Callable, Iterator, List, Optional
@@ -282,8 +283,8 @@ def _split_provider_model(value: Optional[str]) -> tuple[str, str]:
 class _OpencodeStream:
     """Translate opencode-agent-sdk messages into SciQLop chat StreamBlocks.
 
-    opencode's subprocess-ACP stream sends assistant text as a *growing
-    accumulated snapshot* (each AssistantMessage carries the full text so far),
+    opencode's subprocess-ACP stream sends assistant text as *growing
+    accumulated snapshots* (each AssistantMessage carries the full text so far),
     while the SciQLop chat consumer appends incremental deltas. We diff snapshots
     into deltas and close the open text block when a tool call interrupts it or
     the turn ends. Tool calls arrive as ToolUseBlock at completion -> one
@@ -293,15 +294,19 @@ class _OpencodeStream:
 
     To avoid rendering text character-by-character (which causes visual
     glitches and excessive markdown re-parsing), we buffer deltas and only emit
-    a TextBlock when the buffer ends at a natural break (whitespace, newline,
-    sentence boundary) or on flush/turn-end.
+    a TextBlock at word boundaries (matching Vercel AI SDK's smoothStream).
+    A word is a run of non-whitespace followed by whitespace (``\\S+\\s+``).
+    Newlines are treated as whitespace within words, not as break points, so
+    naturally-wrapped text stays intact. A max buffer size force-emits if no
+    word boundary is found (handles long code tokens, URLs).
     """
 
-    _BREAK_CHARS = ("\n", " ", ".", ",", ";", ":", "!", "?", ")", "]", "}", '"', "'")
+    _WORD_BOUNDARY = re.compile(r"\S+\s+")
+    _MAX_BUFFER = 200
 
     def __init__(self):
         self._acc = ""  # text already emitted for the open text block
-        self._buf = ""  # buffered delta waiting for a natural break
+        self._buf = ""  # buffered delta waiting for a word boundary
         self._open = False  # an incomplete TextBlock is open in the consumer
 
     def feed(self, message) -> Iterator[StreamBlock]:
@@ -331,36 +336,38 @@ class _OpencodeStream:
         if not snapshot.startswith(self._acc):
             yield from self._close_text()  # buffer reset -> new block
         # New text since last emit (excluding what's already buffered)
-        new_text = snapshot[len(self._acc) + len(self._buf) :]
-        self._buf += new_text
-        # If buffer was empty before this delta, emit immediately (first chunk)
-        # to maintain the existing contract for simple cases. Otherwise, buffer
-        # until we hit a natural break character.
-        if not self._acc:
-            yield from self._flush_buf()
-        else:
-            yield from self._maybe_flush_buf()
+        self._buf += snapshot[len(self._acc) + len(self._buf) :]
+        # Emit at word boundaries (or force-emit on max buffer)
+        yield from self._maybe_flush_buf()
 
     def _maybe_flush_buf(self) -> Iterator[StreamBlock]:
-        """Emit buffer up to the last natural break character."""
+        """Emit buffer up to the last complete word boundary.
+
+        A word boundary is a run of non-whitespace followed by whitespace
+        (``\\S+\\s+``). This keeps words intact and treats newlines as
+        whitespace within/between words, not as break points. If no boundary
+        is found and the buffer exceeds _MAX_BUFFER chars, force-emit to avoid
+        unbounded buffering (e.g. for long code tokens or URLs).
+        """
         if not self._buf:
             return
-        # Find the last break character in the buffer
-        last_break = -1
-        for i, ch in enumerate(self._buf):
-            if ch in self._BREAK_CHARS:
-                last_break = i
-        # If buffer ends with a break, emit all of it
-        if last_break == len(self._buf) - 1:
+        matches = list(self._WORD_BOUNDARY.finditer(self._buf))
+        if matches:
+            last_end = matches[-1].end()
+            if last_end == len(self._buf):
+                # Buffer ends on a word boundary — emit everything
+                to_emit = self._buf
+                self._buf = ""
+            else:
+                # Emit up to the end of the last complete word
+                to_emit = self._buf[:last_end]
+                self._buf = self._buf[last_end:]
+        elif len(self._buf) >= self._MAX_BUFFER:
+            # No word boundary found but buffer too large — force emit
             to_emit = self._buf
             self._buf = ""
-        elif last_break > 0:
-            # Emit up to and including the break
-            to_emit = self._buf[: last_break + 1]
-            self._buf = self._buf[last_break + 1 :]
         else:
-            # No break yet, keep buffering
-            return
+            return  # keep buffering
         if to_emit:
             self._acc += to_emit
             self._open = True
@@ -376,7 +383,7 @@ class _OpencodeStream:
 
     def _close_text(self) -> Iterator[StreamBlock]:
         if self._open or self._buf:
-            self._buf = ""
+            yield from self._flush_buf()
             self._open = False
             self._acc = ""
             yield TextBlock(text="", complete=True)

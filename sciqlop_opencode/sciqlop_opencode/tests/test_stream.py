@@ -5,6 +5,7 @@ Block classes are monkeypatched to lightweight dataclasses because the real ones
 live in SciQLop's chat package, which may be stubbed in this test env. SDK message
 constructors come from opencode_agent_sdk.types (skipped if absent).
 """
+
 from dataclasses import dataclass, field
 
 import pytest
@@ -56,23 +57,36 @@ def test_duplicate_snapshot_emits_nothing(monkeypatch):
     stream = bk._OpencodeStream()
     out = []
     for _ in range(2):
-        out.extend(stream.feed(_assistant(sdk, sdk.TextBlock(text="Hi"))))
-    assert out == [_Text(text="Hi", complete=False)]
+        out.extend(stream.feed(_assistant(sdk, sdk.TextBlock(text="Hi "))))
+    assert out == [_Text(text="Hi ", complete=False)]
 
 
 def test_tool_call_closes_text_then_emits_activity(monkeypatch):
     sdk = pytest.importorskip("opencode_agent_sdk.types")
     bk = _patch_blocks(monkeypatch)
     stream = bk._OpencodeStream()
-    out = list(stream.feed(_assistant(sdk, sdk.TextBlock(text="Working"))))
-    out += list(stream.feed(_assistant(sdk, sdk.ToolUseBlock(
-        id="t1", name="mcp__sciqlop__sciqlop_screenshot_panel",
-        input={"name": "P1"}))))
+    out = list(stream.feed(_assistant(sdk, sdk.TextBlock(text="Working "))))
+    out += list(
+        stream.feed(
+            _assistant(
+                sdk,
+                sdk.ToolUseBlock(
+                    id="t1",
+                    name="mcp__sciqlop__sciqlop_screenshot_panel",
+                    input={"name": "P1"},
+                ),
+            )
+        )
+    )
     assert out == [
-        _Text(text="Working", complete=False),
+        _Text(text="Working ", complete=False),
         _Text(text="", complete=True),
-        _Tool(tool_name="sciqlop_screenshot_panel",
-              tool_input={"name": "P1"}, result=None, tool_use_id="t1"),
+        _Tool(
+            tool_name="sciqlop_screenshot_panel",
+            tool_input={"name": "P1"},
+            result=None,
+            tool_use_id="t1",
+        ),
     ]
 
 
@@ -80,21 +94,30 @@ def test_text_after_tool_starts_fresh_block(monkeypatch):
     sdk = pytest.importorskip("opencode_agent_sdk.types")
     bk = _patch_blocks(monkeypatch)
     stream = bk._OpencodeStream()
-    out = list(stream.feed(_assistant(sdk, sdk.TextBlock(text="Working"))))
-    out += list(stream.feed(_assistant(sdk, sdk.ToolUseBlock(
-        id="t1", name="sciqlop_create_panel", input={}))))
-    out += list(stream.feed(_assistant(sdk, sdk.TextBlock(text="Done"))))
-    assert _Text(text="Done", complete=False) in out
+    out = list(stream.feed(_assistant(sdk, sdk.TextBlock(text="Working "))))
+    out += list(
+        stream.feed(
+            _assistant(
+                sdk, sdk.ToolUseBlock(id="t1", name="sciqlop_create_panel", input={})
+            )
+        )
+    )
+    out += list(stream.feed(_assistant(sdk, sdk.TextBlock(text="Done "))))
+    assert _Text(text="Done ", complete=False) in out
     # "Done" is its own delta, never appended onto "Working"
-    assert _Text(text="WorkingDone", complete=False) not in out
+    assert _Text(text="Working Done ", complete=False) not in out
 
 
 def test_flush_closes_dangling_block_and_is_idempotent(monkeypatch):
     sdk = pytest.importorskip("opencode_agent_sdk.types")
     bk = _patch_blocks(monkeypatch)
     stream = bk._OpencodeStream()
+    # "partial" has no trailing space so it stays buffered until flush
     list(stream.feed(_assistant(sdk, sdk.TextBlock(text="partial"))))
-    assert list(stream.flush()) == [_Text(text="", complete=True)]
+    assert list(stream.flush()) == [
+        _Text(text="partial", complete=False),
+        _Text(text="", complete=True),
+    ]
     assert list(stream.flush()) == []
 
 
