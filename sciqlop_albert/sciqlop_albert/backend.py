@@ -24,66 +24,30 @@ from .settings import AlbertSettings
 
 _DEFAULT_BASE_URL = "https://albert.api.etalab.gouv.fr/v1"
 
-_SYSTEM_BASE = """\
-You are a helper embedded inside SciQLop, a Qt desktop application for \
-space-physics time-series visualization. You act on the live running \
-instance through function calls.
-
-IMPORTANT RULES:
-- To find plottable products, ALWAYS use sciqlop_products_tree. Start with \
-path="" to list providers, then drill down level by level using "//" as separator.
-- NEVER guess product paths. Always discover them step by step.
-- After plotting, ALWAYS call sciqlop_wait_for_plot_data before taking a screenshot.
-- Call sciqlop_api_reference BEFORE writing any Python code.
-
-Read functions (safe, call freely):
-  sciqlop_products_tree, sciqlop_speasy_inventory, sciqlop_window_state, \
-sciqlop_list_panels, sciqlop_active_panel, sciqlop_screenshot_panel, \
-sciqlop_screenshot_plot, sciqlop_api_reference, sciqlop_wait_for_plot_data, \
-sciqlop_list_notebooks, sciqlop_read_notebook
-
-WORKED EXAMPLE — "plot ACE magnetic field":
+_WORKED_EXAMPLE = """\
+WORKED EXAMPLE — "plot ACE magnetic field". Albert drives smaller models than \
+the CLI backends, so the drill-down is spelled out step by step:
 
 Step 1: sciqlop_products_tree(path="")
-  → returns providers: ["speasy", ...]
-
-Step 2: sciqlop_products_tree(path="speasy")
-  → returns: ["amda", "cda", "ssc", ...]
-
-Step 3: sciqlop_products_tree(path="speasy//amda")
-  → returns: ["Parameters", "Catalogs", ...]
-
-Step 4: sciqlop_products_tree(path="speasy//amda//Parameters")
-  → returns missions: ["ACE", "MMS", "THEMIS", ...]
-
-Step 5: sciqlop_products_tree(path="speasy//amda//Parameters//ACE")
-  → returns instruments, keep drilling until you reach a leaf with a full path
-
-Step 6: sciqlop_create_panel()
-  → returns panel name, e.g. "Panel0"
-
+  -> returns providers: ["speasy", ...]
+Step 2: sciqlop_products_tree(path="speasy")        -> ["amda", "cda", "ssc", ...]
+Step 3: sciqlop_products_tree(path="speasy//amda")  -> ["Parameters", "Catalogs", ...]
+Step 4: sciqlop_products_tree(path="speasy//amda//Parameters")  -> missions
+Step 5: keep drilling until you reach a leaf with a full path
+Step 6: sciqlop_create_panel()                      -> panel name, e.g. "Panel0"
 Step 7: sciqlop_exec_python(code="plot_panel('Panel0').plot_product('speasy//amda//Parameters//ACE//MFI//mfi_final//imf', plot_type=PlotType.TimeSeries)")
-
 Step 8: sciqlop_wait_for_plot_data(name="Panel0")
-
 Step 9: sciqlop_screenshot_panel(name="Panel0")
 
-KEY: each "//" separates one tree level. Drill down one level at a time \
-until you find the exact parameter. Do NOT skip levels or guess paths.
+Each "//" separates one tree level. Do NOT skip levels or guess paths.
 
 TROUBLESHOOTING:
-- If sciqlop_products_tree("") returns empty, the tree may still be loading. \
-Wait a moment and try again, or use sciqlop_speasy_inventory("") as fallback \
-to browse available data. With speasy inventory paths you can still plot using \
-sciqlop_exec_python and speasy directly.
-- If a tool returns an error, read the message carefully and retry with \
-corrected arguments. Do NOT give up after one failed attempt.
-- NEVER say "I don't have access to tools" or "I can't help". You DO have \
-tools. Use them.
-- NEVER invent or guess error messages, stack traces, or code. Only report \
-information you obtained from tool calls.
-- When the user asks about problems or errors, call sciqlop_window_state \
-first to check the current state.
+- If sciqlop_products_tree("") is empty the tree may still be loading — retry, \
+or browse sciqlop_speasy_inventory("") and plot via speasy directly.
+- If a tool errors, read the message and retry with corrected arguments. Do NOT \
+give up after one failed attempt.
+- NEVER say "I don't have access to tools" or "I can't help". You DO have tools.
+- When the user asks about problems or errors, call sciqlop_window_state first.
 
 """
 
@@ -102,11 +66,19 @@ they will be rejected. Tell the user to enable 'Allow write actions' first.
 
 """
 
-_SYSTEM_TAIL = "Be concise. Cite product names and time ranges verbatim."
 
 
-def _system_prompt(allow_writes: bool) -> str:
-    return _SYSTEM_BASE + (_WRITES_ENABLED if allow_writes else _WRITES_DISABLED) + _SYSTEM_TAIL
+def _system_prompt(guidance: str, allow_writes: bool) -> str:
+    """Workspace guidance, the Albert-specific worked example, then the
+    write-mode block.
+
+    `guidance` is the workspace `AGENTS.md` handed over by SciQLop core —
+    its managed block plus whatever the user wrote for this workspace.
+    Albert talks to an HTTP API and reads no files, so this is the only way
+    those rules reach it.
+    """
+    return (guidance.strip() + "\n\n" + _WORKED_EXAMPLE
+            + (_WRITES_ENABLED if allow_writes else _WRITES_DISABLED))
 
 
 def _api_key() -> str:
@@ -150,6 +122,9 @@ class AlbertBackend:
     display_name = "Albert"
     model_choices: List[tuple[str, Optional[str]]] = [("Default", None)]
     supports_sessions = False
+    # workspace AGENTS.md; class default keeps partially-built
+    # instances (tests, __new__) renderable
+    _guidance: str = ""
 
     def __init__(self, ctx: BackendContext):
         key = _api_key()
@@ -170,6 +145,8 @@ class AlbertBackend:
         self._gated_names = {t["name"] for t in ctx.tools if t.get("gated")}
         self._confirm_cb = ctx.confirm_cb
         self._write_mode = ctx.write_mode
+        # tolerated missing: BackendContext gained `guidance` in SciQLop 0.13
+        self._guidance = getattr(ctx, "guidance", "")
         self._tempdir = Path(ctx.tempdir)
         self._tempdir.mkdir(parents=True, exist_ok=True)
         self._model: Optional[str] = None
@@ -268,7 +245,7 @@ class AlbertBackend:
         settings = AlbertSettings()
         req = {
             "model": model,
-            "messages": [{"role": "system", "content": _system_prompt(self._allow_writes)}] + self._history,
+            "messages": [{"role": "system", "content": _system_prompt(self._guidance, self._allow_writes)}] + self._history,
             "stream": True,
             "tools": self._tools_defs,
             "tool_choice": "auto",

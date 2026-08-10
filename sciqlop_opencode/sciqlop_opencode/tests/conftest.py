@@ -30,6 +30,8 @@ _OPTIONAL = [
     "SciQLop",
     "SciQLop.components",
     "SciQLop.components.agents",
+    "SciQLop.components.agents.acp",
+    "SciQLop.components.agents.acp.sessions",
     "SciQLop.components.agents.backend",
     "SciQLop.components.agents.chat",
     "SciQLop.components.theming",

@@ -27,31 +27,6 @@ from SciQLop.components.agents.chat import (
 from .auth import CopilotTokenCache, editor_headers
 from .settings import CopilotSettings, load_github_token
 
-_SYSTEM_PROMPT = """\
-You are a helper embedded inside SciQLop, a Qt desktop application for \
-space-physics time-series visualization. You act on the live running \
-instance through function calls.
-
-RULES:
-- To find plottable products, ALWAYS use sciqlop_products_tree. Start with \
-path="" to list providers, then drill down level by level using "//" as separator.
-- NEVER guess product paths. Always discover them step by step.
-- After plotting, ALWAYS call sciqlop_wait_for_plot_data before taking a screenshot.
-- Call sciqlop_api_reference BEFORE writing any Python code.
-- NEVER invent error messages or code; only report what tools returned.
-- If a tool returns an error, read the message and retry with corrected arguments.
-- To add a Python dependency, use the sciqlop_install_package tool — never run `pip install` (it is not recorded and is wiped when the venv is rebuilt).
-- To ground or cite a claim, use sciqlop_search_literature (arXiv + ADS) and sciqlop_fetch_paper (full text).
-
-Voice and conduct — you are a research scientist (plasma physics and astrophysics) and a strong software engineer, not a generic assistant:
-- Be direct. Do not open with praise or agreement, do not validate a claim reflexively, do not soften corrections. If the data or the physics does not support what the user said, say so and explain why.
-- Be quantitative. Give numbers with units and the time/spatial range or uncertainty they apply to. Name the instrument, mission, or product a value comes from.
-- Ground physical claims in the literature. Attribute an established result (mission/instrument, or author–year when you know it); distinguish a published result from your own inference; when a value should be checked against published work, say so rather than asserting it.
-- Never invent data, time ranges, event times, or physical values. If you don't know, say "I don't know" or "this needs verification" — read the live state or the data first.
-- Write correct, reproducible code: verify API signatures before calling, run and check rather than claim something works, keep it simple.
-- Write plainly: no filler or marketing words, plain scientific prose, short sentences. Cite product names and time ranges verbatim. Accuracy and concision over fluency.
-"""
-
 _WRITES_ENABLED = (
     "Write functions are ENABLED (user will be prompted to approve each call)."
 )
@@ -61,8 +36,16 @@ _WRITES_DISABLED = (
 )
 
 
-def _system_prompt(allow_writes: bool) -> str:
-    return _SYSTEM_PROMPT + "\n" + (_WRITES_ENABLED if allow_writes else _WRITES_DISABLED)
+def _system_prompt(guidance: str, allow_writes: bool) -> str:
+    """Workspace guidance plus the write-mode line.
+
+    `guidance` is the workspace `AGENTS.md` handed over by SciQLop core —
+    its managed block plus whatever the user wrote for this workspace.
+    Copilot talks to an HTTP API and reads no files, so this is the only
+    way those rules reach it.
+    """
+    return guidance.strip() + "\n\n" + (
+        _WRITES_ENABLED if allow_writes else _WRITES_DISABLED)
 
 
 def _chat_models(token_cache: CopilotTokenCache) -> List[tuple[str, Optional[str]]]:
@@ -104,6 +87,9 @@ class CopilotBackend:
     display_name = "GitHub Copilot"
     model_choices: List[tuple[str, Optional[str]]] = [("Default", None)]
     supports_sessions = False
+    # workspace AGENTS.md; class default keeps partially-built
+    # instances (tests, __new__) renderable
+    _guidance: str = ""
 
     def __init__(self, ctx: BackendContext):
         self._main_window = ctx.main_window
@@ -116,6 +102,8 @@ class CopilotBackend:
         self._gated_names = {t["name"] for t in ctx.tools if t.get("gated")}
         self._confirm_cb = ctx.confirm_cb
         self._write_mode = ctx.write_mode
+        # tolerated missing: BackendContext gained `guidance` in SciQLop 0.13
+        self._guidance = getattr(ctx, "guidance", "")
         self._tempdir = Path(ctx.tempdir)
         self._tempdir.mkdir(parents=True, exist_ok=True)
         self._model: Optional[str] = None
@@ -239,7 +227,7 @@ class CopilotBackend:
         settings = CopilotSettings()
         req = {
             "model": model,
-            "messages": [{"role": "system", "content": _system_prompt(self._write_mode != AgentWriteMode.NONE)}] + self._history,
+            "messages": [{"role": "system", "content": _system_prompt(self._guidance, self._write_mode != AgentWriteMode.NONE)}] + self._history,
             "stream": True,
             "tools": self._tools_defs,
             "tool_choice": "auto",
