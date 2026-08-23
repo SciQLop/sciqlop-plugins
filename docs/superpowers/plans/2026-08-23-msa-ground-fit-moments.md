@@ -28,9 +28,15 @@ its own follow-up plan once that lands).
   just a code comment.
 - No `n_h`/`T_h`/`kappa`/`model`/`chi2` VPs in v1 — keep them in the per-day fit result for
   later diagnostics, don't register them as products.
-- Run tests with the SciQLop dev venv, not system Python:
-  `/home/jeandet/Documents/prog/SciQLop/.venv/bin/python -m pytest ...`
-  (bundles the pinned `speasy`/`SciQLop` versions this plugin actually depends on).
+- Run tests with the SciQLop dev venv, not system Python, and from inside
+  `sciqlop_msa/` (the plugin subdirectory), not the repo root — the repo root's
+  outer `sciqlop_msa/` directory has no `__init__.py`, so pytest run from there
+  resolves the inner package as an ambiguous namespace package and fails to
+  import it (`ImportError: cannot import name 'moments_fit' from 'sciqlop_msa'
+  (unknown location)`), even though the file path looks correct:
+  `cd sciqlop_msa && /home/jeandet/Documents/prog/SciQLop/.venv/bin/python -m pytest ...`
+  (the venv bundles the pinned `speasy`/`SciQLop` versions this plugin actually
+  depends on).
 - `scipy.optimize.curve_fit` failures are caught as `(RuntimeError, ValueError)`
   specifically — never a blanket `except:`.
 
@@ -109,7 +115,7 @@ def test_species_mass_table_has_all_four_channels():
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `/home/jeandet/Documents/prog/SciQLop/.venv/bin/python -m pytest sciqlop_msa/sciqlop_msa/tests/test_moments_fit.py -v`
+Run (from `sciqlop_msa/`): `cd sciqlop_msa && /home/jeandet/Documents/prog/SciQLop/.venv/bin/python -m pytest sciqlop_msa/tests/test_moments_fit.py -v`
 Expected: FAIL with `ModuleNotFoundError: No module named 'sciqlop_msa.moments_fit'`
 
 - [ ] **Step 3: Write the implementation**
@@ -194,7 +200,7 @@ def kappa_distribution(E_eV: np.ndarray, n_cc: float, T_eV: float, kappa: float,
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `/home/jeandet/Documents/prog/SciQLop/.venv/bin/python -m pytest sciqlop_msa/sciqlop_msa/tests/test_moments_fit.py -v`
+Run (from `sciqlop_msa/`): `cd sciqlop_msa && /home/jeandet/Documents/prog/SciQLop/.venv/bin/python -m pytest sciqlop_msa/tests/test_moments_fit.py -v`
 Expected: 4 passed
 
 - [ ] **Step 5: Commit**
@@ -263,7 +269,7 @@ def test_effective_temperature_rejects_unknown_model():
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `/home/jeandet/Documents/prog/SciQLop/.venv/bin/python -m pytest sciqlop_msa/sciqlop_msa/tests/test_moments_fit.py -v`
+Run (from `sciqlop_msa/`): `cd sciqlop_msa && /home/jeandet/Documents/prog/SciQLop/.venv/bin/python -m pytest sciqlop_msa/tests/test_moments_fit.py -v`
 Expected: the 5 new tests FAIL with `AttributeError: module 'sciqlop_msa.moments_fit' has no attribute '_reduced_chi2'` (or `effective_temperature`)
 
 - [ ] **Step 3: Write the implementation**
@@ -294,7 +300,7 @@ def effective_temperature(params: dict) -> float:
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `/home/jeandet/Documents/prog/SciQLop/.venv/bin/python -m pytest sciqlop_msa/sciqlop_msa/tests/test_moments_fit.py -v`
+Run (from `sciqlop_msa/`): `cd sciqlop_msa && /home/jeandet/Documents/prog/SciQLop/.venv/bin/python -m pytest sciqlop_msa/tests/test_moments_fit.py -v`
 Expected: 9 passed
 
 - [ ] **Step 5: Commit**
@@ -375,7 +381,7 @@ algorithm before writing this plan: recovered `nc`≈45.21 (inj. 45.0), `Tc`≈2
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `/home/jeandet/Documents/prog/SciQLop/.venv/bin/python -m pytest sciqlop_msa/sciqlop_msa/tests/test_moments_fit.py -v`
+Run (from `sciqlop_msa/`): `cd sciqlop_msa && /home/jeandet/Documents/prog/SciQLop/.venv/bin/python -m pytest sciqlop_msa/tests/test_moments_fit.py -v`
 Expected: the 2 new tests FAIL with `AttributeError: module 'sciqlop_msa.moments_fit' has no attribute 'fit_max_kap'`
 
 - [ ] **Step 3: Write the implementation**
@@ -486,7 +492,7 @@ def fit_max_kap(energy: np.ndarray, f_obs: np.ndarray, mask: np.ndarray,
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `/home/jeandet/Documents/prog/SciQLop/.venv/bin/python -m pytest sciqlop_msa/sciqlop_msa/tests/test_moments_fit.py -v`
+Run (from `sciqlop_msa/`): `cd sciqlop_msa && /home/jeandet/Documents/prog/SciQLop/.venv/bin/python -m pytest sciqlop_msa/tests/test_moments_fit.py -v`
 Expected: 11 passed
 
 - [ ] **Step 5: Commit**
@@ -573,7 +579,7 @@ reproduction of this algorithm before writing this plan showed a clean separatio
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `/home/jeandet/Documents/prog/SciQLop/.venv/bin/python -m pytest sciqlop_msa/sciqlop_msa/tests/test_moments_fit.py -v`
+Run (from `sciqlop_msa/`): `cd sciqlop_msa && /home/jeandet/Documents/prog/SciQLop/.venv/bin/python -m pytest sciqlop_msa/tests/test_moments_fit.py -v`
 Expected: the 3 new tests FAIL with `AttributeError: module 'sciqlop_msa.moments_fit' has no attribute 'fit_2max'`
 
 - [ ] **Step 3: Write the implementation**
@@ -766,7 +772,7 @@ def best_fit(energy: np.ndarray, f_obs: np.ndarray, mask: np.ndarray,
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `/home/jeandet/Documents/prog/SciQLop/.venv/bin/python -m pytest sciqlop_msa/sciqlop_msa/tests/test_moments_fit.py -v`
+Run (from `sciqlop_msa/`): `cd sciqlop_msa && /home/jeandet/Documents/prog/SciQLop/.venv/bin/python -m pytest sciqlop_msa/tests/test_moments_fit.py -v`
 Expected: 14 passed
 
 - [ ] **Step 5: Commit**
@@ -861,7 +867,7 @@ def test_fetch_day_rejects_unknown_species():
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `/home/jeandet/Documents/prog/SciQLop/.venv/bin/python -m pytest sciqlop_msa/sciqlop_msa/tests/test_moments_source.py -v`
+Run (from `sciqlop_msa/`): `cd sciqlop_msa && /home/jeandet/Documents/prog/SciQLop/.venv/bin/python -m pytest sciqlop_msa/tests/test_moments_source.py -v`
 Expected: FAIL with `ModuleNotFoundError: No module named 'sciqlop_msa.moments_source'`
 
 - [ ] **Step 3: Write the implementation**
@@ -922,7 +928,7 @@ def fetch_day(species: str, day: date) -> "DaySpectra | None":
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `/home/jeandet/Documents/prog/SciQLop/.venv/bin/python -m pytest sciqlop_msa/sciqlop_msa/tests/test_moments_source.py -v`
+Run (from `sciqlop_msa/`): `cd sciqlop_msa && /home/jeandet/Documents/prog/SciQLop/.venv/bin/python -m pytest sciqlop_msa/tests/test_moments_source.py -v`
 Expected: 3 passed
 
 - [ ] **Step 5: Commit**
@@ -1005,7 +1011,7 @@ def test_fit_day_uncached_returns_none_when_fetch_returns_none():
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `/home/jeandet/Documents/prog/SciQLop/.venv/bin/python -m pytest sciqlop_msa/sciqlop_msa/tests/test_moments_compute.py -v`
+Run (from `sciqlop_msa/`): `cd sciqlop_msa && /home/jeandet/Documents/prog/SciQLop/.venv/bin/python -m pytest sciqlop_msa/tests/test_moments_compute.py -v`
 Expected: FAIL with `ModuleNotFoundError: No module named 'sciqlop_msa.moments_compute'`
 
 - [ ] **Step 3: Write the implementation**
@@ -1094,7 +1100,7 @@ def fit_day(species: str, day: date) -> "DayFits | None":
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `/home/jeandet/Documents/prog/SciQLop/.venv/bin/python -m pytest sciqlop_msa/sciqlop_msa/tests/test_moments_compute.py -v`
+Run (from `sciqlop_msa/`): `cd sciqlop_msa && /home/jeandet/Documents/prog/SciQLop/.venv/bin/python -m pytest sciqlop_msa/tests/test_moments_compute.py -v`
 Expected: 2 passed
 
 - [ ] **Step 5: Commit**
@@ -1256,7 +1262,7 @@ def test_density_callback_returns_none_when_no_data():
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `/home/jeandet/Documents/prog/SciQLop/.venv/bin/python -m pytest sciqlop_msa/sciqlop_msa/tests/test_moments_vp.py -v`
+Run (from `sciqlop_msa/`): `cd sciqlop_msa && /home/jeandet/Documents/prog/SciQLop/.venv/bin/python -m pytest sciqlop_msa/tests/test_moments_vp.py -v`
 Expected: FAIL with `ModuleNotFoundError: No module named 'sciqlop_msa.moments_vp'`
 
 - [ ] **Step 3: Write the implementation**
@@ -1395,7 +1401,7 @@ def load(main_window):
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `/home/jeandet/Documents/prog/SciQLop/.venv/bin/python -m pytest sciqlop_msa/sciqlop_msa/tests/ -v`
+Run (from `sciqlop_msa/`): `cd sciqlop_msa && /home/jeandet/Documents/prog/SciQLop/.venv/bin/python -m pytest sciqlop_msa/tests/ -v`
 Expected: all tests across every file in this plan pass (23 total: 14 from
 `test_moments_fit.py` + 3 from `test_moments_source.py` + 2 from
 `test_moments_compute.py` + 4 from `test_moments_vp.py`)
@@ -1445,7 +1451,7 @@ Spectrograms"`, `"L1 Moments"`, `"L2pre Energy Flux Spectrograms"`):
 
 - [ ] **Step 2: Verify the module still imports cleanly**
 
-Run: `/home/jeandet/Documents/prog/SciQLop/.venv/bin/python -c "from sciqlop_msa import quicklooks; print(list(quicklooks.TEMPLATES))"`
+Run (from `sciqlop_msa/`): `cd sciqlop_msa && /home/jeandet/Documents/prog/SciQLop/.venv/bin/python -c "from sciqlop_msa import quicklooks; print(list(quicklooks.TEMPLATES))"`
 Expected: prints a list including `'L2pre Ground Moments (Fit)'` alongside the four
 existing template names, no traceback.
 
@@ -1465,7 +1471,7 @@ git commit -m "feat(msa): add ground-fit moments quick-look template"
 
 - [ ] **Step 1: Run the complete `sciqlop_msa` test suite**
 
-Run: `/home/jeandet/Documents/prog/SciQLop/.venv/bin/python -m pytest sciqlop_msa/sciqlop_msa/tests/ -v`
+Run (from `sciqlop_msa/`): `cd sciqlop_msa && /home/jeandet/Documents/prog/SciQLop/.venv/bin/python -m pytest sciqlop_msa/tests/ -v`
 Expected: all tests pass, exit code 0. Read the actual pass count and exit code —
 don't infer success from a partial grep (per project workflow rules).
 
