@@ -40,6 +40,15 @@ TEMPLATES = {
             f"{_L2}/diff_dir_en_flux_total",
         ],
     },
+    "L2pre Ground Moments (Fit)": {
+        "products": [
+            "msa/moments_fit/h_plus/density",
+            "msa/moments_fit/alphas/density",
+            "msa/moments_fit/heavies/density",
+            "msa/moments_fit/total/density",
+            "msa/moments_fit/h_plus/T_eff",
+        ],
+    },
 }
 
 
