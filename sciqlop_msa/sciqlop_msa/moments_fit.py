@@ -79,6 +79,107 @@ def _reduced_chi2(f_obs: np.ndarray, f_model: np.ndarray, n_params: int) -> floa
     return float(np.sum(residual ** 2) / max(len(f_obs) - n_params, 1))
 
 
+def _init_maxwell_slope(energy: np.ndarray, f_obs: np.ndarray, mask: np.ndarray,
+                        e_min: float, e_max: float, A: float) -> tuple:
+    m = mask & (energy > e_min) & (energy < e_max)
+    if m.sum() < 3:
+        return 1.0, 100.0
+    try:
+        slope, intercept = np.polyfit(energy[m], np.log(f_obs[m]), 1)
+    except np.linalg.LinAlgError:
+        return 1.0, 100.0
+    T = max(-1.0 / slope, 1.0) if slope < 0 else 100.0
+    n = max(
+        np.exp(intercept) / (ion_mass_kg(A) / (2 * np.pi * T * ELEMENTARY_CHARGE)) ** 1.5 / 1e6,
+        0.01,
+    )
+    return n, T
+
+
+def _init_kappa_slope(energy: np.ndarray, f_obs: np.ndarray, mask: np.ndarray,
+                      e_min: float, e_max: float) -> float:
+    m = mask & (energy > e_min) & (energy < e_max)
+    if m.sum() < 3:
+        return 3.0
+    try:
+        slope, _ = np.polyfit(np.log(energy[m]), np.log(f_obs[m]), 1)
+    except np.linalg.LinAlgError:
+        return 3.0
+    return float(np.clip(-slope - 1.0, 1.6, 10.0))
+
+
+def fit_max_kap(energy: np.ndarray, f_obs: np.ndarray, mask: np.ndarray,
+                A: float, q: int) -> "FitResult | None":
+    """Fit a Maxwellian core + Kappa suprathermal halo."""
+    Eg, fg = energy[mask], f_obs[mask]
+    nc0, Tc0 = _init_maxwell_slope(energy, f_obs, mask, 20, 700, A)
+    kap0 = _init_kappa_slope(energy, f_obs, mask, 800, 30000)
+    nh0, Th0 = 0.15 * nc0, 10 * Tc0
+
+    mc = (Eg > 20) & (Eg < 700)
+    if mc.sum() < 3:
+        return None
+    try:
+        pm, _ = curve_fit(
+            lambda E, log_n, log_T: _log_safe(maxwellian(E, 10 ** log_n, 10 ** log_T, A)),
+            Eg[mc], np.log(fg[mc]),
+            p0=[np.log10(nc0), np.log10(Tc0)],
+            bounds=([-3, 0], [4, 3]),
+            maxfev=10000,
+        )
+    except (RuntimeError, ValueError):
+        return None
+    nc_seed, Tc_seed = 10 ** pm[0], 10 ** pm[1]
+
+    residual = fg - maxwellian(Eg, nc_seed, Tc_seed, A)
+    mk = (residual > 0) & (Eg > 800)
+    if mk.sum() >= 3:
+        try:
+            pk, _ = curve_fit(
+                lambda E, log_n, log_T, kappa: _log_safe(kappa_distribution(E, 10 ** log_n, 10 ** log_T, kappa, A)),
+                Eg[mk], np.log(residual[mk]),
+                p0=[np.log10(max(nh0, 0.001)), np.log10(max(Th0, 30)), kap0],
+                bounds=([-3, 1.5, 1.55], [4, 4.5, 12]),
+                maxfev=10000,
+            )
+            nh_seed, Th_seed, kap_seed = 10 ** pk[0], 10 ** pk[1], pk[2]
+        except (RuntimeError, ValueError):
+            nh_seed, Th_seed, kap_seed = nh0, Th0, kap0
+    else:
+        nh_seed, Th_seed, kap_seed = nh0, Th0, kap0
+
+    def joint_model(E, log_nc, log_Tc, log_nh, log_Th, kappa):
+        return _log_safe(
+            maxwellian(E, 10 ** log_nc, 10 ** log_Tc, A)
+            + kappa_distribution(E, 10 ** log_nh, 10 ** log_Th, kappa, A)
+        )
+
+    try:
+        popt, _ = curve_fit(
+            joint_model, Eg, np.log(fg),
+            p0=[np.log10(nc_seed), np.log10(Tc_seed), np.log10(nh_seed), np.log10(Th_seed), kap_seed],
+            bounds=([-3, 0, -3, 1.5, 1.55], [4, 3, 4, 4.5, 12]),
+            maxfev=40000,
+        )
+    except (RuntimeError, ValueError):
+        return None
+
+    nc_f, Tc_f, nh_f, Th_f, kap_f = 10 ** popt[0], 10 ** popt[1], 10 ** popt[2], 10 ** popt[3], popt[4]
+    if Th_f > 20000 or kap_f >= 11.9:
+        return None
+
+    f_model = maxwellian(Eg, nc_f, Tc_f, A) + kappa_distribution(Eg, nh_f, Th_f, kap_f, A)
+    params = dict(model="max_kap", nc=nc_f, Tc=Tc_f, nh=nh_f, Th=Th_f, kappa=kap_f)
+    return FitResult(
+        n_tot=nc_f + nh_f,
+        T_c=Tc_f,
+        T_eff=effective_temperature(params),
+        model="max_kap",
+        chi2=_reduced_chi2(fg, f_model, 5),
+        params=params,
+    )
+
+
 def effective_temperature(params: dict) -> float:
     """Density-weighted effective temperature across all populations in a fit."""
     model = params["model"]

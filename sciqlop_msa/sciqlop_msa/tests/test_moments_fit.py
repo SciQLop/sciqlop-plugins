@@ -88,3 +88,41 @@ def test_effective_temperature_2max_kap_weights_three_populations():
 def test_effective_temperature_rejects_unknown_model():
     with pytest.raises(ValueError):
         moments_fit.effective_temperature({"model": "not_a_model"})
+
+
+def test_fit_max_kap_recovers_injected_maxwell_plus_kappa_parameters():
+    energy = np.logspace(0, np.log10(39200), 64)
+    n_c, T_c = 45.0, 280.0
+    n_h, T_h, kappa_true = 0.08, 5000.0, 3.5
+    A, q = 1.00728, 1
+
+    f_true = (
+        moments_fit.maxwellian(energy, n_c, T_c, A)
+        + moments_fit.kappa_distribution(energy, n_h, T_h, kappa_true, A)
+    )
+    rng = np.random.default_rng(42)
+    f_obs = f_true * rng.lognormal(mean=0.0, sigma=0.05, size=f_true.shape)
+    mask = np.ones_like(energy, dtype=bool)
+
+    result = moments_fit.fit_max_kap(energy, f_obs, mask, A, q)
+
+    assert result is not None
+    assert result.model == "max_kap"
+    assert result.params["nc"] == pytest.approx(n_c, rel=0.05)
+    assert result.params["Tc"] == pytest.approx(T_c, rel=0.05)
+    assert result.params["nh"] == pytest.approx(n_h, rel=0.1)
+    assert result.params["Th"] == pytest.approx(T_h, rel=0.05)
+    assert result.params["kappa"] == pytest.approx(kappa_true, rel=0.1)
+    assert result.n_tot == pytest.approx(n_c + n_h, rel=0.05)
+    assert result.T_c == pytest.approx(T_c, rel=0.05)
+
+
+def test_fit_max_kap_returns_none_with_too_few_points():
+    energy = np.logspace(0, np.log10(39200), 64)
+    f_obs = np.full(64, np.nan)
+    mask = np.zeros(64, dtype=bool)
+    mask[:2] = True  # fewer than 3 points in the core window
+
+    result = moments_fit.fit_max_kap(energy, f_obs, mask, 1.00728, 1)
+
+    assert result is None
