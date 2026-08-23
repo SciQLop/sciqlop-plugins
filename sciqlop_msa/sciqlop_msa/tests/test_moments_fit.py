@@ -50,3 +50,41 @@ def test_species_mass_table_has_all_four_channels():
     assert moments_fit.SPECIES_MASS_TABLE["alphas"] == (4.0026, 2)
     assert moments_fit.SPECIES_MASS_TABLE["heavies"] == (16.0, 1)
     assert moments_fit.SPECIES_MASS_TABLE["total"] == (1.00728, 1)
+
+
+def test_reduced_chi2_is_zero_for_perfect_fit():
+    f_obs = np.array([1.0, 2.0, 3.0, 4.0, 5.0])
+    chi2 = moments_fit._reduced_chi2(f_obs, f_obs.copy(), n_params=2)
+    assert chi2 == pytest.approx(0.0, abs=1e-12)
+
+
+def test_reduced_chi2_is_positive_for_imperfect_fit():
+    f_obs = np.array([1.0, 2.0, 3.0, 4.0, 5.0])
+    f_model = f_obs * 1.5
+    chi2 = moments_fit._reduced_chi2(f_obs, f_model, n_params=2)
+    assert chi2 > 0.0
+
+
+def test_effective_temperature_max_kap_and_2max_share_formula():
+    params = dict(model="max_kap", nc=10.0, Tc=100.0, nh=1.0, Th=1000.0)
+    expected = (10.0 * 100.0 + 1.0 * 1000.0) / (10.0 + 1.0)
+    assert moments_fit.effective_temperature(params) == pytest.approx(expected)
+
+    params2 = dict(model="2max", nc=10.0, Tc=100.0, nh=1.0, Th=1000.0)
+    assert moments_fit.effective_temperature(params2) == pytest.approx(expected)
+
+
+def test_effective_temperature_2max_kap_weights_three_populations():
+    params = dict(
+        model="2max_kap",
+        nc=10.0, Tc=100.0,
+        nw=2.0, Tw=500.0,
+        nh=0.5, Th=5000.0,
+    )
+    expected = (10.0 * 100.0 + 2.0 * 500.0 + 0.5 * 5000.0) / (10.0 + 2.0 + 0.5)
+    assert moments_fit.effective_temperature(params) == pytest.approx(expected)
+
+
+def test_effective_temperature_rejects_unknown_model():
+    with pytest.raises(ValueError):
+        moments_fit.effective_temperature({"model": "not_a_model"})

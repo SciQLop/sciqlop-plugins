@@ -72,3 +72,24 @@ def kappa_distribution(E_eV: np.ndarray, n_cc: float, T_eV: float, kappa: float,
     v2 = 2 * E_eV * ELEMENTARY_CHARGE / m
     norm = n_cc * 1e6 * (np.pi * kappa * theta2) ** -1.5 * gamma(kappa + 1) / gamma(kappa - 0.5)
     return norm * (1.0 + v2 / (kappa * theta2)) ** -(kappa + 1)
+
+
+def _reduced_chi2(f_obs: np.ndarray, f_model: np.ndarray, n_params: int) -> float:
+    residual = _log_safe(f_obs) - _log_safe(np.maximum(f_model, 1e-300))
+    return float(np.sum(residual ** 2) / max(len(f_obs) - n_params, 1))
+
+
+def effective_temperature(params: dict) -> float:
+    """Density-weighted effective temperature across all populations in a fit."""
+    model = params["model"]
+    if model in ("max_kap", "2max"):
+        return (params["nc"] * params["Tc"] + params["nh"] * params["Th"]) / (
+            params["nc"] + params["nh"]
+        )
+    if model == "2max_kap":
+        return (
+            params["nc"] * params["Tc"]
+            + params["nw"] * params["Tw"]
+            + params["nh"] * params["Th"]
+        ) / (params["nc"] + params["nw"] + params["nh"])
+    raise ValueError(f"Unknown model {model!r}")
