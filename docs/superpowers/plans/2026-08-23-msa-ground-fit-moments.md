@@ -972,14 +972,25 @@ from sciqlop_msa.moments_source import DaySpectra
 
 
 def _synthetic_day_spectra():
+    """DaySpectra.flux holds RAW instrument flux (cm^-2 s^-1 sr^-1 eV^-1), not
+    phase-space density. Build the target phase-space-density spectrum first,
+    then invert flux_to_phase_space_density to get a realistic raw-flux row —
+    this exercises the actual unit-conversion step inside _fit_day_uncached
+    instead of bypassing it (a synthetic row built by calling maxwellian/
+    kappa_distribution directly and handed to DaySpectra.flux as-is would
+    silently skip that conversion and not catch a missing/wrong call)."""
     energy = np.logspace(0, np.log10(39200), 64)
     n_c, T_c = 45.0, 280.0
     n_h, T_h, kappa_true = 0.08, 5000.0, 3.5
+    A, q = 1.00728, 1
     rng = np.random.default_rng(42)
-    good_row = (
-        moments_fit.maxwellian(energy, n_c, T_c, 1.00728)
-        + moments_fit.kappa_distribution(energy, n_h, T_h, kappa_true, 1.00728)
+    f_obs_true = (
+        moments_fit.maxwellian(energy, n_c, T_c, A)
+        + moments_fit.kappa_distribution(energy, n_h, T_h, kappa_true, A)
     ) * rng.lognormal(mean=0.0, sigma=0.05, size=64)
+    m = moments_fit.ion_mass_kg(A)
+    E_kin_J = q * energy * moments_fit.ELEMENTARY_CHARGE
+    good_row = f_obs_true * (2.0 * E_kin_J ** 2) / (m ** 2 * 1e4)
     empty_row = np.full(64, np.nan)  # fewer than 6 usable points -> skipped
     flux = np.stack([good_row, empty_row])
     time = np.array([1736300000.0, 1736300060.0])
@@ -1032,7 +1043,7 @@ from datetime import date, timedelta
 
 import numpy as np
 
-from .moments_fit import SPECIES_MASS_TABLE, best_fit
+from .moments_fit import SPECIES_MASS_TABLE, best_fit, flux_to_phase_space_density
 from .moments_source import fetch_day
 
 _MIN_POINTS_TO_FIT = 6
@@ -1066,7 +1077,8 @@ def _fit_day_uncached(species: str, day: date) -> "DayFits | None":
         mask = np.isfinite(row) & (row > 0)
         if mask.sum() < _MIN_POINTS_TO_FIT:
             continue
-        result = best_fit(spectra.energy, row, mask, A, q)
+        f_obs = flux_to_phase_space_density(spectra.energy, row, A, q)
+        result = best_fit(spectra.energy, f_obs, mask, A, q)
         if result is None:
             continue
         n_tot[i] = result.n_tot
@@ -1076,8 +1088,23 @@ def _fit_day_uncached(species: str, day: date) -> "DayFits | None":
         chi2[i] = result.chi2
 
     return DayFits(time=spectra.time, n_tot=n_tot, T_c=T_c, T_eff=T_eff, model=model, chi2=chi2)
+```
 
+**Plan-fix (found during Task 9 end-to-end verification against real archive data):**
+`DaySpectra.flux` holds raw differential-directional-energy-flux (instrument units,
+~1e5-1e8), but every `fit_*`/`best_fit` function in `moments_fit.py` expects
+phase-space density (~1e-9 to 1e-15) — that's what `flux_to_phase_space_density()`
+(Task 1) exists for. The `f_obs = flux_to_phase_space_density(...)` call above is
+the fix: without it, every real spectrum's auto-estimated seed density lands ~20
+orders of magnitude outside `curve_fit`'s bounds, `curve_fit` raises `ValueError`
+on every model, and `best_fit` silently returns `None` for every record — 0/92
+real records fit, while every synthetic unit test still passed because those
+tests built their synthetic rows by calling `maxwellian`/`kappa_distribution`
+directly (already phase-space density), bypassing the conversion entirely. Fixed
+in the code above; the test fixture below was also fixed to build realistic raw
+flux (via the inverse conversion) so it would have caught this.
 
+```python
 _cached_fit_day = None
 
 
