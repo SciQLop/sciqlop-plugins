@@ -19,6 +19,9 @@ from scipy.special import gamma
 ELEMENTARY_CHARGE = 1.602176634e-19  # C
 ATOMIC_MASS_UNIT = 1.66053906660e-27  # kg
 NOISE_FLUX_THRESHOLD = 1e5  # cm^-2 s^-1 sr^-1 eV^-1
+# Real spectra fit to reduced chi2 ~ 0.002-0.09; pure-noise "fits" land at ~3.7-4.4.
+# Reject anything above this ceiling as an unconverged/noise fit rather than a real one.
+CHI2_MAX = 1.0
 
 # simplify: heavies/total mix species of different mass; there is no single correct
 # (A, q) for the m^2/(2(qE)^2) flux-to-phase-space-density conversion. Density values
@@ -109,7 +112,7 @@ def _init_kappa_slope(energy: np.ndarray, f_obs: np.ndarray, mask: np.ndarray,
 
 
 def fit_max_kap(energy: np.ndarray, f_obs: np.ndarray, mask: np.ndarray,
-                A: float, q: int) -> "FitResult | None":
+                A: float) -> "FitResult | None":
     """Fit a Maxwellian core + Kappa suprathermal halo."""
     Eg, fg = energy[mask], f_obs[mask]
     nc0, Tc0 = _init_maxwell_slope(energy, f_obs, mask, 20, 700, A)
@@ -181,7 +184,7 @@ def fit_max_kap(energy: np.ndarray, f_obs: np.ndarray, mask: np.ndarray,
 
 
 def fit_2max(energy: np.ndarray, f_obs: np.ndarray, mask: np.ndarray,
-            A: float, q: int) -> "FitResult | None":
+            A: float) -> "FitResult | None":
     """Fit two independent Maxwellians (cold core + warm secondary population)."""
     Eg, fg = energy[mask], f_obs[mask]
     nc0, Tc0 = _init_maxwell_slope(energy, f_obs, mask, 10, 400, A)
@@ -235,6 +238,9 @@ def fit_2max(energy: np.ndarray, f_obs: np.ndarray, mask: np.ndarray,
         return None
 
     nc_f, Tc_f, nh_f, Th_f = 10 ** popt[0], 10 ** popt[1], 10 ** popt[2], 10 ** popt[3]
+    if Th_f > 20000:
+        return None
+
     f_model = maxwellian(Eg, nc_f, Tc_f, A) + maxwellian(Eg, nh_f, Th_f, A)
     params = dict(model="2max", nc=nc_f, Tc=Tc_f, nh=nh_f, Th=Th_f)
     return FitResult(
@@ -248,7 +254,7 @@ def fit_2max(energy: np.ndarray, f_obs: np.ndarray, mask: np.ndarray,
 
 
 def fit_2max_kap(energy: np.ndarray, f_obs: np.ndarray, mask: np.ndarray,
-                 A: float, q: int) -> "FitResult | None":
+                 A: float) -> "FitResult | None":
     """Fit cold core + warm secondary Maxwellian + Kappa suprathermal halo."""
     Eg, fg = energy[mask], f_obs[mask]
     nc0, Tc0 = _init_maxwell_slope(energy, f_obs, mask, 10, 200, A)
@@ -348,13 +354,13 @@ def fit_2max_kap(energy: np.ndarray, f_obs: np.ndarray, mask: np.ndarray,
 
 
 def best_fit(energy: np.ndarray, f_obs: np.ndarray, mask: np.ndarray,
-            A: float, q: int) -> "FitResult | None":
+            A: float) -> "FitResult | None":
     """Try all three candidate models, keep the one with the lowest reduced chi-squared."""
     candidates = [
         r for r in (
-            fit_max_kap(energy, f_obs, mask, A, q),
-            fit_2max(energy, f_obs, mask, A, q),
-            fit_2max_kap(energy, f_obs, mask, A, q),
+            fit_max_kap(energy, f_obs, mask, A),
+            fit_2max(energy, f_obs, mask, A),
+            fit_2max_kap(energy, f_obs, mask, A),
         )
         if r is not None
     ]

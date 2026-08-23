@@ -104,7 +104,7 @@ def test_fit_max_kap_recovers_injected_maxwell_plus_kappa_parameters():
     f_obs = f_true * rng.lognormal(mean=0.0, sigma=0.05, size=f_true.shape)
     mask = np.ones_like(energy, dtype=bool)
 
-    result = moments_fit.fit_max_kap(energy, f_obs, mask, A, q)
+    result = moments_fit.fit_max_kap(energy, f_obs, mask, A)
 
     assert result is not None
     assert result.model == "max_kap"
@@ -123,7 +123,7 @@ def test_fit_max_kap_returns_none_with_too_few_points():
     mask = np.zeros(64, dtype=bool)
     mask[:2] = True  # fewer than 3 points in the core window
 
-    result = moments_fit.fit_max_kap(energy, f_obs, mask, 1.00728, 1)
+    result = moments_fit.fit_max_kap(energy, f_obs, mask, 1.00728)
 
     assert result is None
 
@@ -139,7 +139,7 @@ def test_fit_2max_recovers_two_independent_maxwellian_populations():
     f_obs = f_true * rng.lognormal(mean=0.0, sigma=0.05, size=f_true.shape)
     mask = np.ones_like(energy, dtype=bool)
 
-    result = moments_fit.fit_2max(energy, f_obs, mask, A, q)
+    result = moments_fit.fit_2max(energy, f_obs, mask, A)
 
     assert result is not None
     assert result.model == "2max"
@@ -163,7 +163,7 @@ def test_best_fit_selects_max_kap_when_data_has_a_kappa_tail():
     f_obs = f_true * rng.lognormal(mean=0.0, sigma=0.05, size=f_true.shape)
     mask = np.ones_like(energy, dtype=bool)
 
-    result = moments_fit.best_fit(energy, f_obs, mask, A, q)
+    result = moments_fit.best_fit(energy, f_obs, mask, A)
 
     assert result is not None
     assert result.model == "max_kap"
@@ -174,4 +174,27 @@ def test_best_fit_returns_none_when_all_models_fail():
     f_obs = np.full(64, np.nan)
     mask = np.zeros(64, dtype=bool)
 
-    assert moments_fit.best_fit(energy, f_obs, mask, 1.00728, 1) is None
+    assert moments_fit.best_fit(energy, f_obs, mask, 1.00728) is None
+
+
+def test_fit_2max_rejects_unphysically_railed_second_population():
+    """A single Maxwellian core plus a flat instrument-noise floor leaves no
+    real second population: the residual above the core is flat (non-decaying),
+    so no finite temperature explains it and curve_fit pins Th at its own upper
+    bound (10**4.5 eV ~= 31622.78), wider than the 20000 eV ceiling fit_max_kap
+    and fit_2max_kap enforce. This is the unconverged-fit signature the reviewer
+    flagged; fit_2max must reject it rather than return a railed value."""
+    energy = np.logspace(0, np.log10(39200), 64)
+    A = 1.00728
+    n_c, T_c = 20.0, 150.0
+    f_obs = moments_fit.maxwellian(energy, n_c, T_c, A) + 1e-12
+    mask = np.ones_like(energy, dtype=bool)
+
+    result = moments_fit.fit_2max(energy, f_obs, mask, A)
+
+    assert result is None
+
+
+def test_chi2_max_is_a_sane_positive_threshold():
+    assert isinstance(moments_fit.CHI2_MAX, float)
+    assert 0 < moments_fit.CHI2_MAX < 100

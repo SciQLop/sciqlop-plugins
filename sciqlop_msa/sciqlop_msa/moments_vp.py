@@ -87,11 +87,12 @@ def register_moments_vps() -> list:
     for species in SPECIES_MASS_TABLE:
         for field in FIELDS:
             display_name = f"{field} ({species}, approx.)" if species in _APPROXIMATE_SPECIES else None
+            label = f"{field} (approx.)" if species in _APPROXIMATE_SPECIES else field
             vp = create_virtual_product(
                 path=f"msa/moments_fit/{species}/{field}",
                 callback=_make_callback(species, field),
                 product_type=VirtualProductType.Scalar,
-                labels=[field],
+                labels=[label],
                 cachable=True,
                 display_name=display_name,
             )

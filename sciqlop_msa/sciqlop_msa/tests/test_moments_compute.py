@@ -55,3 +55,29 @@ def test_fit_day_uncached_returns_none_when_fetch_returns_none():
         result = moments_compute._fit_day_uncached("h_plus", date(2020, 1, 1))
 
     assert result is None
+
+
+def _noise_day_spectra():
+    """Pure log-uniform random raw flux in [1e5, 1e8] cm^-2 s^-1 sr^-1 eV^-1 —
+    realistic instrument-flux magnitude that survives NOISE_FLUX_THRESHOLD, but
+    NOT built from maxwellian/kappa_distribution, so it carries no real physical
+    population. Without a chi2 ceiling, best_fit still "succeeds" on this (reduced
+    chi2 ~ 3.5-5.6, verified against real archive spectra which fit at ~0.002-0.09)
+    and returns plausible-looking densities — this is the noise-fit regression the
+    CHI2_MAX cutoff exists to catch."""
+    energy = np.logspace(0, np.log10(39200), 64)
+    rng = np.random.default_rng(1)
+    row = 10 ** rng.uniform(np.log10(1e5), np.log10(1e8), size=64)
+    time = np.array([1736300000.0])
+    return DaySpectra(time=time, energy=energy, flux=row[np.newaxis, :])
+
+
+def test_fit_day_uncached_rejects_noise_fit_above_chi2_ceiling():
+    from sciqlop_msa import moments_compute
+
+    with patch("sciqlop_msa.moments_compute.fetch_day", return_value=_noise_day_spectra()):
+        result = moments_compute._fit_day_uncached("h_plus", date(2025, 1, 8))
+
+    assert result is not None
+    assert np.isnan(result.n_tot[0])
+    assert result.model[0] == ""

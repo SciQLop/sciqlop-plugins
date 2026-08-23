@@ -12,6 +12,7 @@ from datetime import date, timedelta
 
 import numpy as np
 
+from . import moments_fit
 from .moments_fit import SPECIES_MASS_TABLE, best_fit, flux_to_phase_space_density
 from .moments_source import fetch_day
 
@@ -20,6 +21,9 @@ _MIN_POINTS_TO_FIT = 6
 
 @dataclass
 class DayFits:
+    """Post-fit physical quantities (density, temperatures, model, chi2), one
+    entry per input spectrum record; not raw instrument flux."""
+
     time: np.ndarray
     n_tot: np.ndarray
     T_c: np.ndarray
@@ -38,17 +42,17 @@ def _fit_day_uncached(species: str, day: date) -> "DayFits | None":
     n_tot = np.full(n, np.nan)
     T_c = np.full(n, np.nan)
     T_eff = np.full(n, np.nan)
-    model = np.full(n, "", dtype="<U8")
+    model = np.full(n, "", dtype="<U16")
     chi2 = np.full(n, np.nan)
 
     for i in range(n):
         row = spectra.flux[i]
-        mask = np.isfinite(row) & (row > 0)
+        f_obs = flux_to_phase_space_density(spectra.energy, row, A, q)
+        mask = np.isfinite(f_obs) & (f_obs > 0)
         if mask.sum() < _MIN_POINTS_TO_FIT:
             continue
-        f_obs = flux_to_phase_space_density(spectra.energy, row, A, q)
-        result = best_fit(spectra.energy, f_obs, mask, A, q)
-        if result is None:
+        result = best_fit(spectra.energy, f_obs, mask, A)
+        if result is None or result.chi2 > moments_fit.CHI2_MAX:
             continue
         n_tot[i] = result.n_tot
         T_c[i] = result.T_c

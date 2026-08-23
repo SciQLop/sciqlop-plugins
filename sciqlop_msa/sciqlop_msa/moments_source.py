@@ -18,6 +18,9 @@ _SPECIES_VARIABLE = {
 
 @dataclass
 class DaySpectra:
+    """flux holds RAW instrument differential-directional-energy flux
+    (cm^-2 s^-1 sr^-1 eV^-1), not phase-space density."""
+
     time: np.ndarray
     energy: np.ndarray
     flux: np.ndarray

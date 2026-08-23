@@ -59,3 +59,9 @@ def test_fetch_day_rejects_unknown_species():
 
     with pytest.raises(KeyError):
         moments_source.fetch_day("not_a_species", date(2025, 1, 8))
+
+
+def test_species_variable_keys_match_species_mass_table():
+    from sciqlop_msa import moments_fit, moments_source
+
+    assert set(moments_source._SPECIES_VARIABLE) == set(moments_fit.SPECIES_MASS_TABLE)
