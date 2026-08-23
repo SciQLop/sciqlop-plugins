@@ -180,6 +180,189 @@ def fit_max_kap(energy: np.ndarray, f_obs: np.ndarray, mask: np.ndarray,
     )
 
 
+def fit_2max(energy: np.ndarray, f_obs: np.ndarray, mask: np.ndarray,
+            A: float, q: int) -> "FitResult | None":
+    """Fit two independent Maxwellians (cold core + warm secondary population)."""
+    Eg, fg = energy[mask], f_obs[mask]
+    nc0, Tc0 = _init_maxwell_slope(energy, f_obs, mask, 10, 400, A)
+    nh0, Th0 = _init_maxwell_slope(energy, f_obs, mask, 300, 8000, A)
+
+    mc = Eg < 400
+    if mc.sum() < 3:
+        return None
+    try:
+        pm, _ = curve_fit(
+            lambda E, log_n, log_T: _log_safe(maxwellian(E, 10 ** log_n, 10 ** log_T, A)),
+            Eg[mc], np.log(fg[mc]),
+            p0=[np.log10(nc0), np.log10(Tc0)],
+            bounds=([-3, 0], [4, 3.5]),
+            maxfev=10000,
+        )
+    except (RuntimeError, ValueError):
+        return None
+    nc_seed, Tc_seed = 10 ** pm[0], 10 ** pm[1]
+
+    residual = fg - maxwellian(Eg, nc_seed, Tc_seed, A)
+    mh = (residual > 0) & (Eg > 300)
+    if mh.sum() < 3:
+        return None
+    try:
+        ph, _ = curve_fit(
+            lambda E, log_n, log_T: _log_safe(maxwellian(E, 10 ** log_n, 10 ** log_T, A)),
+            Eg[mh], np.log(residual[mh]),
+            p0=[np.log10(max(nh0, 0.001)), np.log10(max(Th0, 30))],
+            bounds=([-3, 1.5], [4, 4.5]),
+            maxfev=10000,
+        )
+    except (RuntimeError, ValueError):
+        return None
+    nh_seed, Th_seed = 10 ** ph[0], 10 ** ph[1]
+
+    def joint_model(E, log_nc, log_Tc, log_nh, log_Th):
+        return _log_safe(
+            maxwellian(E, 10 ** log_nc, 10 ** log_Tc, A)
+            + maxwellian(E, 10 ** log_nh, 10 ** log_Th, A)
+        )
+
+    try:
+        popt, _ = curve_fit(
+            joint_model, Eg, np.log(fg),
+            p0=[np.log10(nc_seed), np.log10(Tc_seed), np.log10(nh_seed), np.log10(Th_seed)],
+            bounds=([-3, 0, -3, 1.5], [4, 3.5, 4, 4.5]),
+            maxfev=40000,
+        )
+    except (RuntimeError, ValueError):
+        return None
+
+    nc_f, Tc_f, nh_f, Th_f = 10 ** popt[0], 10 ** popt[1], 10 ** popt[2], 10 ** popt[3]
+    f_model = maxwellian(Eg, nc_f, Tc_f, A) + maxwellian(Eg, nh_f, Th_f, A)
+    params = dict(model="2max", nc=nc_f, Tc=Tc_f, nh=nh_f, Th=Th_f)
+    return FitResult(
+        n_tot=nc_f + nh_f,
+        T_c=Tc_f,
+        T_eff=effective_temperature(params),
+        model="2max",
+        chi2=_reduced_chi2(fg, f_model, 4),
+        params=params,
+    )
+
+
+def fit_2max_kap(energy: np.ndarray, f_obs: np.ndarray, mask: np.ndarray,
+                 A: float, q: int) -> "FitResult | None":
+    """Fit cold core + warm secondary Maxwellian + Kappa suprathermal halo."""
+    Eg, fg = energy[mask], f_obs[mask]
+    nc0, Tc0 = _init_maxwell_slope(energy, f_obs, mask, 10, 200, A)
+    nw0, Tw0 = _init_maxwell_slope(energy, f_obs, mask, 200, 1500, A)
+    kap0 = _init_kappa_slope(energy, f_obs, mask, 1500, 30000)
+
+    mc = (Eg > 10) & (Eg < 200)
+    if mc.sum() < 3:
+        return None
+    try:
+        pm, _ = curve_fit(
+            lambda E, log_n, log_T: _log_safe(maxwellian(E, 10 ** log_n, 10 ** log_T, A)),
+            Eg[mc], np.log(fg[mc]),
+            p0=[np.log10(nc0), np.log10(Tc0)],
+            bounds=([-3, 0.5], [4, 2.5]),
+            maxfev=10000,
+        )
+    except (RuntimeError, ValueError):
+        return None
+    nc_seed, Tc_seed = 10 ** pm[0], 10 ** pm[1]
+
+    residual1 = fg - maxwellian(Eg, nc_seed, Tc_seed, A)
+    mw = (residual1 > 0) & (Eg > 200) & (Eg < 1500)
+    if mw.sum() < 3:
+        return None
+    try:
+        pw, _ = curve_fit(
+            lambda E, log_n, log_T: _log_safe(maxwellian(E, 10 ** log_n, 10 ** log_T, A)),
+            Eg[mw], np.log(residual1[mw]),
+            p0=[np.log10(max(nw0, 0.001)), np.log10(max(Tw0, 30))],
+            bounds=([-3, 2], [4, 3.5]),
+            maxfev=10000,
+        )
+    except (RuntimeError, ValueError):
+        return None
+    nw_seed, Tw_seed = 10 ** pw[0], 10 ** pw[1]
+
+    residual2 = residual1 - maxwellian(Eg, nw_seed, Tw_seed, A)
+    mk = (residual2 > 0) & (Eg > 1500)
+    if mk.sum() >= 3:
+        try:
+            pk, _ = curve_fit(
+                lambda E, log_n, log_T, kappa: _log_safe(kappa_distribution(E, 10 ** log_n, 10 ** log_T, kappa, A)),
+                Eg[mk], np.log(residual2[mk]),
+                p0=[np.log10(0.1), np.log10(5000), kap0],
+                bounds=([-4, 3, 1.55], [3, 4.5, 12]),
+                maxfev=10000,
+            )
+            nh_seed, Th_seed, kap_seed = 10 ** pk[0], 10 ** pk[1], pk[2]
+        except (RuntimeError, ValueError):
+            nh_seed, Th_seed, kap_seed = 0.1, 5000.0, kap0
+    else:
+        nh_seed, Th_seed, kap_seed = 0.1, 5000.0, kap0
+
+    def joint_model(E, log_nc, log_Tc, log_nw, log_Tw, log_nh, log_Th, kappa):
+        return _log_safe(
+            maxwellian(E, 10 ** log_nc, 10 ** log_Tc, A)
+            + maxwellian(E, 10 ** log_nw, 10 ** log_Tw, A)
+            + kappa_distribution(E, 10 ** log_nh, 10 ** log_Th, kappa, A)
+        )
+
+    try:
+        popt, _ = curve_fit(
+            joint_model, Eg, np.log(fg),
+            p0=[
+                np.log10(nc_seed), np.log10(Tc_seed),
+                np.log10(nw_seed), np.log10(Tw_seed),
+                np.log10(max(nh_seed, 1e-4)), np.log10(max(Th_seed, 1000)),
+                kap_seed,
+            ],
+            bounds=([-3, 0.5, -3, 2, -4, 3, 1.55], [4, 2.5, 4, 3.5, 3, 4.5, 12]),
+            maxfev=80000,
+        )
+    except (RuntimeError, ValueError):
+        return None
+
+    nc_f, Tc_f = 10 ** popt[0], 10 ** popt[1]
+    nw_f, Tw_f = 10 ** popt[2], 10 ** popt[3]
+    nh_f, Th_f, kap_f = 10 ** popt[4], 10 ** popt[5], popt[6]
+    if Th_f > 20000 or kap_f >= 11.9:
+        return None
+
+    f_model = (
+        maxwellian(Eg, nc_f, Tc_f, A)
+        + maxwellian(Eg, nw_f, Tw_f, A)
+        + kappa_distribution(Eg, nh_f, Th_f, kap_f, A)
+    )
+    params = dict(model="2max_kap", nc=nc_f, Tc=Tc_f, nw=nw_f, Tw=Tw_f, nh=nh_f, Th=Th_f, kappa=kap_f)
+    return FitResult(
+        n_tot=nc_f + nw_f + nh_f,
+        T_c=Tc_f,
+        T_eff=effective_temperature(params),
+        model="2max_kap",
+        chi2=_reduced_chi2(fg, f_model, 7),
+        params=params,
+    )
+
+
+def best_fit(energy: np.ndarray, f_obs: np.ndarray, mask: np.ndarray,
+            A: float, q: int) -> "FitResult | None":
+    """Try all three candidate models, keep the one with the lowest reduced chi-squared."""
+    candidates = [
+        r for r in (
+            fit_max_kap(energy, f_obs, mask, A, q),
+            fit_2max(energy, f_obs, mask, A, q),
+            fit_2max_kap(energy, f_obs, mask, A, q),
+        )
+        if r is not None
+    ]
+    if not candidates:
+        return None
+    return min(candidates, key=lambda r: r.chi2)
+
+
 def effective_temperature(params: dict) -> float:
     """Density-weighted effective temperature across all populations in a fit."""
     model = params["model"]

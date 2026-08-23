@@ -126,3 +126,52 @@ def test_fit_max_kap_returns_none_with_too_few_points():
     result = moments_fit.fit_max_kap(energy, f_obs, mask, 1.00728, 1)
 
     assert result is None
+
+
+def test_fit_2max_recovers_two_independent_maxwellian_populations():
+    energy = np.logspace(0, np.log10(39200), 64)
+    n_c, T_c = 20.0, 150.0
+    n_h, T_h = 2.0, 1500.0
+    A, q = 1.00728, 1
+
+    f_true = moments_fit.maxwellian(energy, n_c, T_c, A) + moments_fit.maxwellian(energy, n_h, T_h, A)
+    rng = np.random.default_rng(7)
+    f_obs = f_true * rng.lognormal(mean=0.0, sigma=0.05, size=f_true.shape)
+    mask = np.ones_like(energy, dtype=bool)
+
+    result = moments_fit.fit_2max(energy, f_obs, mask, A, q)
+
+    assert result is not None
+    assert result.model == "2max"
+    assert result.params["nc"] == pytest.approx(n_c, rel=0.1)
+    assert result.params["Tc"] == pytest.approx(T_c, rel=0.05)
+    assert result.params["nh"] == pytest.approx(n_h, rel=0.05)
+    assert result.params["Th"] == pytest.approx(T_h, rel=0.05)
+
+
+def test_best_fit_selects_max_kap_when_data_has_a_kappa_tail():
+    energy = np.logspace(0, np.log10(39200), 64)
+    n_c, T_c = 45.0, 280.0
+    n_h, T_h, kappa_true = 0.08, 5000.0, 3.5
+    A, q = 1.00728, 1
+
+    f_true = (
+        moments_fit.maxwellian(energy, n_c, T_c, A)
+        + moments_fit.kappa_distribution(energy, n_h, T_h, kappa_true, A)
+    )
+    rng = np.random.default_rng(42)
+    f_obs = f_true * rng.lognormal(mean=0.0, sigma=0.05, size=f_true.shape)
+    mask = np.ones_like(energy, dtype=bool)
+
+    result = moments_fit.best_fit(energy, f_obs, mask, A, q)
+
+    assert result is not None
+    assert result.model == "max_kap"
+
+
+def test_best_fit_returns_none_when_all_models_fail():
+    energy = np.logspace(0, np.log10(39200), 64)
+    f_obs = np.full(64, np.nan)
+    mask = np.zeros(64, dtype=bool)
+
+    assert moments_fit.best_fit(energy, f_obs, mask, 1.00728, 1) is None
