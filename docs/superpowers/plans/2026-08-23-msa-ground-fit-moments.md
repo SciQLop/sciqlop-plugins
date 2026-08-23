@@ -1204,11 +1204,18 @@ def test_register_moments_vps_creates_twelve_products():
         moments_vp.register_moments_vps()
 
     assert mock_create.call_count == 12
-    paths = {call.kwargs["path"] for call in mock_create.call_args_list}
-    assert "msa/moments_fit/h_plus/density" in paths
-    assert "msa/moments_fit/alphas/T_c" in paths
-    assert "msa/moments_fit/heavies/T_eff" in paths
-    assert "msa/moments_fit/total/density" in paths
+    by_path = {call.kwargs["path"]: call.kwargs for call in mock_create.call_args_list}
+    assert "msa/moments_fit/h_plus/density" in by_path
+    assert "msa/moments_fit/alphas/T_c" in by_path
+    assert "msa/moments_fit/heavies/T_eff" in by_path
+    assert "msa/moments_fit/total/density" in by_path
+
+    # exact-mass species get no special display_name
+    assert by_path["msa/moments_fit/h_plus/density"]["display_name"] is None
+    assert by_path["msa/moments_fit/alphas/T_c"]["display_name"] is None
+    # approximate-mass species (heavies, total) are flagged
+    assert by_path["msa/moments_fit/heavies/T_eff"]["display_name"] == "T_eff (heavies, approx.)"
+    assert by_path["msa/moments_fit/total/density"]["display_name"] == "density (total, approx.)"
 
 
 def test_density_callback_returns_values_sliced_to_requested_window():
@@ -1221,6 +1228,19 @@ def test_density_callback_returns_values_sliced_to_requested_window():
 
     assert result is not None
     assert result.values.reshape(-1).tolist() == pytest.approx([45.0, 46.0])
+    assert "ground-fit" in result.meta["CATDESC"]
+
+
+def test_density_callback_catdesc_flags_approximate_species():
+    from sciqlop_msa import moments_vp
+
+    callback = moments_vp._make_callback("heavies", "density")
+
+    with patch("sciqlop_msa.moments_vp.fit_day", return_value=_day_fits()):
+        result = callback(1736300000.0, 1736300060.0)
+
+    assert result is not None
+    assert "Approximate" in result.meta["CATDESC"]
 
 
 def test_density_callback_returns_none_when_no_data():
@@ -1313,7 +1333,12 @@ def _make_callback(species: str, field: str):
             axes=[VariableTimeAxis(values=(time * 1e9).astype("int64").astype("datetime64[ns]"))],
             values=DataContainer(
                 values=value,
-                meta={"UNITS": unit, "LABLAXIS": field, "SCALETYP": "log"},
+                meta={
+                    "UNITS": unit,
+                    "LABLAXIS": field,
+                    "SCALETYP": "log",
+                    "CATDESC": _description(species, field),
+                },
                 is_time_dependent=True,
             ),
         )
@@ -1326,16 +1351,26 @@ def register_moments_vps() -> list:
 
     for species in SPECIES_MASS_TABLE:
         for field in FIELDS:
+            display_name = f"{field} ({species}, approx.)" if species in _APPROXIMATE_SPECIES else None
             vp = create_virtual_product(
                 path=f"msa/moments_fit/{species}/{field}",
                 callback=_make_callback(species, field),
                 product_type=VirtualProductType.Scalar,
                 labels=[field],
                 cachable=True,
+                display_name=display_name,
             )
             _registered_vps.append(vp)
     return _registered_vps
 ```
+
+**Plan-note (pre-flight ruling):** `create_virtual_product` has no `description`
+parameter (verified against `SciQLop/user_api/virtual_products/__init__.py`) — the
+Global Constraint that approximate species must be flagged in "their VP description"
+is satisfied via `meta["CATDESC"]` on every returned `SpeasyVariable` (the standard
+ISTP-ish metadata field, inspectable via the product's metadata) plus a short
+`display_name` marker (`"(approx.)"`) at registration time for `heavies`/`total`,
+not a literal `description=` kwarg.
 
 Now wire it into `plugin.py`. Read the current file first — it already has `load()`
 calling `install_inventory()` and `rebuild_speasy_inventory()`:
@@ -1361,9 +1396,9 @@ def load(main_window):
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `/home/jeandet/Documents/prog/SciQLop/.venv/bin/python -m pytest sciqlop_msa/sciqlop_msa/tests/ -v`
-Expected: all tests across every file in this plan pass (22 total: 14 from
+Expected: all tests across every file in this plan pass (23 total: 14 from
 `test_moments_fit.py` + 3 from `test_moments_source.py` + 2 from
-`test_moments_compute.py` + 3 from `test_moments_vp.py`)
+`test_moments_compute.py` + 4 from `test_moments_vp.py`)
 
 - [ ] **Step 5: Commit**
 
