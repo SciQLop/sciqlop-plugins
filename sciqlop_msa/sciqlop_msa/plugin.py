@@ -6,6 +6,8 @@ from PySide6.QtCore import QObject
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import QMenu, QToolButton
 
+from .moments_vp import register_moments_vps
+
 log = logging.getLogger(__name__)
 
 
@@ -63,4 +65,5 @@ class MSAPlugin(QObject):
 def load(main_window):
     install_inventory()
     rebuild_speasy_inventory()
+    register_moments_vps()
     return MSAPlugin(main_window)
