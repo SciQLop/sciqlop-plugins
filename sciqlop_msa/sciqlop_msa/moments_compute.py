@@ -12,7 +12,7 @@ from datetime import date, timedelta
 
 import numpy as np
 
-from .moments_fit import SPECIES_MASS_TABLE, best_fit
+from .moments_fit import SPECIES_MASS_TABLE, best_fit, flux_to_phase_space_density
 from .moments_source import fetch_day
 
 _MIN_POINTS_TO_FIT = 6
@@ -46,7 +46,8 @@ def _fit_day_uncached(species: str, day: date) -> "DayFits | None":
         mask = np.isfinite(row) & (row > 0)
         if mask.sum() < _MIN_POINTS_TO_FIT:
             continue
-        result = best_fit(spectra.energy, row, mask, A, q)
+        f_obs = flux_to_phase_space_density(spectra.energy, row, A, q)
+        result = best_fit(spectra.energy, f_obs, mask, A, q)
         if result is None:
             continue
         n_tot[i] = result.n_tot
