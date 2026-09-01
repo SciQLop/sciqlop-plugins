@@ -211,14 +211,30 @@ Phase 2 adds:
   `quality_bitmask` has SWEEP OFF set — replacing the flat threshold as the primary
   filter (the flux threshold likely stays as a secondary guard).
 
-This phase is blocked on the dependency bump landing in `sciqlop_msa`'s pinned
-`SciQLop`/`speasy` versions, not on anything in this plugin. **Known risk, separate from
-this feature:** a plain headless `import speasy` against the current 1.8 dev build can
-crash (`ProductsModel` Qt-static assert) during a one-time legacy-diskcache migration —
-root cause not yet identified (traced only as far as `sc.Cache(...)` inside
-`_merge_stray_legacy_entries`; not confirmed to be `pysciqlop_cache` itself). Needs
-resolving in the `speasy`/`SciQLopPlots` repos before Phase 2 lands, independent of this
-plugin's code.
+**2026-09-01 update: speasy>=1.8 landed, and Phase 2 is now blocked on archive data
+instead.** Speasy 1.8.0 is released and installed (not an editable dev checkout); the
+codec mechanism above was re-verified against the real package (`register_codec`,
+`CodecInterface`, `codec:` YAML field, `get_codec(codec_id).list_variables()` driving
+non-ISTP inventory discovery, `get_product(codec=...)` driving per-fetch loads) and works
+exactly as designed. The `ProductsModel` Qt-static crash risk noted below did not
+reproduce against the released 1.8.0 (plain `import speasy` succeeds cleanly).
+
+But `quality_level`/`quality_bitmask` — the two variables Phase 2 was designed to
+filter on — are **100% `FILLVAL`, archive-wide**. Checked every L2pre flyby currently
+served (2021-10-01, 2022-06-22, 2023-06-19, 2024-09-04, 2025-01-08) plus their L1
+siblings: zero real values across ~58,000 combined records. No other per-record quality
+indicator exists in either CDF level (checked every variable name for `qual`/`flag`/
+`status`/`valid`/`sweep`/etc.) — the only real hit is `spoiler_state` (mostly `0`, some
+`255` fill, one out-of-VALIDMAX-range `18`), an instrument-mode variable whose meaning
+for data validity isn't documented in the CDF and isn't something to guess at.
+
+**Decision (2026-09-01): Phase 2 is dropped, not deferred-and-blocked.** The codec
+mechanism works and could be built in an afternoon, but there is nothing populated to
+filter on — building it now would be dead plumbing. Phase 1's flat flux threshold
+remains the only filter. Revisit only if LPP repopulates `quality_level`/
+`quality_bitmask` in a future archive reprocessing, or if `spoiler_state`'s meaning for
+data quality is clarified by the instrument team. See
+[[msa_l2pre_onboard_moments_invalid]] for the full data-check record.
 
 ## Error handling
 
