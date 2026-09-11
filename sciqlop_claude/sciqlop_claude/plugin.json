@@ -1,6 +1,6 @@
 {
   "name": "Claude Chat",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Embedded Claude chat dock for SciQLop. Uses the Claude Code CLI's OAuth login — no API key required.",
   "authors": [
     {

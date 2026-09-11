@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from . import catalog
 
-__version__ = "0.1.0"
+__version__ = "0.3.0"
 
 _LOADED_PANELS: dict[int, object] = {}
 

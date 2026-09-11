@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "sciqlop-claude"
-version = "0.1.0"
+version = "0.2.0"
 description = "Claude chat dock for SciQLop (powered by Claude Code CLI via the Claude Agent SDK)"
 requires-python = ">=3.10"
 dependencies = ["SciQLop>=0.13.0,<0.14.0", "claude-agent-sdk>=0.1.0"]
