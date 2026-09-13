@@ -1,6 +1,6 @@
 {
   "name": "Opencode Chat",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Embedded opencode chat dock for SciQLop, powered by the opencode CLI over ACP. Delegates auth to the CLI (run `opencode auth login` once).",
   "authors": [
     {
