@@ -2,6 +2,24 @@
 
 Opencode chat dock for SciQLop. Requires the `opencode` CLI (https://opencode.ai) and `opencode auth login` to be run once.
 
+## Finding and installing the CLI
+
+When the chat dock is opened and no `opencode` binary is found, it offers a
+one-click install via the npm bundled with SciQLop (same `opencode-ai`
+package as `npm i -g`, but into a user-writable folder — no admin rights,
+survives SciQLop updates). A WSL-only install is not reachable from native
+SciQLop on Windows.
+
+Manual install options per platform:
+
+- macOS: `brew install anomalyco/tap/opencode`
+- Linux: `curl -fsSL https://opencode.ai/install | bash`
+- Windows: `scoop install opencode`, `choco install opencode`, or `npm i -g opencode-ai`
+
+The plugin looks beyond `PATH` (GUI-launched apps inherit a minimal one):
+its own managed install, then `PATH`, then well-known locations such as
+`/opt/homebrew/bin` and `~/.opencode/bin`, then a login-shell probe.
+
 ## Limitations (opencode-agent-sdk 0.4.x, subprocess ACP)
 
 The opencode SDK exposes a narrower stream than the Claude backend, so some
