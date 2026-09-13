@@ -1,9 +1,12 @@
 """Claude Agent SDK adapter — implements `SciQLop.components.agents.AgentBackend`."""
+
 from __future__ import annotations
 
 import asyncio
 import base64
+import os
 import shutil
+import subprocess
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
@@ -45,6 +48,7 @@ try:
         ToolResultBlock,
         UserMessage,
     )
+
     _SDK_AVAILABLE = True
     _SDK_IMPORT_ERROR: Optional[str] = None
 except Exception as e:  # pragma: no cover
@@ -100,7 +104,9 @@ def fetch_models(timeout: float = 10.0) -> List[tuple[str, Optional[str]]]:
         return list(_DEFAULT_MODEL_CHOICES)
 
     async def _run() -> list:
-        async with ClaudeSDKClient(options=ClaudeAgentOptions()) as client:
+        async with ClaudeSDKClient(
+            options=ClaudeAgentOptions(cli_path=resolve_claude_executable())
+        ) as client:
             info = await client.get_server_info() or {}
             return info.get("models") or []
 
@@ -126,8 +132,60 @@ def fetch_models(timeout: float = 10.0) -> List[tuple[str, Optional[str]]]:
     return choices or list(_DEFAULT_MODEL_CHOICES)
 
 
+def _well_known_candidates() -> List[str]:
+    """Install locations invisible to GUI-launched processes.
+
+    macOS apps started from Finder/Dock inherit a minimal PATH without
+    /opt/homebrew/bin or ~/.local/bin.
+    """
+    candidates = ["/opt/homebrew/bin/claude", "/usr/local/bin/claude"]
+    home = Path.home()
+    for sub in (".local/bin/claude", "bin/claude"):
+        candidates.append(str(home / sub))
+    return candidates
+
+
+def _shell_probe() -> Optional[str]:
+    """Ask a login shell where claude is, for dotfile-only PATH entries.
+
+    Bounded and last-resort: plugin load must never hang on this.
+    """
+    if os.name == "nt":
+        return None
+    for shell in ("/bin/zsh", "/bin/bash", "/bin/sh"):
+        if not os.path.isfile(shell):
+            continue
+        try:
+            proc = subprocess.run(
+                [shell, "-lc", "which claude"],
+                capture_output=True,
+                text=True,
+                timeout=2,
+            )
+        except Exception:
+            continue
+        for line in proc.stdout.splitlines():
+            path = line.strip()
+            if path and os.path.isfile(path):
+                return path
+    return None
+
+
+def resolve_claude_executable() -> Optional[str]:
+    """Absolute path to the claude binary, or None when not installed."""
+    on_path = shutil.which("claude")
+    if on_path is not None:
+        return on_path
+    for candidate in _well_known_candidates():
+        if os.path.isfile(candidate) and (
+            os.name == "nt" or os.access(candidate, os.X_OK)
+        ):
+            return candidate
+    return _shell_probe()
+
+
 def claude_cli_available() -> bool:
-    return shutil.which("claude") is not None
+    return resolve_claude_executable() is not None
 
 
 def sdk_available() -> tuple[bool, Optional[str]]:
@@ -214,10 +272,14 @@ class ClaudeBackend:
         # gated tools must stay out of it whenever the gate is actually wired —
         # otherwise _permission_check's write-action gate never runs for them.
         allowed = [
-            f"mcp__{_MCP_SERVER_NAME}__{t['name']}" for t in self._tools
+            f"mcp__{_MCP_SERVER_NAME}__{t['name']}"
+            for t in self._tools
             if not (permission_gate_active and t.get("gated"))
         ]
-        allowed += ["WebSearch", "WebFetch"]  # built-in web search + page fetch (ungated)
+        allowed += [
+            "WebSearch",
+            "WebFetch",
+        ]  # built-in web search + page fetch (ungated)
         options = ClaudeAgentOptions(
             system_prompt=self._system_prompt(),
             mcp_servers={_MCP_SERVER_NAME: server},
@@ -229,6 +291,7 @@ class ClaudeBackend:
             cwd=str(_sessions.current_workspace_dir()),
             setting_sources=["user", "project"],
             max_buffer_size=_MAX_BUFFER_SIZE,
+            cli_path=resolve_claude_executable(),
         )
         self._client = ClaudeSDKClient(options=options)
         await self._client.connect()
@@ -301,13 +364,13 @@ class ClaudeBackend:
             mtype = type(message).__name__
             if mtype == "AssistantMessage":
                 assistant_seen = True
-            elif (mtype == "SystemMessage"
-                  and getattr(message, "subtype", None) == "init"):
+            elif (
+                mtype == "SystemMessage" and getattr(message, "subtype", None) == "init"
+            ):
                 assistant_seen = False
             yield message
             if mtype == "ResultMessage" and not active_tasks:
-                if (getattr(message, "subtype", None) != "success"
-                        or assistant_seen):
+                if getattr(message, "subtype", None) != "success" or assistant_seen:
                     return
                 # phantom bookkeeping result — the real answer is still coming
 
@@ -358,6 +421,7 @@ class ClaudeBackend:
         that left nothing to drain; on any failure we drop the client so the next
         turn reconnects clean. https://code.claude.com/docs/en/agent-sdk/python
         """
+
         async def _consume() -> None:
             async for _message in client.receive_response():
                 pass
@@ -449,9 +513,7 @@ class ClaudeBackend:
                 "confirmation)."
             )
         else:
-            write_intro = (
-                "Write tools are available and gated by per-call approval."
-            )
+            write_intro = "Write tools are available and gated by per-call approval."
         return f"{self._guidance.strip()}\n\n{write_intro}".strip()
 
     async def list_slash_commands(self) -> List[str]:
@@ -508,8 +570,11 @@ class ClaudeBackend:
         /context immediately. Returning None until a ResultMessage arrived kept
         the strip blank through the whole first turn.
         """
-        snapshot = (result_to_usage(self._last_result)
-                    if self._last_result is not None else UsageSnapshot())
+        snapshot = (
+            result_to_usage(self._last_result)
+            if self._last_result is not None
+            else UsageSnapshot()
+        )
         snapshot = replace(snapshot, quotas=rate_limits_to_quotas(self._rate_limits))
         client = self._client
         if client is None:
@@ -520,29 +585,34 @@ class ClaudeBackend:
             # unbounded await wedges UsageRefresher, whose in-flight guard then
             # drops every later refresh — the strip stays blank permanently.
             payload = await asyncio.wait_for(
-                client.get_context_usage(), timeout=_CONTEXT_USAGE_TIMEOUT_S)
+                client.get_context_usage(), timeout=_CONTEXT_USAGE_TIMEOUT_S
+            )
             tokens, maximum, categories, model = context_to_breakdown(payload)
             if tokens is None:
                 # The CLI answers this on a fresh connection (verified: ~38k of
                 # 967k before any query), so an empty reply means something
                 # about *this* connection, not a CLI limitation.
-                _log.debug("context usage reply carried no totals: %r",
-                           sorted(payload) if isinstance(payload, dict) else payload)
+                _log.debug(
+                    "context usage reply carried no totals: %r",
+                    sorted(payload) if isinstance(payload, dict) else payload,
+                )
         except Exception as error:
             # Expected before the first query on some CLI versions; log so a
             # persistently empty strip can be told apart from an empty session.
             _log.debug("context usage unavailable: %r", error)
             return _reportable(snapshot)
-        return _reportable(replace(
-            snapshot,
-            context_tokens=tokens,
-            context_max=maximum,
-            context_categories=categories,
-            # the resolved canonical name wins: /context reports whatever alias
-            # the request carried, which is exactly what canonicalModel exists
-            # to normalise away.
-            model=snapshot.model or model,
-        ))
+        return _reportable(
+            replace(
+                snapshot,
+                context_tokens=tokens,
+                context_max=maximum,
+                context_categories=categories,
+                # the resolved canonical name wins: /context reports whatever alias
+                # the request carried, which is exactly what canonicalModel exists
+                # to normalise away.
+                model=snapshot.model or model,
+            )
+        )
 
     async def _answer_question(self, tool_input: dict):
         """Render the model's AskUserQuestion and return the user's answers.
@@ -594,21 +664,25 @@ class ClaudeBackend:
                     continue
                 name = getattr(block, "name", None)
                 if name is not None:  # ToolUseBlock
-                    blocks.append(ToolActivityBlock(
-                        tool_name=str(name).split("__")[-1],
-                        tool_input=getattr(block, "input", {}) or {},
-                        tool_use_id=getattr(block, "id", "") or "",
-                    ))
+                    blocks.append(
+                        ToolActivityBlock(
+                            tool_name=str(name).split("__")[-1],
+                            tool_input=getattr(block, "input", {}) or {},
+                            tool_use_id=getattr(block, "id", "") or "",
+                        )
+                    )
             return blocks
         if isinstance(message, UserMessage):
             for block in _iter_tool_results(message):
                 blocks.extend(self._tool_result_blocks(block))
                 summary = _result_summary(block)
                 if summary:
-                    blocks.append(ToolActivityBlock(
-                        tool_use_id=getattr(block, "tool_use_id", "") or "",
-                        result=summary,
-                    ))
+                    blocks.append(
+                        ToolActivityBlock(
+                            tool_use_id=getattr(block, "tool_use_id", "") or "",
+                            result=summary,
+                        )
+                    )
         return blocks
 
     def _tool_result_blocks(self, block) -> List[StreamBlock]:
@@ -706,8 +780,13 @@ _WINDOW_LABELS = {
 }
 # 5-hour first, then the weekly windows: the tighter window is the one a user
 # is usually about to hit.
-_WINDOW_ORDER = ("five_hour", "seven_day", "seven_day_opus", "seven_day_sonnet",
-                 "overage")
+_WINDOW_ORDER = (
+    "five_hour",
+    "seven_day",
+    "seven_day_opus",
+    "seven_day_sonnet",
+    "overage",
+)
 
 
 def _reportable(snapshot: UsageSnapshot) -> Optional[UsageSnapshot]:
@@ -717,8 +796,16 @@ def _reportable(snapshot: UsageSnapshot) -> Optional[UsageSnapshot]:
     leaves the strip showing the effort segment on its own — a model-less,
     context-less "high" — which reads as a bug rather than as "nothing known".
     """
-    if any((snapshot.model, snapshot.tokens, snapshot.cost, snapshot.quotas,
-            snapshot.context_tokens, snapshot.num_turns)):
+    if any(
+        (
+            snapshot.model,
+            snapshot.tokens,
+            snapshot.cost,
+            snapshot.quotas,
+            snapshot.context_tokens,
+            snapshot.num_turns,
+        )
+    ):
         return snapshot
     return None
 
@@ -736,11 +823,13 @@ def rate_limits_to_quotas(rate_limits: dict) -> tuple:
         utilization = getattr(info, "utilization", None) if info else None
         if utilization is None:
             continue
-        quotas.append(Quota(
-            label=_WINDOW_LABELS.get(kind, kind),
-            percent_remaining=100.0 - utilization * 100.0,
-            resets_at=getattr(info, "resets_at", None),
-        ))
+        quotas.append(
+            Quota(
+                label=_WINDOW_LABELS.get(kind, kind),
+                percent_remaining=100.0 - utilization * 100.0,
+                resets_at=getattr(info, "resets_at", None),
+            )
+        )
     return tuple(quotas)
 
 
@@ -749,12 +838,18 @@ def context_to_breakdown(payload):
     if not isinstance(payload, dict):
         return None, None, (), None
     categories = tuple(
-        ContextCategory(name=str(item.get("name", "")), tokens=int(item.get("tokens", 0)))
+        ContextCategory(
+            name=str(item.get("name", "")), tokens=int(item.get("tokens", 0))
+        )
         for item in (payload.get("categories") or [])
         if isinstance(item, dict)
     )
-    return (payload.get("totalTokens"), payload.get("maxTokens"),
-            categories, payload.get("model"))
+    return (
+        payload.get("totalTokens"),
+        payload.get("maxTokens"),
+        categories,
+        payload.get("model"),
+    )
 
 
 def _build_user_stream(text: str, image_paths: List[str]):
@@ -780,6 +875,7 @@ def _build_user_stream(text: str, image_paths: List[str]):
             "message": {"role": "user", "content": content},
             "parent_tool_use_id": None,
         }
+
     return _gen()
 
 
