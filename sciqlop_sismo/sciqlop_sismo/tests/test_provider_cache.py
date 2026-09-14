@@ -82,3 +82,64 @@ def test_cache_still_returns_correct_units_and_shape(provider, fake_stream):
     assert raw.unit == "counts" and raw.values.shape[0] == 1000
     assert wf.unit == "m/s" and wf.values.shape[0] == 1000
     assert spec.values.ndim == 2
+
+
+def test_raw_cache_key_folds_routing_in_but_not_kind():
+    """The shared cache key separates routings but unites the three kinds."""
+    from sciqlop_sismo.worker import raw_cache_key
+
+    uid = "G/SSB/00.HHZ"
+    assert raw_cache_key(uid, "iris-federator") == raw_cache_key(uid, "iris-federator")
+    assert raw_cache_key(uid, "iris-federator") != raw_cache_key(uid, "eida-routing")
+
+
+def test_routing_change_refetches_instead_of_serving_old_route(provider):
+    """Same routing shares one fetch; a changed routing refetches fresh data."""
+    from obspy import Trace
+    from obspy import UTCDateTime as _UTC
+
+    def stream_with(value):
+        return Stream(
+            [
+                Trace(
+                    data=np.full(1000, value, dtype=np.float64),
+                    header={
+                        "network": "G",
+                        "station": "SSB",
+                        "location": "00",
+                        "channel": "HHZ",
+                        "sampling_rate": 100.0,
+                        "starttime": _UTC("2026-01-01T00:00:00"),
+                    },
+                )
+            ]
+        )
+
+    seen_routings = []
+
+    def fake_fetch(nslc, start, stop, routing="iris-federator", **kwargs):
+        seen_routings.append(routing)
+        return stream_with(1.0 if routing == "iris-federator" else 2.0)
+
+    t0, t1 = _utc(2026, 1, 1), _utc(2026, 1, 1, 0, 1)
+    with patch("sciqlop_sismo.provider.fetch_stream", side_effect=fake_fetch):
+        raw = provider.get_data("G/SSB/00.HHZ/raw", t0, t1)
+        wf = provider.get_data("G/SSB/00.HHZ/waveform", t0, t1)
+        assert seen_routings == ["iris-federator"], seen_routings
+        assert float(np.asarray(raw.values).mean()) == 1.0
+
+        provider.add_channel(
+            network="G",
+            station="SSB",
+            location="00",
+            channel="HHZ",
+            start_date=_utc(2020, 1, 1),
+            stop_date=_utc(2030, 1, 1),
+            sampling_rate_hz=100.0,
+            routing="eida-routing",
+        )
+        raw2 = provider.get_data("G/SSB/00.HHZ/raw", t0, t1)
+        assert seen_routings == ["iris-federator", "eida-routing"], seen_routings
+        assert float(np.asarray(raw2.values).mean()) == 2.0
+        wf_units = wf.unit
+    assert wf_units == "m/s"

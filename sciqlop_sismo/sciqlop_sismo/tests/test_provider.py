@@ -185,3 +185,86 @@ def test_get_data_accepts_numpy_datetime64_and_float(provider, fake_stream):
     with patch("sciqlop_sismo.provider.fetch_stream", return_value=fake_stream):
         var = provider.get_data(uid, t0_np, t1_float)
     assert isinstance(var, SpeasyVariable)
+
+
+def _channel_kw(**overrides):
+    kw = dict(
+        network="G",
+        station="SSB",
+        location="00",
+        channel="HHZ",
+        start_date=_utc(2020, 1, 1),
+        stop_date=_utc(2030, 1, 1),
+        sampling_rate_hz=100.0,
+        routing="iris-federator",
+    )
+    kw.update(overrides)
+    return kw
+
+
+def test_persisted_channels_reregister_live_products_on_startup(tmp_path, monkeypatch):
+    """Channels in inventory.yaml get all three live VPs on provider build."""
+    from sciqlop_sismo.virtual_products import KIND_PATHS
+
+    monkeypatch.setenv("SCIQLOP_SISMO_INVENTORY_DIR", str(tmp_path))
+    first = SismoProvider(vp_factory=lambda *a, **k: object())
+    first.add_channel(**_channel_kw())
+    prefix = "sismo/G/SSB/00.HHZ/"
+    assert {p for p in first._virtual_products if p.startswith(prefix)} == {
+        prefix + k for k in KIND_PATHS
+    }
+
+    calls = []
+
+    def counting_factory(path, *a, **k):
+        calls.append(path)
+        return object()
+
+    second = SismoProvider(vp_factory=counting_factory)
+    assert {p for p in second._virtual_products if p.startswith(prefix)} == {
+        prefix + k for k in KIND_PATHS
+    }
+    assert sorted(calls) == sorted(prefix + k for k in KIND_PATHS)
+
+
+def test_live_reregistration_is_idempotent(tmp_path, monkeypatch):
+    """Double registration (add + inventory rebuild) must not duplicate VPs."""
+    monkeypatch.setenv("SCIQLOP_SISMO_INVENTORY_DIR", str(tmp_path))
+    calls = []
+
+    def counting_factory(path, *a, **k):
+        calls.append(path)
+        return object()
+
+    p = SismoProvider(vp_factory=counting_factory)
+    p.add_channel(**_channel_kw())
+    p.add_channel(**_channel_kw())
+    p.update_inventory()
+    prefix = "sismo/G/SSB/00.HHZ/"
+    assert sorted(calls) == sorted(
+        prefix + k for k in ("waveform", "raw", "spectrogram")
+    )
+    assert len({c for c in calls}) == 3
+
+
+def test_get_data_corrupt_local_file_returns_none(tmp_path, provider):
+    """A corrupt local file yields None (with a warning), never raises."""
+    fp = tmp_path / "corrupt.mseed"
+    fp.write_bytes(b"this is not a miniseed file" * 100)
+    provider.add_channel_from_local(
+        ChannelInfo(
+            network="XX",
+            station="LOC",
+            location="00",
+            channel="HHZ",
+            sampling_rate_hz=100.0,
+            start_date=_utc(2020, 1, 1),
+            stop_date=_utc(2030, 1, 1),
+            routing="local:deadbeef",
+            path=fp,
+        )
+    )
+    var = provider.get_data(
+        "XX/LOC/00.HHZ/waveform", _utc(2026, 1, 1), _utc(2026, 1, 1, 0, 1)
+    )
+    assert var is None
