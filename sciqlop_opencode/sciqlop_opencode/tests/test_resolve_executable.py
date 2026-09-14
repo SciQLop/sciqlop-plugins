@@ -87,23 +87,29 @@ def test_acp_command_uses_resolved_absolute_path(monkeypatch):
     assert backend.acp_command() == ["/opt/homebrew/bin/opencode", "acp"]
 
 
-def test_acp_command_falls_back_to_bare_name(monkeypatch):
-    bk = _mod()
-    monkeypatch.setattr(bk, "resolve_opencode_executable", lambda: None)
-    backend = bk.OpencodeBackend.__new__(bk.OpencodeBackend)
-    assert backend.acp_command() == ["opencode", "acp"]
-
-
-def test_check_prerequisites_keeps_auth_hint_and_names_install(monkeypatch):
+def test_acp_command_raises_actionable_error_when_missing(monkeypatch):
     bk = _mod()
     monkeypatch.setattr(bk, "resolve_opencode_executable", lambda: None)
     backend = bk.OpencodeBackend.__new__(bk.OpencodeBackend)
     with pytest.raises(RuntimeError, match="opencode auth login"):
-        backend.check_prerequisites()
-    try:
-        backend.check_prerequisites()
-    except RuntimeError as e:
-        assert "opencode-ai" in str(e) or "brew" in str(e) or "npm" in str(e)
+        backend.acp_command()
+
+
+def test_missing_cli_gate_lives_at_spawn_not_construction(monkeypatch):
+    # check_prerequisites must stay lenient: AcpAgentBackend.__init__ calls it,
+    # and raising there would make construction — and the on_activated install
+    # offer — unreachable exactly when the CLI is missing.
+    bk = _mod()
+    monkeypatch.setattr(bk, "resolve_opencode_executable", lambda: None)
+    backend = bk.OpencodeBackend.__new__(bk.OpencodeBackend)
+    assert backend.check_prerequisites() is None
+    with pytest.raises(RuntimeError, match="opencode auth login") as exc:
+        backend.acp_command()
+    assert (
+        "opencode-ai" in str(exc.value)
+        or "brew" in str(exc.value)
+        or "npm" in str(exc.value)
+    )
 
 
 def test_fetch_models_uses_resolved_command(monkeypatch):
@@ -132,3 +138,23 @@ def test_managed_executable_returns_none_when_absent(monkeypatch, tmp_path):
     bk = _mod()
     monkeypatch.setattr(bk, "managed_prefix", lambda: tmp_path)
     assert bk.managed_executable() is None
+
+
+def test_resolve_rejects_windows_shell_shims(monkeypatch):
+    # shutil.which follows PATHEXT, so a global `npm i -g opencode-ai` shows
+    # up as opencode.cmd — unspawnable without a shell, must not be returned.
+    bk = _mod()
+    monkeypatch.setattr(bk, "managed_executable", lambda: None)
+    monkeypatch.setattr(
+        bk.shutil, "which", lambda _: r"C:\Users\x\AppData\npm\opencode.cmd"
+    )
+    monkeypatch.setattr(bk, "_well_known_candidates", lambda: [])
+    monkeypatch.setattr(bk, "_shell_probe", lambda: None)
+    monkeypatch.setattr(bk.os, "name", "nt")
+    assert bk.resolve_opencode_executable() is None
+
+
+def test_shim_check_is_posix_inert(monkeypatch):
+    bk = _mod()
+    monkeypatch.setattr(bk.os, "name", "posix")
+    assert bk._is_unspawnable_shim("/usr/local/bin/opencode.cmd") is False

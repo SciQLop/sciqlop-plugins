@@ -79,3 +79,30 @@ def test_run_install_raises_on_failure(monkeypatch):
     monkeypatch.setattr(inst.subprocess, "Popen", _Proc)
     with pytest.raises(RuntimeError, match="boom"):
         inst.run_install(["npm", "install", "opencode-ai"])
+
+
+def test_install_command_spawns_node_with_cli_js(monkeypatch, tmp_path):
+    # Windows: npm resolves to npm.cmd, which CreateProcess cannot run —
+    # so the install must go through `node npm-cli.js` instead.
+    inst = _mod()
+    node = tmp_path / "node.exe"
+    node.write_bytes(b"fake")
+    npm = tmp_path / "npm.cmd"
+    npm.write_bytes(b"fake")
+    cli = tmp_path / "node_modules" / "npm" / "bin" / "npm-cli.js"
+    cli.parent.mkdir(parents=True)
+    cli.write_bytes(b"fake")
+    monkeypatch.setattr(inst.shutil, "which", lambda _: str(npm))
+    cmd = inst.install_command(tmp_path / "prefix")
+    assert cmd[:2] == [str(node), str(cli)]
+    assert "--prefix" in cmd and "opencode-ai" in cmd
+
+
+def test_install_command_falls_back_to_npm_entry_point(monkeypatch, tmp_path):
+    # Unknown layout (no node / npm-cli.js next to npm): keep the old
+    # behavior rather than refusing to install.
+    inst = _mod()
+    monkeypatch.setattr(inst.shutil, "which", lambda _: "/x/node/npm")
+    monkeypatch.setattr(inst, "_node_for_npm", lambda _npm: None)
+    monkeypatch.setattr(inst, "_npm_cli_js", lambda _npm: None)
+    assert inst.install_command(tmp_path)[:2] == ["/x/node/npm", "install"]

@@ -10,6 +10,7 @@ import threading
 
 from PySide6.QtCore import QObject, QTimer, Signal
 from PySide6.QtWidgets import (
+    QApplication,
     QDialog,
     QDialogButtonBox,
     QLabel,
@@ -71,8 +72,12 @@ class _InstallDialog(QDialog):
     def _start_install(self):
         self._install_button.setEnabled(False)
         self._log.show()
-        prefix = installer.ensure_managed_prefix()
-        command = installer.install_command(prefix)
+        try:
+            prefix = installer.ensure_managed_prefix()
+            command = installer.install_command(prefix)
+        except Exception as e:
+            self._on_failure(str(e))
+            return
         self._thread = threading.Thread(
             target=self._install_loop, args=(command,), daemon=True
         )
@@ -105,6 +110,11 @@ def run_install_flow(parent) -> bool:
     dialog = _InstallDialog(parent)
     if dialog.exec() != QDialog.Accepted:
         return False
+    # Let Qt render the dialog close before we block the main thread on the
+    # model fetch, otherwise the install dialog visually lingers until it
+    # finishes.
+    dialog.deleteLater()
+    QApplication.processEvents()
     try:
         models = fetch_models()
         if models:

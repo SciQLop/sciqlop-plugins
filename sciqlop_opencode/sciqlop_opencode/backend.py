@@ -46,9 +46,9 @@ def managed_executable() -> Optional[str]:
 
     Verified against a real `npm install --prefix P opencode-ai`:
     `P/node_modules/opencode-ai/bin/opencode.exe` is the platform binary
-    (an ELF on Linux despite the name) and `.bin/opencode` symlinks to it.
-    The bin/ path is preferred because on Windows npm only writes
-    `.cmd`/`.ps1` shims into `.bin`, which can't be spawned without a shell.
+    (an ELF on Linux despite the name). The bin/ path is used because on
+    Windows npm only writes `.cmd`/`.ps1` shims into `.bin`, which can't be
+    spawned without a shell.
     """
     prefix = managed_prefix()
     if prefix is None:
@@ -56,7 +56,6 @@ def managed_executable() -> Optional[str]:
     candidates = [
         prefix / "node_modules" / NPM_PACKAGE / "bin" / "opencode.exe",
         prefix / "node_modules" / NPM_PACKAGE / "bin" / "opencode",
-        prefix / "node_modules" / ".bin" / "opencode",
     ]
     for candidate in candidates:
         if candidate.is_file():
@@ -72,13 +71,14 @@ def _well_known_candidates() -> List[str]:
     ~/.opencode/bin, which is rarely on PATH either.
     """
     if os.name == "nt":
+        # .exe only: create_subprocess_exec spawns without a shell, so the
+        # .cmd shims npm drops next to them are unreachable to us.
         roots = [
             os.path.expandvars(r"%USERPROFILE%\.opencode\bin"),
             os.path.expandvars(r"%USERPROFILE%\scoop\shims"),
             os.path.expandvars(r"%APPDATA%\npm"),
         ]
-        names = ("opencode.exe", "opencode.cmd", "opencode")
-        return [str(Path(root) / name) for root in roots for name in names]
+        return [str(Path(root) / "opencode.exe") for root in roots]
     candidates = ["/opt/homebrew/bin/opencode", "/usr/local/bin/opencode"]
     home = Path.home()
     for sub in (".local/bin/opencode", "bin/opencode", ".opencode/bin/opencode"):
@@ -112,13 +112,23 @@ def _shell_probe() -> Optional[str]:
     return None
 
 
+def _is_unspawnable_shim(path: str) -> bool:
+    """True for Windows shell shims (npm's .cmd/.ps1/.bat wrappers).
+
+    shutil.which follows PATHEXT, so on Windows it happily returns an
+    `opencode.cmd` that create_subprocess_exec (no shell) cannot spawn.
+    Never reject on posix: there the npm wrapper is a real script.
+    """
+    return os.name == "nt" and Path(path).suffix.lower() in (".cmd", ".bat", ".ps1")
+
+
 def resolve_opencode_executable() -> Optional[str]:
     """Absolute path to the opencode binary, or None when not installed."""
     managed = managed_executable()
     if managed is not None:
         return managed
     on_path = shutil.which("opencode")
-    if on_path is not None:
+    if on_path is not None and not _is_unspawnable_shim(on_path):
         return on_path
     for candidate in _well_known_candidates():
         if os.path.isfile(candidate) and (
@@ -126,11 +136,6 @@ def resolve_opencode_executable() -> Optional[str]:
         ):
             return candidate
     return _shell_probe()
-
-
-def resolve_acp_command() -> List[str]:
-    """`[absolute opencode path, "acp"]`, falling back to the bare name."""
-    return [resolve_opencode_executable() or "opencode", "acp"]
 
 
 def _missing_message() -> str:
@@ -154,11 +159,19 @@ class OpencodeBackend(AcpAgentBackend):
     cli_label = "opencode"
 
     def acp_command(self) -> List[str]:
-        return resolve_acp_command()
+        exe = resolve_opencode_executable()
+        if exe is None:
+            raise RuntimeError(_missing_message())
+        return [exe, "acp"]
 
     def check_prerequisites(self) -> None:
-        if resolve_opencode_executable() is None:
-            raise RuntimeError(_missing_message())
+        # Deliberately lenient: AcpAgentBackend.__init__ calls this, and
+        # raising here would make backend construction — and the on_activated
+        # install offer — unreachable exactly when the CLI is missing. The
+        # spawn-time gate is acp_command(), which raises instead; connection
+        # setup is lazy and retries on the next turn, so installing mid-bind
+        # heals the session without a restart.
+        return None
 
 
 def fetch_models() -> List[Tuple[str, Optional[str]]]:
@@ -170,9 +183,9 @@ def fetch_models() -> List[Tuple[str, Optional[str]]]:
     handshake fails.
     """
     choices = list(_DEFAULT_MODEL_CHOICES)
-    command = resolve_acp_command()
-    if resolve_opencode_executable() is None:
+    exe = resolve_opencode_executable()
+    if exe is None:
         return choices
-    models = acp_config_options(command).get("model", [])
+    models = acp_config_options([exe, "acp"]).get("model", [])
     choices.extend((label, value) for label, value in models if value)
     return choices

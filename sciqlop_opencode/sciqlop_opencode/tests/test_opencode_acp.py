@@ -9,21 +9,30 @@ def test_backend_is_acp_shell_with_opencode_command(monkeypatch):
     from sciqlop_opencode import backend as bk
 
     # hermetic: the dev machine may have a real opencode on PATH
-    monkeypatch.setattr(bk, "resolve_opencode_executable", lambda: None)
+    monkeypatch.setattr(bk, "resolve_opencode_executable", lambda: "/usr/bin/opencode")
     assert issubclass(bk.OpencodeBackend, acp_core.AcpAgentBackend)
     assert bk.OpencodeBackend.display_name == "Opencode"
     assert bk.OpencodeBackend.supports_sessions is True
     backend = bk.OpencodeBackend.__new__(bk.OpencodeBackend)
-    assert backend.acp_command() == ["opencode", "acp"]
+    assert backend.acp_command() == ["/usr/bin/opencode", "acp"]
 
 
-def test_check_prerequisites_names_the_install_and_login_steps(monkeypatch):
+def test_backend_constructs_without_cli_so_install_offer_can_fire(
+    monkeypatch, tmp_path
+):
+    # Regression: AcpAgentBackend.__init__ calls check_prerequisites(), so
+    # raising there made backend construction — and the on_activated install
+    # dialog — unreachable exactly when the CLI is missing.
+    from SciQLop.components.agents.backend import BackendContext
     from sciqlop_opencode import backend as bk
 
     monkeypatch.setattr(bk, "resolve_opencode_executable", lambda: None)
-    backend = bk.OpencodeBackend.__new__(bk.OpencodeBackend)
+    ctx = BackendContext(
+        main_window=None, tools=[], tempdir=tmp_path, confirm_cb=lambda *a: True
+    )
+    backend = bk.OpencodeBackend(ctx)  # must not raise
     with pytest.raises(RuntimeError, match="opencode auth login"):
-        backend.check_prerequisites()
+        backend.acp_command()
 
 
 def test_acp_command_is_not_shared_mutable_state(monkeypatch):
@@ -32,10 +41,10 @@ def test_acp_command_is_not_shared_mutable_state(monkeypatch):
     from sciqlop_opencode.backend import OpencodeBackend
     from sciqlop_opencode import backend as bk
 
-    monkeypatch.setattr(bk, "resolve_opencode_executable", lambda: None)
+    monkeypatch.setattr(bk, "resolve_opencode_executable", lambda: "/usr/bin/opencode")
     backend = OpencodeBackend.__new__(OpencodeBackend)
     backend.acp_command().append("--boom")
-    assert backend.acp_command() == ["opencode", "acp"]
+    assert backend.acp_command() == ["/usr/bin/opencode", "acp"]
 
 
 def test_fetch_models_prepends_default_and_keeps_agent_values(monkeypatch):
