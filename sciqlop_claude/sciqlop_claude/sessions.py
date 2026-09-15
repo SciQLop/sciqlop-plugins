@@ -392,7 +392,7 @@ def _extract_label(path: Path) -> str:
     try:
         with path.open("r", encoding="utf-8", errors="replace") as f:
             for line in f:
-                text = _first_user_text(line)
+                text = _strip_legacy_alignment(_first_user_text(line) or "")
                 if not text:
                     continue
                 stripped = text.strip()
@@ -402,6 +402,22 @@ def _extract_label(path: Path) -> str:
     except OSError:
         pass
     return "(empty session)"
+
+
+# Sessions from before SciQLop 0.13.1 carry SciQLop's old persona preamble as
+# the user's first words. Matched by its first and last lines rather than
+# imported from SciQLop: importing the agents package needs a QApplication.
+_LEGACY_ALIGNMENT_HEAD = "You are an astrophysicist and expert Python developer assisting inside SciQLop.\n"
+_LEGACY_ALIGNMENT_TAIL = "- Do not guess method names or internal module paths.\n"
+
+
+def _strip_legacy_alignment(text: str) -> str:
+    if not text.startswith(_LEGACY_ALIGNMENT_HEAD):
+        return text
+    end = text.find(_LEGACY_ALIGNMENT_TAIL)
+    if end < 0:
+        return text
+    return text[end + len(_LEGACY_ALIGNMENT_TAIL):].lstrip("\n")
 
 
 def _first_user_text(line: str) -> Optional[str]:

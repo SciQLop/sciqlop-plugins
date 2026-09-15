@@ -57,3 +57,17 @@ def test_missing_project_directory_lists_nothing(tmp_path, monkeypatch):
 
     monkeypatch.setattr(sessions, "_projects_dir", lambda: tmp_path / "nope")
     assert sessions.list_sessions(tmp_path) == []
+
+
+def test_label_skips_the_legacy_alignment_preamble(tmp_path, monkeypatch):
+    """Sessions started before 2026-09 have SciQLop's old persona preamble glued
+    onto the first prompt; the label must be the user's actual words."""
+    from sciqlop_claude import sessions
+
+    preamble = (sessions._LEGACY_ALIGNMENT_HEAD
+                + "- Be concise, factual, and plain-spoken.\n"
+                + sessions._LEGACY_ALIGNMENT_TAIL)
+    cwd, directory = _project_dir(tmp_path, monkeypatch)
+    _write_session(directory, "old", f"{preamble}\nplot the magnetic field", 1000.0)
+
+    assert sessions.list_sessions(cwd)[0].label == "plot the magnetic field"
