@@ -42,6 +42,12 @@ def _create_plot_panel():
     return create_plot_panel()
 
 
+def _time_range(t0, t1):
+    """Lazy import of SciQLop's TimeRange, mirroring `_create_plot_panel`."""
+    from SciQLop.core import TimeRange
+    return TimeRange(t0, t1)
+
+
 _log = _get_logger()
 _BUILD_TAG = "45e82dd+trace"  # bump on every push so we can see if SciQLop reloaded
 
@@ -275,6 +281,20 @@ class StationsTab(QWidget):
                     panel.plot_product(path)
             except Exception as exc:  # noqa: BLE001
                 self._status_sink(f"Plot failed for {path}: {type(exc).__name__}: {exc}")
+        # A fresh panel defaults its time range to "now" -- our products are
+        # live out-of-process callbacks (worker.py fetches whatever window
+        # SciQLop asks for), so without this every plot silently renders
+        # empty: the callback gets called for "now" instead of the
+        # channel's actual coverage. Mirrors sciqlop_radio's dock, which
+        # sets panel.time_range from the fetched rows' bounds right after
+        # panel.plot(...).
+        try:
+            starts = [_obspy_to_dt(p["start_date"]) for p in rows]
+            stops = [_obspy_to_dt(p["end_date"]) for p in rows]
+            panel.time_range = _time_range(min(starts), max(stops))
+        except Exception as exc:  # noqa: BLE001
+            self._status_sink(f"Plotted, but couldn't set time range: {exc}")
+            return
         self._status_sink(f"Plotted {len(rows)} {kind}(s)")
 
     def _selected_channel_rows(self) -> list[dict]:

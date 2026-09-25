@@ -142,6 +142,35 @@ def test_plot_spectrogram_uses_spectrogram_uid(qtbot, dock, fake_inventory, mock
         assert args[0] == "sismo/G/SSB/00.HHZ/spectrogram"
 
 
+def test_plot_waveform_sets_panel_time_range_to_channel_coverage(
+        qtbot, dock, fake_inventory, mock_provider):
+    """A fresh SciQLop panel defaults its time range to "now" -- for a
+    channel whose data lives in the past (any real station, any archived
+    local file), the out-of-process callback then gets called for a window
+    with no data and silently renders an empty plot. The dock must push the
+    channel's own coverage onto the panel after plotting, the same way
+    sciqlop_radio's dock sets panel.time_range from the fetched rows'
+    bounds after panel.plot(...)."""
+    tab = dock.stations_tab
+    with patch("sciqlop_sismo.dock_stations.search_stations", return_value=fake_inventory):
+        with qtbot.waitSignal(tab.search_finished, timeout=5000):
+            qtbot.mouseClick(tab.search_button, _Qt_LeftButton())
+    model = tab.results_tree.model()
+    chan = model.index(0, 0, model.index(0, 0, model.index(0, 0)))
+    sel = tab.results_tree.selectionModel()
+    sel.select(chan, sel.SelectionFlag.ClearAndSelect | sel.SelectionFlag.Rows)
+    panel = MagicMock()
+    sentinel = object()
+    with patch("sciqlop_sismo.dock_stations._create_plot_panel", return_value=panel), \
+         patch("sciqlop_sismo.dock_stations._time_range", return_value=sentinel) as tr:
+        qtbot.mouseClick(tab.plot_waveform_button, _Qt_LeftButton())
+    tr.assert_called_once()
+    (t0, t1), _ = tr.call_args
+    assert t0 == datetime(2010, 1, 1, tzinfo=timezone.utc)
+    assert t1 == datetime(2099, 1, 1, tzinfo=timezone.utc)
+    assert panel.time_range is sentinel
+
+
 def test_plot_buttons_noop_when_create_plot_panel_unavailable(qtbot, dock, fake_inventory, mock_provider):
     tab = dock.stations_tab
     with patch("sciqlop_sismo.dock_stations.search_stations", return_value=fake_inventory):
