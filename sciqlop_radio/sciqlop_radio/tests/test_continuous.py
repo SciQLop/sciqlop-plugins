@@ -556,3 +556,89 @@ def test_continuous_registration_passes_display_names(tmp_path):
         "radio/I-LOFAR/Y": "I-LOFAR Y pol",
     }
 
+
+# ---------------------------------------------------------------------------
+# restoring dock-registered streams saved by stream_store (template reload)
+# ---------------------------------------------------------------------------
+
+
+def test_register_continuous_products_restores_saved_streams(tmp_path):
+    """A stream the dock registered on a previous run (e.g. e-CALLISTO
+    BIR/59, dragged from a search result) must come back at the next
+    plugin load — otherwise a saved panel template referencing it can
+    never be reopened."""
+    from sciqlop_radio.stream_store import save_stream
+    from sciqlop_radio.streams import StreamIdentity
+    from sciqlop_radio.continuous import register_continuous_products
+
+    identity = StreamIdentity(source_key="ecallisto", instrument="eCALLISTO",
+                              path_name="e-CALLISTO", station="BIR", channel="59")
+    save_stream(tmp_path / "streams.json", identity, (3, 1.0, 2.0, 3.0))
+
+    seen = {}
+
+    def _vp_factory(path, cb, vptype, *, metadata, display_name=None, **kwargs):
+        seen[path] = cb
+        return object()
+
+    reg = register_continuous_products(tmp_path, lambda p: None,
+                                       vp_factory=_vp_factory, out_of_process=False)
+    assert "radio/e-CALLISTO/BIR/59" in seen
+    assert reg.vps["radio/e-CALLISTO/BIR/59"] is not None
+
+
+def test_restored_stream_callback_filters_by_the_saved_frequency_signature(
+        monkeypatch, tmp_path, speasy_variable_factory):
+    """The restored source must carry the same freq_signature filter the
+    live one would have — the raw JSON list must be converted back to a
+    tuple before comparison (frequency_signature() returns a tuple)."""
+    from sciqlop_radio.stream_store import save_stream
+    from sciqlop_radio.streams import StreamIdentity
+    from sciqlop_radio.continuous import register_continuous_products
+    from sciqlop_radio.plot import frequency_signature
+
+    v_good = speasy_variable_factory("2024-01-01T00:00:00", 3, 4)
+    sig = frequency_signature(v_good)
+    identity = StreamIdentity(source_key="ecallisto", instrument="eCALLISTO",
+                              path_name="e-CALLISTO", station="BIR", channel="59")
+    save_stream(tmp_path / "streams.json", identity, sig)
+
+    captured_cb = {}
+
+    def _vp_factory(path, cb, vptype, *, metadata, display_name=None, **kwargs):
+        captured_cb[path] = cb
+        return object()
+
+    register_continuous_products(tmp_path, lambda p: v_good,
+                                 vp_factory=_vp_factory, out_of_process=False)
+
+    from sciqlop_radio import continuous as C
+    rows = [{"Observatory": "BIR", "ID": "59", "url": "http://a/g.fit.gz"}]
+    monkeypatch.setattr(C, "_fido_search", lambda *a: [dict(r) for r in rows])
+    monkeypatch.setattr(C, "_fetch_paths", lambda rws, cd: [tmp_path / "g.fit.gz"])
+
+    out = captured_cb["radio/e-CALLISTO/BIR/59"](0.0, 100.0)
+    assert out is not None
+    assert out.values.shape[1] == 4
+
+
+def test_register_continuous_products_skips_saved_streams_for_dropped_sources(tmp_path):
+    """A saved entry for a source no longer in sources.py must not blow up
+    registration — stream_store already drops it on load."""
+    from sciqlop_radio.stream_store import save_stream
+    from sciqlop_radio.streams import StreamIdentity
+    from sciqlop_radio.continuous import register_continuous_products
+
+    save_stream(tmp_path / "streams.json",
+               StreamIdentity(source_key="retired_source", instrument="X"), None)
+
+    seen = {}
+
+    def _vp_factory(path, cb, vptype, *, metadata, display_name=None, **kwargs):
+        seen[path] = cb
+        return object()
+
+    register_continuous_products(tmp_path, lambda p: None,
+                                 vp_factory=_vp_factory, out_of_process=False)
+    assert not any("retired_source" in p for p in seen)
+

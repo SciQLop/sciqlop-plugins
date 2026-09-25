@@ -29,6 +29,7 @@ from .query import RadioQuery
 from .reader import open_spectrogram
 from .settings import RadioSettings
 from .sources import SOURCES, RadioSource
+from .stream_store import forget_all, save_stream
 from .streams import stream_identity_for_row
 from .continuous import make_stream_source, _build_callback
 
@@ -163,6 +164,12 @@ class RadioSpectraDock(QWidget):
 
         self.open_local_button = QPushButton("Open local…")
         controls.addWidget(self.open_local_button)
+        self.forget_streams_button = QPushButton("Forget remembered streams…")
+        self.forget_streams_button.setToolTip(
+            "Clear live streams remembered across restarts (e.g. e-CALLISTO"
+            " station/focus channels). Takes effect on the next restart."
+        )
+        controls.addWidget(self.forget_streams_button)
         root.addLayout(controls)
 
         times = QHBoxLayout()
@@ -244,6 +251,7 @@ class RadioSpectraDock(QWidget):
 
         self.fetch_button.clicked.connect(self._on_fetch_clicked)
         self.open_local_button.clicked.connect(self._on_open_local_clicked)
+        self.forget_streams_button.clicked.connect(self._on_forget_streams_clicked)
         self.plot_button.clicked.connect(self._on_plot_selected_clicked)
         self._svc.searchCompleted.connect(self._on_search_completed)
         self._svc.searchFailed.connect(self._on_search_failed)
@@ -312,6 +320,20 @@ class RadioSpectraDock(QWidget):
         if paths:
             self._plot_items([(Path(p), None) for p in paths],
                              source=None, static_key="local")
+
+    def _stream_store_path(self) -> Path:
+        return self._cache_dir / "streams.json"
+
+    def _on_forget_streams_clicked(self):
+        answer = QMessageBox.question(
+            self, "Forget remembered streams",
+            "Forget every live stream remembered across restarts?\n"
+            "This takes effect the next time SciQLop starts.",
+        )
+        if answer != QMessageBox.Yes:
+            return
+        forget_all(self._stream_store_path())
+        self._set_status("Remembered streams cleared (takes effect on next restart)")
 
     def _on_plot_selected_clicked(self):
         rows = self._selected_rows()
@@ -486,6 +508,8 @@ class RadioSpectraDock(QWidget):
                     t_min = g.t0 if t_min is None else min(t_min, g.t0)
                 if g.t1 is not None:
                     t_max = g.t1 if t_max is None else max(t_max, g.t1)
+                if g.identity is not None:
+                    save_stream(self._stream_store_path(), g.identity, g.freq_signature)
             except Exception as e:  # noqa: BLE001
                 errors.append((g.first_name, f"plot: {type(e).__name__}: {e}"))
 
@@ -538,7 +562,8 @@ class RadioSpectraDock(QWidget):
             return _PlotGroup(vp_path=identity.vp_path, callback=callback,
                               first_name=paths[0].name, n_files=len(paths),
                               t0=t0, t1=t1, out_of_process=True,
-                              display_name=identity.display_name)
+                              display_name=identity.display_name,
+                              identity=identity, freq_signature=stream_src.freq_signature)
         merged = (concat_variables_along_time(variables)
                   if len(variables) > 1 else variables[0])
         return _PlotGroup(vp_path=_group_vp_path(static_key, paths),
@@ -589,6 +614,10 @@ class _PlotGroup:
     # IPC overhead for them.
     out_of_process: bool = False
     display_name: str = ""
+    # Set for stream groups only -- lets `_plot_items` remember the stream
+    # (stream_store.py) once it's actually plotted.
+    identity: object = None
+    freq_signature: tuple | None = None
 
 
 def _row_basename(row) -> str:

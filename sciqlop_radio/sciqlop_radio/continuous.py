@@ -537,6 +537,17 @@ class ContinuousRegistration:
     vps: dict[str, Any] = field(default_factory=dict)
 
 
+def _saved_stream_sources(cache_dir: Path) -> list[ContinuousSource]:
+    """Streams the dock registered on a previous run (`stream_store.py`),
+    turned back into `ContinuousSource`s the same way `make_stream_source`
+    builds one live — so a saved panel template can find them again after
+    a restart."""
+    from .stream_store import load_saved_streams
+    saved = load_saved_streams(cache_dir / "streams.json")
+    return [make_stream_source(entry.to_identity(), entry.freq_signature_tuple)
+            for entry in saved]
+
+
 def register_continuous_products(
     cache_dir: Path,
     open_and_convert: Callable[[Path], Any],
@@ -544,8 +555,10 @@ def register_continuous_products(
     vp_factory: Optional[Callable[..., Any]] = None,
     out_of_process: bool = True,
 ) -> Optional[ContinuousRegistration]:
-    """Register one VP per `ContinuousSource`. Returns None when SciQLop's
-    virtual-products API isn't importable (headless tests).
+    """Register one VP per `ContinuousSource`, plus one per stream the dock
+    remembered from a previous run (see `_saved_stream_sources`). Returns
+    None when SciQLop's virtual-products API isn't importable (headless
+    tests).
 
     `vp_factory` defaults to `sciqlop_radio.hints.make_rich_vp` so the VPs
     carry the same plot-hints overrides as the catalog. Tests can inject
@@ -564,7 +577,11 @@ def register_continuous_products(
         vp_factory = make_rich_vp
 
     reg = ContinuousRegistration()
-    for src in CONTINUOUS_SOURCES:
+    sources = list(CONTINUOUS_SOURCES) + [
+        src for src in _saved_stream_sources(cache_dir)
+        if src.vp_path not in {s.vp_path for s in CONTINUOUS_SOURCES}
+    ]
+    for src in sources:
         cb = _build_callback(src, cache_dir, open_and_convert)
         try:
             vp = vp_factory(src.vp_path, cb, VirtualProductType.Spectrogram,

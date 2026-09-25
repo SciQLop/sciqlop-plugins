@@ -16,6 +16,7 @@ pytest.importorskip("PySide6")
 pytest.importorskip("pytestqt")
 
 from PySide6.QtCore import QObject, Signal
+from PySide6.QtWidgets import QMessageBox
 
 
 class FakeRow(dict):
@@ -565,6 +566,76 @@ def test_ecallisto_focus_codes_stream_separately(dock, qtbot, tmp_path, monkeypa
     assert paths == ["radio/e-CALLISTO/BIR/01", "radio/e-CALLISTO/BIR/02"]
     assert all(call[1].get("out_of_process") is True for call in vs_calls)
     assert panel.plot.call_count == 2
+
+
+# ---------------------------------------------------------------------------
+# stream persistence (so a saved panel template survives a restart)
+# ---------------------------------------------------------------------------
+
+
+def test_plotting_a_stream_persists_it_for_the_next_restart(dock, qtbot, tmp_path, monkeypatch):
+    """Dragging a fetched e-CALLISTO result onto a panel must remember the
+    stream, not just register it in memory -- otherwise a saved panel
+    template referencing it can't be reopened after SciQLop restarts."""
+    import types as _t
+    w, svc = dock
+    w._cache_dir = tmp_path
+    for i in range(w.source_combo.count()):
+        if w.source_combo.itemData(i).key == "ecallisto":
+            w.source_combo.setCurrentIndex(i)
+            break
+    w.fetch_button.click()
+
+    fn = "BIR_20110607_120000_59.fit.gz"
+    p = tmp_path / fn
+    p.write_bytes(b"\x00")
+    w._pending_rows = [_crow(f"http://a/{fn}", "BIR", "59")]
+    monkeypatch.setattr("sciqlop_radio.dock._open_and_convert",
+                        lambda path: _t.SimpleNamespace(name=path.name))
+    monkeypatch.setattr("sciqlop_radio.dock.frequency_signature", lambda v: (3, 1.0, 2.0, 3.0))
+    _install_fake_user_api(monkeypatch)
+
+    svc.fetchCompleted.emit([p], [])
+    qtbot.wait(50)
+
+    from sciqlop_radio.stream_store import load_saved_streams
+    [entry] = load_saved_streams(tmp_path / "streams.json")
+    assert entry.to_identity().vp_path == "radio/e-CALLISTO/BIR/59"
+    assert entry.freq_signature == [3, 1.0, 2.0, 3.0]
+
+
+def test_forget_streams_button_clears_the_store(dock, qtbot, tmp_path, monkeypatch):
+    w, _svc = dock
+    w._cache_dir = tmp_path
+    from sciqlop_radio.stream_store import save_stream
+    from sciqlop_radio.streams import StreamIdentity
+    save_stream(tmp_path / "streams.json",
+               StreamIdentity(source_key="ecallisto", instrument="eCALLISTO",
+                              station="BIR", channel="59"), None)
+    monkeypatch.setattr("sciqlop_radio.dock.QMessageBox.question",
+                        lambda *a, **k: QMessageBox.Yes)
+
+    w.forget_streams_button.click()
+
+    from sciqlop_radio.stream_store import load_saved_streams
+    assert load_saved_streams(tmp_path / "streams.json") == []
+
+
+def test_forget_streams_button_does_nothing_without_confirmation(dock, qtbot, tmp_path, monkeypatch):
+    w, _svc = dock
+    w._cache_dir = tmp_path
+    from sciqlop_radio.stream_store import save_stream
+    from sciqlop_radio.streams import StreamIdentity
+    save_stream(tmp_path / "streams.json",
+               StreamIdentity(source_key="ecallisto", instrument="eCALLISTO",
+                              station="BIR", channel="59"), None)
+    monkeypatch.setattr("sciqlop_radio.dock.QMessageBox.question",
+                        lambda *a, **k: QMessageBox.No)
+
+    w.forget_streams_button.click()
+
+    from sciqlop_radio.stream_store import load_saved_streams
+    assert len(load_saved_streams(tmp_path / "streams.json")) == 1
 
 
 def test_dominant_freq_sig_picks_majority_grid():
