@@ -6,19 +6,8 @@ thread. No qasync (per `feedback_qasync_httpx_async_client`).
 """
 from __future__ import annotations
 
-import logging
-import sys
 from datetime import datetime, timezone
 from typing import Callable
-
-
-def _get_logger():
-    """Prefer SciQLop's logging plumbing so messages appear in its log widget."""
-    try:
-        from SciQLop.components import sciqlop_logging
-        return sciqlop_logging.getLogger(__name__)
-    except ImportError:
-        return logging.getLogger(__name__)
 
 from PySide6.QtCore import (
     QObject, QRunnable, Qt, QThreadPool, Signal,
@@ -46,55 +35,6 @@ def _time_range(t0, t1):
     """Lazy import of SciQLop's TimeRange, mirroring `_create_plot_panel`."""
     from SciQLop.core import TimeRange
     return TimeRange(t0, t1)
-
-
-_log = _get_logger()
-_BUILD_TAG = "45e82dd+trace"  # bump on every push so we can see if SciQLop reloaded
-
-
-def _trace(msg, *args):
-    """Belt-and-braces: log AND print to stderr so it can't be filtered out."""
-    try:
-        _log.warning(msg, *args)
-    except Exception:
-        pass
-    try:
-        rendered = (msg % args) if args else msg
-        print(f"[sismo] {rendered}", file=sys.stderr, flush=True)
-    except Exception:
-        pass
-
-
-def _build_plot_callback(provider, uid: str):
-    """Closure SciQLop will call as `f(start_epoch, stop_epoch) → arrays`.
-
-    Bypasses SciQLop's ProductsModel (which is built once at startup
-    and doesn't know about runtime-added channels) by feeding the panel
-    directly via `plot_function(callback)`.
-    """
-    import numpy as np
-
-    def _callback(start, stop):
-        _trace("callback fired uid=%s start=%s stop=%s", uid, start, stop)
-        try:
-            t0 = datetime.fromtimestamp(float(start), tz=timezone.utc)
-            t1 = datetime.fromtimestamp(float(stop), tz=timezone.utc)
-            var = provider.get_data(uid, t0, t1)
-        except Exception as exc:  # noqa: BLE001
-            _trace("callback: provider.get_data raised for %s: %r", uid, exc)
-            return []
-        if var is None:
-            _trace("callback: provider.get_data returned None for %s", uid)
-            return []
-        time = var.time.astype("datetime64[ns]").astype("int64").astype("float64") / 1e9
-        values = np.ascontiguousarray(var.values.astype("float64"))
-        _trace("callback returning time.shape=%s values.shape=%s axes=%s",
-               time.shape, values.shape, len(var.axes))
-        if values.ndim == 2 and len(var.axes) >= 2 and np.issubdtype(var.axes[1].values.dtype, np.number):
-            return [time, var.axes[1].values.astype("float64"), values]
-        return [time, values]
-
-    return _callback
 
 
 class _SearchSignals(QObject):
