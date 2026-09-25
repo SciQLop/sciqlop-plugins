@@ -6,7 +6,7 @@ thread. No qasync (per `feedback_qasync_httpx_async_client`).
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Callable
 
 from PySide6.QtCore import (
@@ -35,6 +35,17 @@ def _time_range(t0, t1):
     """Lazy import of SciQLop's TimeRange, mirroring `_create_plot_panel`."""
     from SciQLop.core import TimeRange
     return TimeRange(t0, t1)
+
+
+# A fresh panel's default zoom_limit_seconds is 1 day: a wider time_range
+# gets silently centered-and-clipped to that size (see PlotPanel.zoom_limit_seconds
+# docstring). A channel's nominal coverage (start_date..end_date) routinely
+# spans years for a still-operating station (end_date is often absent), so
+# pushing that full span lands the clip on an arbitrary day with no
+# guarantee of data. Stay well under the limit and end at the point in the
+# coverage most likely to actually have data: "now" for an active channel,
+# its real end_date for a retired one.
+_DEFAULT_PLOT_WINDOW = timedelta(hours=1)
 
 
 class _SearchSignals(QObject):
@@ -224,14 +235,17 @@ class StationsTab(QWidget):
         # A fresh panel defaults its time range to "now" -- our products are
         # live out-of-process callbacks (worker.py fetches whatever window
         # SciQLop asks for), so without this every plot silently renders
-        # empty: the callback gets called for "now" instead of the
-        # channel's actual coverage. Mirrors sciqlop_radio's dock, which
-        # sets panel.time_range from the fetched rows' bounds right after
-        # panel.plot(...).
+        # empty: the callback gets called for "now" instead of a window that
+        # actually has data. Mirrors sciqlop_radio's dock, which sets
+        # panel.time_range right after panel.plot(...) -- but unlike radio's
+        # naturally-short fetched-rows bounds, a channel's nominal coverage
+        # can span years, so end at the latest point likely to have data
+        # (now, or the channel's own end_date if it's already retired) and
+        # go back a short, zoom-limit-safe window (_DEFAULT_PLOT_WINDOW).
         try:
-            starts = [_obspy_to_dt(p["start_date"]) for p in rows]
-            stops = [_obspy_to_dt(p["end_date"]) for p in rows]
-            panel.time_range = _time_range(min(starts), max(stops))
+            now = datetime.now(tz=timezone.utc)
+            t1 = min(max(_obspy_to_dt(p["end_date"]) for p in rows), now)
+            panel.time_range = _time_range(t1 - _DEFAULT_PLOT_WINDOW, t1)
         except Exception as exc:  # noqa: BLE001
             self._status_sink(f"Plotted, but couldn't set time range: {exc}")
             return

@@ -1,5 +1,5 @@
 """Tests for sciqlop_sismo.dock (Qt-headless via pytest-qt)."""
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -142,15 +142,24 @@ def test_plot_spectrogram_uses_spectrogram_uid(qtbot, dock, fake_inventory, mock
         assert args[0] == "sismo/G/SSB/00.HHZ/spectrogram"
 
 
-def test_plot_waveform_sets_panel_time_range_to_channel_coverage(
+def test_plot_waveform_sets_panel_time_range_to_a_short_recent_window(
         qtbot, dock, fake_inventory, mock_provider):
     """A fresh SciQLop panel defaults its time range to "now" -- for a
     channel whose data lives in the past (any real station, any archived
     local file), the out-of-process callback then gets called for a window
-    with no data and silently renders an empty plot. The dock must push the
-    channel's own coverage onto the panel after plotting, the same way
-    sciqlop_radio's dock sets panel.time_range from the fetched rows'
-    bounds after panel.plot(...)."""
+    with no data and silently renders an empty plot. The dock must push a
+    window onto the panel after plotting, the same way sciqlop_radio's dock
+    sets panel.time_range from the fetched rows' bounds after panel.plot(...).
+
+    That window must stay SHORT (well under the panel's default 1-day
+    zoom_limit_seconds) -- setting it to the channel's full nominal
+    coverage (start_date..end_date, which spans years for a still-running
+    station) gets silently centered-and-clipped by SciQLopPlots to a
+    1-day window around the MIDPOINT of that range, landing on an
+    arbitrary day with no guarantee of data. Ending the window at
+    min(now, channel end) and going back a fixed short duration keeps it
+    inside the zoom limit and biases it toward the point in the coverage
+    most likely to actually have data."""
     tab = dock.stations_tab
     with patch("sciqlop_sismo.dock_stations.search_stations", return_value=fake_inventory):
         with qtbot.waitSignal(tab.search_finished, timeout=5000):
@@ -161,13 +170,17 @@ def test_plot_waveform_sets_panel_time_range_to_channel_coverage(
     sel.select(chan, sel.SelectionFlag.ClearAndSelect | sel.SelectionFlag.Rows)
     panel = MagicMock()
     sentinel = object()
+    before = datetime.now(tz=timezone.utc)
     with patch("sciqlop_sismo.dock_stations._create_plot_panel", return_value=panel), \
          patch("sciqlop_sismo.dock_stations._time_range", return_value=sentinel) as tr:
         qtbot.mouseClick(tab.plot_waveform_button, _Qt_LeftButton())
+    after = datetime.now(tz=timezone.utc)
     tr.assert_called_once()
     (t0, t1), _ = tr.call_args
-    assert t0 == datetime(2010, 1, 1, tzinfo=timezone.utc)
-    assert t1 == datetime(2099, 1, 1, tzinfo=timezone.utc)
+    # fake_inventory's channel end_date is 2099 (still "operating"), so the
+    # window must end at now, not at that far-future nominal end_date.
+    assert before <= t1 <= after
+    assert t1 - t0 <= timedelta(hours=1)
     assert panel.time_range is sentinel
 
 
