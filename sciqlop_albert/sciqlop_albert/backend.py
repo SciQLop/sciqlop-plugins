@@ -118,6 +118,17 @@ def fetch_models() -> List[tuple[str, Optional[str]]]:
     return choices
 
 
+def _request_headers() -> Dict[str, str]:
+    """Read the key at each prompt, so one set in Settings works without a restart."""
+    key = _api_key()
+    if not key:
+        raise RuntimeError(
+            "Albert API key not configured. Set it in "
+            "Settings → Plugins → Albert, or via ALBERT_API_KEY env var."
+        )
+    return {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
+
+
 class AlbertBackend:
     display_name = "Albert"
     model_choices: List[tuple[str, Optional[str]]] = [("Default", None)]
@@ -127,17 +138,9 @@ class AlbertBackend:
     _guidance: str = ""
 
     def __init__(self, ctx: BackendContext):
-        key = _api_key()
-        if not key:
-            raise RuntimeError(
-                "Albert API key not configured. Set it in "
-                "Settings → Plugins → Albert, or via ALBERT_API_KEY env var."
-            )
+        # No key check here: a raise escapes the agent dock's construction and
+        # fails the load() of every other agent plugin. ask() reports it instead.
         self._base_url = _base_url()
-        self._headers = {
-            "Authorization": f"Bearer {key}",
-            "Content-Type": "application/json",
-        }
         self._tools_defs = _build_openai_tools(ctx.tools)
         self._handlers: Dict[str, callable] = {
             t["name"]: t["handler"] for t in ctx.tools
@@ -155,6 +158,7 @@ class AlbertBackend:
     async def ask(
         self, prompt: str, image_paths: Optional[List[str]] = None
     ) -> AsyncIterator[StreamBlock]:
+        headers = _request_headers()
         self._history.append({"role": "user", "content": prompt})
 
         while True:
@@ -165,7 +169,7 @@ class AlbertBackend:
             url = f"{self._base_url}/chat/completions"
 
             async for block in _stream_sse(
-                url, self._headers, request_body, assistant_text_parts, tool_calls
+                url, headers, request_body, assistant_text_parts, tool_calls
             ):
                 yield block
 
