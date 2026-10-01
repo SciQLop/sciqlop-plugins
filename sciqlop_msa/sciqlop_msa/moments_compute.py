@@ -12,8 +12,8 @@ from datetime import date, timedelta
 
 import numpy as np
 
-from . import moments_fit
-from .moments_fit import SPECIES_MASS_TABLE, best_fit, flux_to_phase_space_density
+from .moments_fit import (SPECIES_MASS_TABLE, accepted_fit, fit_candidates,
+                          flux_to_phase_space_density, usable_points)
 from .moments_source import fetch_day
 
 _MIN_POINTS_TO_FIT = 6
@@ -22,7 +22,9 @@ _MIN_POINTS_TO_FIT = 6
 @dataclass
 class DayFits:
     """Post-fit physical quantities (density, temperatures, model, chi2), one
-    entry per input spectrum record; not raw instrument flux."""
+    entry per input spectrum record; not raw instrument flux. `candidates`
+    holds every converged model of each record, best first, rejected ones
+    included, so the fit inspector can redraw them without refitting."""
 
     time: np.ndarray
     n_tot: np.ndarray
@@ -30,6 +32,7 @@ class DayFits:
     T_eff: np.ndarray
     model: np.ndarray
     chi2: np.ndarray
+    candidates: list
 
 
 def _fit_day_uncached(species: str, day: date) -> "DayFits | None":
@@ -44,15 +47,11 @@ def _fit_day_uncached(species: str, day: date) -> "DayFits | None":
     T_eff = np.full(n, np.nan)
     model = np.full(n, "", dtype="<U16")
     chi2 = np.full(n, np.nan)
+    candidates = [record_candidates(spectra.energy, spectra.flux[i], A, q) for i in range(n)]
 
     for i in range(n):
-        row = spectra.flux[i]
-        f_obs = flux_to_phase_space_density(spectra.energy, row, A, q)
-        mask = np.isfinite(f_obs) & (f_obs > 0)
-        if mask.sum() < _MIN_POINTS_TO_FIT:
-            continue
-        result = best_fit(spectra.energy, f_obs, mask, A)
-        if result is None or result.chi2 > moments_fit.CHI2_MAX:
+        result = accepted_fit(candidates[i])
+        if result is None:
             continue
         n_tot[i] = result.n_tot
         T_c[i] = result.T_c
@@ -60,17 +59,29 @@ def _fit_day_uncached(species: str, day: date) -> "DayFits | None":
         model[i] = result.model
         chi2[i] = result.chi2
 
-    return DayFits(time=spectra.time, n_tot=n_tot, T_c=T_c, T_eff=T_eff, model=model, chi2=chi2)
+    return DayFits(time=spectra.time, n_tot=n_tot, T_c=T_c, T_eff=T_eff, model=model, chi2=chi2,
+                   candidates=candidates)
+
+
+def record_candidates(energy: np.ndarray, flux_row: np.ndarray, A: float, q: int) -> list:
+    f_obs = flux_to_phase_space_density(energy, flux_row, A, q)
+    mask = usable_points(flux_row, f_obs)
+    if mask.sum() < _MIN_POINTS_TO_FIT:
+        return []
+    return fit_candidates(energy, f_obs, mask, A)
 
 
 _cached_fit_day = None
+# Bump when DayFits changes shape: cached entries live 30 days and an old pickle
+# would come back without the new fields.
+_FIT_CACHE_VERSION = 2
 
 
 def _make_cached_fit_day():
     from speasy.core.cache import CacheCall
 
     @CacheCall(cache_retention=timedelta(days=30), is_pure=True)
-    def _cached(species: str, day: date):
+    def _cached(species: str, day: date, version: int):
         return _fit_day_uncached(species, day)
 
     return _cached
@@ -80,4 +91,4 @@ def fit_day(species: str, day: date) -> "DayFits | None":
     global _cached_fit_day
     if _cached_fit_day is None:
         _cached_fit_day = _make_cached_fit_day()
-    return _cached_fit_day(species, day)
+    return _cached_fit_day(species, day, _FIT_CACHE_VERSION)

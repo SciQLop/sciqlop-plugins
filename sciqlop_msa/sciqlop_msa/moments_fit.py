@@ -353,20 +353,51 @@ def fit_2max_kap(energy: np.ndarray, f_obs: np.ndarray, mask: np.ndarray,
     )
 
 
+def usable_points(flux: np.ndarray, f_obs: np.ndarray) -> np.ndarray:
+    """Points a fit may use: above the instrument noise floor, finite and positive."""
+    return (flux >= NOISE_FLUX_THRESHOLD) & np.isfinite(f_obs) & (f_obs > 0)
+
+
+def fit_candidates(energy: np.ndarray, f_obs: np.ndarray, mask: np.ndarray,
+                   A: float) -> list:
+    """Every candidate model that converged, best (lowest reduced chi-squared) first."""
+    results = (
+        fit_max_kap(energy, f_obs, mask, A),
+        fit_2max(energy, f_obs, mask, A),
+        fit_2max_kap(energy, f_obs, mask, A),
+    )
+    return sorted((r for r in results if r is not None), key=lambda r: r.chi2)
+
+
 def best_fit(energy: np.ndarray, f_obs: np.ndarray, mask: np.ndarray,
             A: float) -> "FitResult | None":
-    """Try all three candidate models, keep the one with the lowest reduced chi-squared."""
-    candidates = [
-        r for r in (
-            fit_max_kap(energy, f_obs, mask, A),
-            fit_2max(energy, f_obs, mask, A),
-            fit_2max_kap(energy, f_obs, mask, A),
-        )
-        if r is not None
-    ]
-    if not candidates:
-        return None
-    return min(candidates, key=lambda r: r.chi2)
+    candidates = fit_candidates(energy, f_obs, mask, A)
+    return candidates[0] if candidates else None
+
+
+def accepted_fit(candidates: list) -> "FitResult | None":
+    if candidates and candidates[0].chi2 <= CHI2_MAX:
+        return candidates[0]
+    return None
+
+
+_POPULATIONS = {
+    "max_kap": {"core": ("maxwellian", "nc", "Tc"), "halo": ("kappa", "nh", "Th")},
+    "2max": {"core": ("maxwellian", "nc", "Tc"), "hot": ("maxwellian", "nh", "Th")},
+    "2max_kap": {"core": ("maxwellian", "nc", "Tc"), "warm": ("maxwellian", "nw", "Tw"),
+                 "halo": ("kappa", "nh", "Th")},
+}
+
+
+def model_components(params: dict, E_eV: np.ndarray, A: float) -> dict:
+    """Phase-space density of each population of a fit, by population name."""
+
+    def evaluate(shape, n_key, T_key):
+        if shape == "kappa":
+            return kappa_distribution(E_eV, params[n_key], params[T_key], params["kappa"], A)
+        return maxwellian(E_eV, params[n_key], params[T_key], A)
+
+    return {name: evaluate(*spec) for name, spec in _POPULATIONS[params["model"]].items()}
 
 
 def effective_temperature(params: dict) -> float:

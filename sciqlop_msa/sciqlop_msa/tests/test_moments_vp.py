@@ -14,6 +14,7 @@ def _day_fits(day_offset_seconds=0.0):
         T_eff=np.array([300.0, 301.0]),
         model=np.array(["max_kap", "max_kap"]),
         chi2=np.array([0.001, 0.002]),
+        candidates=[[], []],
     )
 
 
@@ -25,6 +26,7 @@ def _day_fits_three_points():
         T_eff=np.array([300.0, 301.0, 302.0]),
         model=np.array(["max_kap", "max_kap", "max_kap"]),
         chi2=np.array([0.001, 0.002, 0.003]),
+        candidates=[[], [], []],
     )
 
 

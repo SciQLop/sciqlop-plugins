@@ -4,8 +4,6 @@ from datetime import date, datetime, time, timezone
 
 import numpy as np
 
-from .moments_fit import NOISE_FLUX_THRESHOLD
-
 _L2PRE = "archive/BepiColombo/MSA/L2pre_Low_EFlux_Moments_TOF/bc_mmo_mppe_msa_l2pre_l_eflux_moments_tof"
 
 _SPECIES_VARIABLE = {
@@ -19,7 +17,8 @@ _SPECIES_VARIABLE = {
 @dataclass
 class DaySpectra:
     """flux holds RAW instrument differential-directional-energy flux
-    (cm^-2 s^-1 sr^-1 eV^-1), not phase-space density."""
+    (cm^-2 s^-1 sr^-1 eV^-1), not phase-space density. Points below the noise
+    floor are kept so the fit inspector can show them; the fit mask drops them."""
 
     time: np.ndarray
     energy: np.ndarray
@@ -47,7 +46,6 @@ def fetch_day(species: str, day: date) -> "DaySpectra | None":
     if energy.ndim == 2:
         energy = energy[0]
     flux = np.asarray(var.values, dtype=float)
-    flux = np.where(flux < NOISE_FLUX_THRESHOLD, np.nan, flux)
 
     time_epoch = var.time.astype("datetime64[s]").astype("int64").astype(float)
     return DaySpectra(time=time_epoch, energy=energy, flux=flux)

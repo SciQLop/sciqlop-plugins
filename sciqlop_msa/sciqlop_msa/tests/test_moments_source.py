@@ -37,9 +37,9 @@ def test_fetch_day_masks_fillval_and_noise_threshold(monkeypatch):
     assert result.energy.tolist() == pytest.approx([10.0, 100.0, 1000.0])
     assert result.flux.shape == (2, 3)
     assert np.isnan(result.flux[0, 1])  # FILLVAL -> NaN
-    assert np.isnan(result.flux[0, 2])  # below NOISE_FLUX_THRESHOLD -> NaN
+    assert result.flux[0, 2] == pytest.approx(1e4)  # below the noise floor: kept raw, the fit mask drops it
     assert result.flux[0, 0] == pytest.approx(1e6)
-    assert result.flux[1, 2] == pytest.approx(1e5)  # exactly at threshold: kept
+    assert result.flux[1, 2] == pytest.approx(1e5)
     assert len(result.time) == 2
 
 

@@ -81,3 +81,24 @@ def test_fit_day_uncached_rejects_noise_fit_above_chi2_ceiling():
     assert result is not None
     assert np.isnan(result.n_tot[0])
     assert result.model[0] == ""
+
+
+def test_fit_day_keeps_every_candidate_of_every_record_for_inspection():
+    from sciqlop_msa import moments_compute
+
+    with patch("sciqlop_msa.moments_compute.fetch_day", return_value=_synthetic_day_spectra()):
+        result = moments_compute._fit_day_uncached("h_plus", date(2025, 1, 8))
+
+    assert result.candidates[0][0].model == result.model[0]
+    assert len(result.candidates[0]) >= 2
+    assert result.candidates[1] == []
+
+
+def test_rejected_noise_fit_candidates_are_still_kept_for_inspection():
+    from sciqlop_msa import moments_compute
+
+    with patch("sciqlop_msa.moments_compute.fetch_day", return_value=_noise_day_spectra()):
+        result = moments_compute._fit_day_uncached("h_plus", date(2025, 1, 8))
+
+    assert result.model[0] == ""
+    assert result.candidates[0][0].chi2 > moments_fit.CHI2_MAX

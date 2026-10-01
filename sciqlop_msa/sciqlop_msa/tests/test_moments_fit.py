@@ -198,3 +198,54 @@ def test_fit_2max_rejects_unphysically_railed_second_population():
 def test_chi2_max_is_a_sane_positive_threshold():
     assert isinstance(moments_fit.CHI2_MAX, float)
     assert 0 < moments_fit.CHI2_MAX < 100
+
+
+def _max_kap_spectrum():
+    energy = np.logspace(0, np.log10(39200), 64)
+    A = 1.00728
+    f_true = (
+        moments_fit.maxwellian(energy, 45.0, 280.0, A)
+        + moments_fit.kappa_distribution(energy, 0.08, 5000.0, 3.5, A)
+    )
+    f_obs = f_true * np.random.default_rng(42).lognormal(mean=0.0, sigma=0.05, size=64)
+    return energy, f_obs, np.ones(64, dtype=bool), A
+
+
+def test_model_components_add_up_to_the_fitted_model():
+    energy, f_obs, mask, A = _max_kap_spectrum()
+    result = moments_fit.fit_max_kap(energy, f_obs, mask, A)
+    p = result.params
+
+    components = moments_fit.model_components(p, energy, A)
+
+    assert set(components) == {"core", "halo"}
+    expected = (moments_fit.maxwellian(energy, p["nc"], p["Tc"], A)
+                + moments_fit.kappa_distribution(energy, p["nh"], p["Th"], p["kappa"], A))
+    np.testing.assert_allclose(components["core"] + components["halo"], expected)
+
+
+def test_fit_candidates_are_sorted_by_chi2_and_best_fit_is_the_first():
+    energy, f_obs, mask, A = _max_kap_spectrum()
+
+    candidates = moments_fit.fit_candidates(energy, f_obs, mask, A)
+
+    assert len(candidates) >= 2
+    assert [c.chi2 for c in candidates] == sorted(c.chi2 for c in candidates)
+    assert moments_fit.best_fit(energy, f_obs, mask, A).model == candidates[0].model
+
+
+def test_accepted_fit_rejects_a_best_candidate_above_chi2_max():
+    def fit(chi2):
+        return moments_fit.FitResult(n_tot=1.0, T_c=1.0, T_eff=1.0, model="2max", chi2=chi2, params={})
+
+    assert moments_fit.accepted_fit([fit(0.01), fit(0.5)]).chi2 == 0.01
+    assert moments_fit.accepted_fit([fit(moments_fit.CHI2_MAX * 2)]) is None
+    assert moments_fit.accepted_fit([]) is None
+
+
+def test_usable_points_drop_noise_floor_non_finite_and_non_positive_points():
+    floor = moments_fit.NOISE_FLUX_THRESHOLD
+    flux = np.array([floor * 10, floor, floor / 10, np.nan, floor * 10])
+    f_obs = np.array([1.0, 1.0, 1.0, np.nan, 0.0])
+
+    assert moments_fit.usable_points(flux, f_obs).tolist() == [True, True, False, False, False]

@@ -51,11 +51,22 @@ def republish_archive_tree():
     ProductsModel.instance().add_node(["speasy"], node)
 
 
+def _find_central_area(main_window):
+    """At load time welcome's area is not laid out yet, so addWidgetIntoDock(area=None)
+    would open the dock in a new area above it; resolve the target ourselves."""
+    biggest = getattr(main_window, "_find_biggest_area", lambda: None)()
+    if biggest is not None:
+        return biggest
+    welcome = main_window.dock_manager.findDockWidget("Welcome")
+    return welcome.dockAreaWidget() if welcome is not None else None
+
+
 class MSAPlugin(QObject):
     def __init__(self, main_window):
         super().__init__(main_window)
         self._main_window = main_window
         self._setup_quicklook_menu()
+        self._setup_fit_inspector()
 
     def _setup_quicklook_menu(self):
         from .quicklooks import TEMPLATES, create_quicklook
@@ -76,6 +87,23 @@ class MSAPlugin(QObject):
         self._quicklook_button.setMenu(self._menu)
         self._quicklook_button.setPopupMode(QToolButton.InstantPopup)
         self._main_window.toolBar.addWidget(self._quicklook_button)
+
+    def _setup_fit_inspector(self):
+        import PySide6QtAds as QtAds
+        from .fit_inspector import FitInspector
+
+        self._fit_inspector = FitInspector()
+        self._main_window.addWidgetIntoDock(QtAds.DockWidgetArea.TopDockWidgetArea, self._fit_inspector,
+                                            area=_find_central_area(self._main_window))
+        dock_widget = self._main_window.dock_manager.findDockWidget(self._fit_inspector.windowTitle())
+        if dock_widget is None:
+            self._main_window.toolsMenu.addAction("MSA Fit Inspector", self._fit_inspector.show)
+            return
+        dock_widget.toggleView(False)
+        # The QtAds toggle action keeps the dock tabbed with welcome; show() on the widget would not.
+        self._main_window.toolsMenu.addAction(dock_widget.toggleViewAction())
+        self._menu.addSeparator()
+        self._menu.addAction(dock_widget.toggleViewAction())
 
     async def close(self):
         pass
