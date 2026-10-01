@@ -16,4 +16,4 @@ sciqlop_msa = "sciqlop_msa"
 include = ["sciqlop_msa*"]
 
 [tool.setuptools.package-data]
-sciqlop_msa = ["plugin.json", "inventory.yaml"]
+sciqlop_msa = ["plugin.json", "inventory.yaml", "flybys.yaml"]

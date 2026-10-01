@@ -1,0 +1,28 @@
+# Every BepiColombo flyby with MSA data in the LPP archive: the single source for the
+# flyby commands, the flyby catalog and the panel menu.
+# start/stop are the first and last L2pre record (checked against the archive 2026-10-01);
+# closest_approach is the encounter date. There is no Mercury 5 (2024-12-01) MSA data.
+- name: Venus 2
+  closest_approach: 2021-08-10
+  start: 2021-08-09T02:01:23
+  stop: 2021-08-11T10:14:59
+- name: Mercury 1
+  closest_approach: 2021-10-01
+  start: 2021-10-01T01:10:28
+  stop: 2021-10-02T23:06:29
+- name: Mercury 2
+  closest_approach: 2022-06-23
+  start: 2022-06-22T06:32:40
+  stop: 2022-06-23T23:58:36
+- name: Mercury 3
+  closest_approach: 2023-06-19
+  start: 2023-06-19T07:08:27
+  stop: 2023-06-20T19:19:21
+- name: Mercury 4
+  closest_approach: 2024-09-04
+  start: 2024-09-04T00:00:34
+  stop: 2024-09-05T00:40:15
+- name: Mercury 6
+  closest_approach: 2025-01-08
+  start: 2025-01-08T01:38:44
+  stop: 2025-01-08T17:26:51

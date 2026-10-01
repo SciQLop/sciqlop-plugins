@@ -67,6 +67,7 @@ class MSAPlugin(QObject):
         self._main_window = main_window
         self._setup_quicklook_menu()
         self._setup_fit_inspector()
+        self._setup_flyby_navigation()
 
     def _setup_quicklook_menu(self):
         from .quicklooks import TEMPLATES, create_quicklook
@@ -105,6 +106,20 @@ class MSAPlugin(QObject):
         dock_widget.toggleView(False)
         # The QtAds toggle action keeps the dock tabbed with welcome; show() on the widget would not.
         self._menu.addAction(dock_widget.toggleViewAction())
+
+    def _setup_flyby_navigation(self):
+        from SciQLop.core.sciqlop_application import sciqlop_app
+        from .flyby_catalog import make_flyby_catalog_provider
+        from .flyby_commands import register_flyby_commands
+
+        try:
+            self._flyby_catalog = make_flyby_catalog_provider()
+        except Exception:
+            log.exception("Failed to register the MSA flyby catalog")
+        try:
+            register_flyby_commands(sciqlop_app().command_registry)
+        except Exception:
+            log.exception("Failed to register the MSA flyby commands")
 
     async def close(self):
         pass
