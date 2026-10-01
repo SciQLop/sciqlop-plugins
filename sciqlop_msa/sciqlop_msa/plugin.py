@@ -87,6 +87,8 @@ class MSAPlugin(QObject):
         self._quicklook_button.setMenu(self._menu)
         self._quicklook_button.setPopupMode(QToolButton.InstantPopup)
         self._main_window.toolBar.addWidget(self._quicklook_button)
+        # The toolbar can be hidden; the tools menu is always reachable.
+        self._main_window.toolsMenu.addMenu(self._menu)
 
     def _setup_fit_inspector(self):
         import PySide6QtAds as QtAds
@@ -96,13 +98,12 @@ class MSAPlugin(QObject):
         self._main_window.addWidgetIntoDock(QtAds.DockWidgetArea.TopDockWidgetArea, self._fit_inspector,
                                             area=_find_central_area(self._main_window))
         dock_widget = self._main_window.dock_manager.findDockWidget(self._fit_inspector.windowTitle())
+        self._menu.addSeparator()
         if dock_widget is None:
-            self._main_window.toolsMenu.addAction("MSA Fit Inspector", self._fit_inspector.show)
+            self._menu.addAction("MSA Fit Inspector", self._fit_inspector.show)
             return
         dock_widget.toggleView(False)
         # The QtAds toggle action keeps the dock tabbed with welcome; show() on the widget would not.
-        self._main_window.toolsMenu.addAction(dock_widget.toggleViewAction())
-        self._menu.addSeparator()
         self._menu.addAction(dock_widget.toggleViewAction())
 
     async def close(self):
