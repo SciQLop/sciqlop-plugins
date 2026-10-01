@@ -20,23 +20,24 @@ def load_cdf(source: str | bytes) -> pycdfpp.CDF:
     return _load_file(source)
 
 
-def _load_bytes(data: bytes) -> pycdfpp.CDF:
-    cdf = pycdfpp.load(data)
-    if cdf is None:
-        raise CdfLoadError("Failed to parse CDF data")
+def _parse(source: str | bytes, what: str) -> pycdfpp.CDF:
+    try:
+        cdf = pycdfpp.load(source)
+    except Exception as e:  # pycdfpp >= 0.15 raises on invalid input
+        raise CdfLoadError(f"Failed to parse {what}: {e}") from e
+    if cdf is None:  # older pycdfpp returned None instead
+        raise CdfLoadError(f"Failed to parse {what}")
     return cdf
+
+
+def _load_bytes(data: bytes) -> pycdfpp.CDF:
+    return _parse(data, "CDF data")
 
 
 def _load_file(path: str) -> pycdfpp.CDF:
     if not Path(path).exists():
         raise CdfLoadError(f"File not found: {path}")
-    try:
-        cdf = pycdfpp.load(path)
-    except Exception as e:
-        raise CdfLoadError(f"Failed to load {path}: {e}") from e
-    if cdf is None:
-        raise CdfLoadError(f"Failed to parse CDF file: {path}")
-    return cdf
+    return _parse(path, f"CDF file {path}")
 
 
 def _load_url(url: str) -> pycdfpp.CDF:

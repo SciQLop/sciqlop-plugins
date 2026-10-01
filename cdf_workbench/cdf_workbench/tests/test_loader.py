@@ -17,6 +17,12 @@ def test_load_corrupted_file_raises(tmp_path):
         load_cdf(str(path))
 
 
+def test_load_corrupted_bytes_raises():
+    """A download that is not a CDF (e.g. an HTML login page) goes through the bytes path."""
+    with pytest.raises(CdfLoadError, match="Failed to parse"):
+        load_cdf(b"<html>please log in</html>")
+
+
 def test_load_missing_file_raises():
     with pytest.raises(CdfLoadError):
         load_cdf("/nonexistent/path.cdf")
