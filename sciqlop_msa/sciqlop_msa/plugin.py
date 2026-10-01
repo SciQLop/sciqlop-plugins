@@ -24,12 +24,31 @@ def install_inventory():
 
 
 def rebuild_speasy_inventory():
+    from speasy.core.dataprovider import PROVIDERS
+    if "archive" not in PROVIDERS:
+        log.warning("Speasy's archive provider is disabled, MSA products will not be listed")
+        return
     try:
-        from speasy.core.dataprovider import PROVIDERS
-        if "archive" in PROVIDERS:
-            PROVIDERS["archive"].update_inventory()
+        PROVIDERS["archive"].update_inventory()
+        republish_archive_tree()
     except Exception:
-        pass
+        log.exception("Failed to publish the MSA products")
+
+
+def republish_archive_tree():
+    # simplify: SciQLop <=0.13 copies Speasy's inventory into its product tree once, when
+    # speasy_provider loads, which is before this plugin adds its inventory. Rebuild the
+    # whole `archive` node by hand; drop this once SciQLop refreshes the tree itself.
+    import speasy as spz
+    from SciQLopPlots import ProductsModel, ProductsModelNode
+    from SciQLop.plugins.speasy_provider.speasy_provider import explore_nodes, DATA_ARCHIVE_DESCRIPTIONS
+
+    if ProductsModel.node(["speasy"]) is None:
+        return
+    node = ProductsModelNode("archive", metadata={"description": DATA_ARCHIVE_DESCRIPTIONS["archive"]},
+                             icon="archive")
+    explore_nodes(spz.inventories.tree.archive, node, provider="Speasy")
+    ProductsModel.instance().add_node(["speasy"], node)
 
 
 class MSAPlugin(QObject):
