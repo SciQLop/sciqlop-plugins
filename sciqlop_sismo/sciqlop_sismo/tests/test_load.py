@@ -10,10 +10,15 @@ def test_version_is_set():
 
 
 def test_entry_point_resolves():
-    from importlib.metadata import entry_points
-    eps = entry_points(group="sciqlop.plugins")
-    names = {ep.name for ep in eps}
-    assert "sciqlop_sismo" in names
+    """Read the declaration, not installed metadata: in dev the plugin is loaded
+    from its folder and never pip-installed."""
+    import importlib
+    import tomllib
+    from pathlib import Path
+
+    pyproject = tomllib.loads((Path(__file__).parents[2] / "pyproject.toml").read_text())
+    target = pyproject["project"]["entry-points"]["sciqlop.plugins"]["sciqlop_sismo"]
+    assert callable(importlib.import_module(target).load)
 
 
 @contextmanager
