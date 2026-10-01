@@ -61,6 +61,15 @@ def _find_central_area(main_window):
     return welcome.dockAreaWidget() if welcome is not None else None
 
 
+def register_flyby_panel_menu():
+    """The panel context-menu hook only exists in SciQLop versions newer than 0.13."""
+    from SciQLop.user_api import plot
+    from .flyby_commands import panel_menu_entries
+
+    if hasattr(plot, "register_panel_menu"):
+        plot.register_panel_menu("MSA flybys", panel_menu_entries)
+
+
 class MSAPlugin(QObject):
     def __init__(self, main_window):
         super().__init__(main_window)
@@ -120,6 +129,7 @@ class MSAPlugin(QObject):
             register_flyby_commands(sciqlop_app().command_registry)
         except Exception:
             log.exception("Failed to register the MSA flyby commands")
+        register_flyby_panel_menu()
 
     async def close(self):
         pass

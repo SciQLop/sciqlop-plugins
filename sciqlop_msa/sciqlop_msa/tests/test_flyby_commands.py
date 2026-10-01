@@ -63,3 +63,25 @@ def test_unknown_panel_or_flyby_and_stepping_past_the_last_do_nothing(panels):
     flyby_commands.jump_to_previous_flyby(panel="panel-1")  # ... and nothing before Venus 2
 
     assert before != panels.existing["panel-1"].time_range == (VENUS_2.start, VENUS_2.stop)
+
+
+def test_panel_menu_offers_next_previous_then_every_flyby(panels):
+    panel = panels.existing["panel-1"]  # showing Mercury 1
+
+    entries = flyby_commands.panel_menu_entries(panel)
+
+    labels = [label for label, _ in entries]
+    assert labels[:2] == [f"Next: {MERCURY_2.label}", f"Previous: {VENUS_2.label}"]
+    assert labels[2:] == [f.label for f in flyby_commands.flybys()]
+    dict(entries)[VENUS_2.label]()
+    assert panel.time_range == (VENUS_2.start, VENUS_2.stop)
+
+
+def test_panel_menu_drops_previous_before_the_first_flyby(panels):
+    panel = panels.existing["panel-1"]
+    panel.time_range = FakeRange((VENUS_2.start - 10 * 86400, VENUS_2.start - 9 * 86400))
+
+    labels = [label for label, _ in flyby_commands.panel_menu_entries(panel)]
+
+    assert labels[0] == f"Next: {VENUS_2.label}"
+    assert not any(label.startswith("Previous") for label in labels)

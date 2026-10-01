@@ -33,6 +33,15 @@ def jump_to_previous_flyby(panel: str = ""):
     _step(panel, previous_flyby)
 
 
+def panel_menu_entries(panel) -> list:
+    """Right-click menu of a panel: next/previous flyby from where it is, then every flyby."""
+    centre = panel.time_range.center()
+    steps = [(f"{direction}: {f.label}", f) for direction, f in
+             (("Next", next_flyby(centre)), ("Previous", previous_flyby(centre))) if f is not None]
+    choices = steps + [(f.label, f) for f in flybys()]
+    return [(label, lambda f=f: jump(panel, f)) for label, f in choices]
+
+
 def register_flyby_commands(registry) -> None:
     from SciQLop.components.command_palette.arg_types import PanelArg
     from SciQLop.components.command_palette.backend.registry import CommandArg, Completion, PaletteCommand
