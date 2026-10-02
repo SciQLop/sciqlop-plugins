@@ -102,3 +102,25 @@ def test_rejected_noise_fit_candidates_are_still_kept_for_inspection():
 
     assert result.model[0] == ""
     assert result.candidates[0][0].chi2 > moments_fit.CHI2_MAX
+
+
+def test_fit_day_with_a_chosen_model_fits_only_that_model():
+    from sciqlop_msa import moments_compute
+
+    with patch("sciqlop_msa.moments_compute.fetch_day", return_value=_synthetic_day_spectra()):
+        result = moments_compute._fit_day_uncached("h_plus", date(2025, 1, 8), model="kap")
+
+    assert [c.model for c in result.candidates[0]] == ["kap"]
+    assert result.model[0] in ("kap", "")
+
+
+def test_each_model_has_its_own_cached_day(monkeypatch):
+    from sciqlop_msa import moments_compute
+    calls = []
+    monkeypatch.setattr(moments_compute, "_fit_day_uncached",
+                        lambda species, day, model="auto": calls.append(model) or model)
+
+    assert moments_compute.fit_day("h_plus", date(2025, 1, 8), "kap") == "kap"
+    assert moments_compute.fit_day("h_plus", date(2025, 1, 8), "2max") == "2max"
+    assert moments_compute.fit_day("h_plus", date(2025, 1, 8), "kap") == "kap"
+    assert calls == ["kap", "2max"]

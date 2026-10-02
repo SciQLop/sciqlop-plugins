@@ -249,3 +249,49 @@ def test_usable_points_drop_noise_floor_non_finite_and_non_positive_points():
     f_obs = np.array([1.0, 1.0, 1.0, np.nan, 0.0])
 
     assert moments_fit.usable_points(flux, f_obs).tolist() == [True, True, False, False, False]
+
+
+def _noisy(f_true):
+    return f_true * np.random.default_rng(7).lognormal(mean=0.0, sigma=0.05, size=f_true.shape)
+
+
+def test_fit_max_recovers_a_single_maxwellian():
+    energy, A = np.logspace(0, np.log10(39200), 64), 1.00728
+    f_obs = _noisy(moments_fit.maxwellian(energy, 12.0, 450.0, A))
+    usable = f_obs > 1e-30  # far tail underflows to zero
+
+    result = moments_fit.fit_max(energy, f_obs, usable, A)
+
+    assert result.model == "max"
+    assert result.n_tot == pytest.approx(12.0, rel=0.05)
+    assert result.T_c == result.T_eff == pytest.approx(450.0, rel=0.05)
+
+
+def test_fit_kap_recovers_a_single_kappa():
+    energy, A = np.logspace(0, np.log10(39200), 64), 1.00728
+    f_obs = _noisy(moments_fit.kappa_distribution(energy, 3.0, 800.0, 4.0, A))
+
+    result = moments_fit.fit_kap(energy, f_obs, np.ones(64, dtype=bool), A)
+
+    assert result.model == "kap"
+    assert result.n_tot == pytest.approx(3.0, rel=0.05)
+    assert result.T_c == pytest.approx(800.0, rel=0.05)
+    assert result.params["kappa"] == pytest.approx(4.0, rel=0.1)
+
+
+def test_single_population_components_are_one_core():
+    energy, A = np.logspace(0, 4, 8), 1.00728
+    kap = moments_fit.model_components(dict(model="kap", nc=3.0, Tc=800.0, kappa=4.0), energy, A)
+    mx = moments_fit.model_components(dict(model="max", nc=12.0, Tc=450.0), energy, A)
+
+    np.testing.assert_allclose(kap["core"], moments_fit.kappa_distribution(energy, 3.0, 800.0, 4.0, A))
+    np.testing.assert_allclose(mx["core"], moments_fit.maxwellian(energy, 12.0, 450.0, A))
+    assert set(kap) == set(mx) == {"core"}
+
+
+def test_a_chosen_model_is_the_only_candidate_and_auto_is_unchanged():
+    energy, f_obs, mask, A = _max_kap_spectrum()
+
+    assert [c.model for c in moments_fit.fit_candidates(energy, f_obs, mask, A, model="kap")] == ["kap"]
+    assert {c.model for c in moments_fit.fit_candidates(energy, f_obs, mask, A)} <= {"max_kap", "2max", "2max_kap"}
+    assert set(moments_fit.MODEL_CHOICES.values()) == {"auto"} | set(moments_fit.FIT_MODELS)

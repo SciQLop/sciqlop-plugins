@@ -1,10 +1,22 @@
 """Virtual product registration for the ground-fit MSA moments."""
 from datetime import datetime, timedelta, timezone
+from typing import Annotated
 
 import numpy as np
 
 from .moments_compute import fit_day
-from .moments_fit import SPECIES_MASS_TABLE
+from .moments_fit import MODEL_CHOICES, SPECIES_MASS_TABLE
+
+# Module level: SciQLop evaluates the callback's Annotated[...] knob annotation
+# against this module's globals, a lazy import would be invisible to it.
+try:
+    from SciQLop.user_api.knobs import Knob
+except ImportError:  # headless tests without SciQLop
+    class Knob:  # type: ignore[no-redef]
+        def __init__(self, **kwargs):
+            pass
+
+_MODEL_KNOB = Knob(choices=tuple(MODEL_CHOICES.items()), label="Model")
 
 FIELDS = {
     "density": ("n_tot", "cm^-3"),
@@ -37,7 +49,7 @@ def _description(species: str, field: str) -> str:
 def _make_callback(species: str, field: str):
     attr, unit = FIELDS[field]
 
-    def callback(start: float, stop: float):
+    def callback(start: float, stop: float, model: Annotated[str, _MODEL_KNOB] = "auto"):
         from speasy.products import SpeasyVariable, VariableTimeAxis, DataContainer
 
         start_dt = datetime.fromtimestamp(float(start), tz=timezone.utc)
@@ -45,7 +57,7 @@ def _make_callback(species: str, field: str):
 
         times, values = [], []
         for day in _days_between(start_dt, stop_dt):
-            day_fits = fit_day(species, day)
+            day_fits = fit_day(species, day, model)
             if day_fits is None:
                 continue
             times.append(day_fits.time)

@@ -103,3 +103,15 @@ def test_inspectable_records_skip_records_without_candidates_on_request():
 
     assert moments_inspect.inspectable_records(fits, fitted_only=True) == [0]
     assert moments_inspect.inspectable_records(fits, fitted_only=False) == [0, 1]
+
+
+def test_candidate_totals_has_a_column_for_every_model():
+    assert moments_inspect.CANDIDATE_MODELS == tuple(moments_fit.FIT_MODELS)
+
+
+def test_load_day_fits_with_the_chosen_model():
+    with patch("sciqlop_msa.moments_inspect.fetch_day", return_value=_synthetic_day_spectra()), \
+            patch("sciqlop_msa.moments_inspect.fit_day", return_value="fits") as fit_day:
+        moments_inspect.load_day("h_plus", date(2025, 1, 8), "kap")
+
+    assert fit_day.call_args.args == ("h_plus", date(2025, 1, 8), "kap")

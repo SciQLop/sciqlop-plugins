@@ -10,7 +10,7 @@ from datetime import date
 import numpy as np
 
 from .moments_compute import DayFits, fit_day
-from .moments_fit import SPECIES_MASS_TABLE, accepted_fit, flux_to_phase_space_density, model_components, \
+from .moments_fit import FIT_MODELS, SPECIES_MASS_TABLE, accepted_fit, flux_to_phase_space_density, model_components, \
     usable_points
 from .moments_source import DaySpectra, fetch_day
 
@@ -18,7 +18,7 @@ log = logging.getLogger(__name__)
 
 POPULATIONS = ("core", "warm", "hot", "halo")
 BEST_CURVE_LABELS = POPULATIONS + ("total",)
-CANDIDATE_MODELS = ("max_kap", "2max", "2max_kap")
+CANDIDATE_MODELS = tuple(FIT_MODELS)
 
 
 @dataclass
@@ -28,10 +28,10 @@ class LoadedDay:
     error: "str | None"
 
 
-def load_day(species: str, day: date) -> LoadedDay:
+def load_day(species: str, day: date, model: str = "auto") -> LoadedDay:
     try:
         spectra = fetch_day(species, day)
-        fits = fit_day(species, day) if spectra is not None else None
+        fits = fit_day(species, day, model) if spectra is not None else None
     except Exception as e:
         log.exception("Failed to load MSA %s fits for %s", species, day)
         return LoadedDay(None, None, f"Failed to load MSA {species} on {day}: {e}")

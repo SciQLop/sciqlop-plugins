@@ -35,7 +35,7 @@ class DayFits:
     candidates: list
 
 
-def _fit_day_uncached(species: str, day: date) -> "DayFits | None":
+def _fit_day_uncached(species: str, day: date, model: str = "auto") -> "DayFits | None":
     spectra = fetch_day(species, day)
     if spectra is None:
         return None
@@ -45,9 +45,9 @@ def _fit_day_uncached(species: str, day: date) -> "DayFits | None":
     n_tot = np.full(n, np.nan)
     T_c = np.full(n, np.nan)
     T_eff = np.full(n, np.nan)
-    model = np.full(n, "", dtype="<U16")
+    chosen_model = np.full(n, "", dtype="<U16")
     chi2 = np.full(n, np.nan)
-    candidates = [record_candidates(spectra.energy, spectra.flux[i], A, q) for i in range(n)]
+    candidates = [record_candidates(spectra.energy, spectra.flux[i], A, q, model) for i in range(n)]
 
     for i in range(n):
         result = accepted_fit(candidates[i])
@@ -56,19 +56,19 @@ def _fit_day_uncached(species: str, day: date) -> "DayFits | None":
         n_tot[i] = result.n_tot
         T_c[i] = result.T_c
         T_eff[i] = result.T_eff
-        model[i] = result.model
+        chosen_model[i] = result.model
         chi2[i] = result.chi2
 
-    return DayFits(time=spectra.time, n_tot=n_tot, T_c=T_c, T_eff=T_eff, model=model, chi2=chi2,
+    return DayFits(time=spectra.time, n_tot=n_tot, T_c=T_c, T_eff=T_eff, model=chosen_model, chi2=chi2,
                    candidates=candidates)
 
 
-def record_candidates(energy: np.ndarray, flux_row: np.ndarray, A: float, q: int) -> list:
+def record_candidates(energy: np.ndarray, flux_row: np.ndarray, A: float, q: int, model: str = "auto") -> list:
     f_obs = flux_to_phase_space_density(energy, flux_row, A, q)
     mask = usable_points(flux_row, f_obs)
     if mask.sum() < _MIN_POINTS_TO_FIT:
         return []
-    return fit_candidates(energy, f_obs, mask, A)
+    return fit_candidates(energy, f_obs, mask, A, model)
 
 
 _cached_fit_day = None
@@ -81,14 +81,14 @@ def _make_cached_fit_day():
     from speasy.core.cache import CacheCall
 
     @CacheCall(cache_retention=timedelta(days=30), is_pure=True)
-    def _cached(species: str, day: date, version: int):
-        return _fit_day_uncached(species, day)
+    def _cached(species: str, day: date, model: str, version: int):
+        return _fit_day_uncached(species, day, model)
 
     return _cached
 
 
-def fit_day(species: str, day: date) -> "DayFits | None":
+def fit_day(species: str, day: date, model: str = "auto") -> "DayFits | None":
     global _cached_fit_day
     if _cached_fit_day is None:
         _cached_fit_day = _make_cached_fit_day()
-    return _cached_fit_day(species, day, _FIT_CACHE_VERSION)
+    return _cached_fit_day(species, day, model, _FIT_CACHE_VERSION)

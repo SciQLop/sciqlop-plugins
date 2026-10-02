@@ -8,7 +8,7 @@ from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QDateEdit, QHBoxLayout, QLabel, QPushButton, QSlider,
                                QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
 
-from .moments_fit import CHI2_MAX, NOISE_FLUX_THRESHOLD, SPECIES_MASS_TABLE
+from .moments_fit import CHI2_MAX, MODEL_CHOICES, NOISE_FLUX_THRESHOLD, SPECIES_MASS_TABLE
 from .moments_inspect import BEST_CURVE_LABELS, CANDIDATE_MODELS, best_curves, candidate_totals, \
     inspectable_records, load_day, record_view
 
@@ -16,7 +16,7 @@ _DEFAULT_DAY = QDate(2025, 1, 8)
 _TABLE_COLUMNS = ("Model", "χ²", "n (cm⁻³)", "T_c (eV)", "T_eff (eV)", "Parameters", "Status")
 _USED, _DROPPED, _FLOOR = QColor("#1f2937"), QColor("#9ca3af"), QColor("#dc2626")
 _BEST_COLORS = [QColor(c) for c in ("#2563eb", "#16a34a", "#ea580c", "#9333ea", "#111827")]
-_CANDIDATE_COLORS = [QColor(c) for c in ("#93c5fd", "#86efac", "#fdba74")]
+_CANDIDATE_COLORS = [QColor(c) for c in ("#d1d5db", "#f9a8d4", "#93c5fd", "#86efac", "#fdba74")]
 
 
 def _log_plot(x_label: str, y_label: str):
@@ -48,9 +48,9 @@ def _candidate_row(candidate, index: int, accepted) -> tuple:
 class _DayLoader(QObject):
     loaded = Signal(object)
 
-    def load(self, species: str, day: date):
-        # The first fit of a day runs every record through three curve_fits: keep it off the GUI thread.
-        threading.Thread(target=lambda: self.loaded.emit((species, day, load_day(species, day))),
+    def load(self, species: str, day: date, model: str):
+        # The first fit of a day runs every record through up to three curve_fits: keep it off the GUI thread.
+        threading.Thread(target=lambda: self.loaded.emit((species, day, model, load_day(species, day, model))),
                          daemon=True).start()
 
 
@@ -71,6 +71,9 @@ class FitInspector(QWidget):
         self._day = QDateEdit(_DEFAULT_DAY)
         self._day.setCalendarPopup(True)
         self._day.setDisplayFormat("yyyy-MM-dd")
+        self._model = QComboBox()
+        for label, model in MODEL_CHOICES.items():
+            self._model.addItem(label, model)
         load = QPushButton("Load day")
         load.clicked.connect(self._request_day)
         self._record = QSlider(Qt.Horizontal)
@@ -87,7 +90,7 @@ class FitInspector(QWidget):
         self._table.horizontalHeader().setStretchLastSection(True)
 
         controls = QHBoxLayout()
-        for widget in (QLabel("Species"), self._species, QLabel("Day"), self._day, load, self._fitted_only):
+        for widget in (QLabel("Species"), self._species, QLabel("Day"), self._day, QLabel("Model"), self._model, load, self._fitted_only):
             controls.addWidget(widget)
         controls.addWidget(self._record, stretch=1)
         layout = QVBoxLayout(self)
@@ -100,11 +103,14 @@ class FitInspector(QWidget):
     def _request_day(self):
         self._record.setEnabled(False)
         self._status.setText("Loading and fitting the day, the first time can take a while…")
-        self._loader.load(self._species.currentText(), self._day.date().toPython())
+        self._loader.load(*self._request())
+
+    def _request(self) -> tuple:
+        return self._species.currentText(), self._day.date().toPython(), self._model.currentData()
 
     def _on_day_loaded(self, result):
-        species, day, loaded = result
-        if (species, day) != (self._species.currentText(), self._day.date().toPython()):
+        species, day, model, loaded = result
+        if (species, day, model) != self._request():
             return
         if loaded.error:
             self._status.setText(loaded.error)

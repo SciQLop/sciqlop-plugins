@@ -105,3 +105,17 @@ def test_density_callback_returns_none_when_no_data():
         result = callback(1577836800.0, 1577840400.0)
 
     assert result is None
+
+
+def test_callback_fits_with_the_model_picked_in_its_knob():
+    import inspect
+    from sciqlop_msa import moments_vp
+
+    callback = moments_vp._make_callback("h_plus", "density")
+    model = inspect.signature(callback, eval_str=True).parameters["model"]
+    assert model.default == "auto"
+
+    with patch("sciqlop_msa.moments_vp.fit_day", return_value=_day_fits()) as fit_day:
+        callback(1736300000.0, 1736300060.0, model="kap")
+
+    assert fit_day.call_args.args[2] == "kap"

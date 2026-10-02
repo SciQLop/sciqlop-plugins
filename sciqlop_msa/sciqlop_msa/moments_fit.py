@@ -111,6 +111,54 @@ def _init_kappa_slope(energy: np.ndarray, f_obs: np.ndarray, mask: np.ndarray,
     return float(np.clip(-slope - 1.0, 1.6, 10.0))
 
 
+def _single_population_fit(model: str, log_model, p0: list, bounds: tuple, params, Eg, fg,
+                           f_model) -> "FitResult | None":
+    try:
+        popt, _ = curve_fit(log_model, Eg, np.log(fg), p0=p0, bounds=bounds, maxfev=10000)
+    except (RuntimeError, ValueError):
+        return None
+    p = params(popt)
+    if p is None:
+        return None
+    return FitResult(n_tot=p["nc"], T_c=p["Tc"], T_eff=p["Tc"], model=model,
+                     chi2=_reduced_chi2(fg, f_model(Eg, p), len(p0)), params=p)
+
+
+def fit_max(energy: np.ndarray, f_obs: np.ndarray, mask: np.ndarray, A: float) -> "FitResult | None":
+    """Fit a single Maxwellian over every usable point."""
+    Eg, fg = energy[mask], f_obs[mask]
+    if len(Eg) < 3:
+        return None
+    n0, T0 = _init_maxwell_slope(energy, f_obs, mask, 0.0, np.inf, A)
+    return _single_population_fit(
+        "max",
+        lambda E, log_n, log_T: _log_safe(maxwellian(E, 10 ** log_n, 10 ** log_T, A)),
+        [np.log10(n0), np.log10(min(T0, 3e4))], ([-3, 0], [4, 4.5]),
+        lambda popt: dict(model="max", nc=10 ** popt[0], Tc=10 ** popt[1]),
+        Eg, fg, lambda E, p: maxwellian(E, p["nc"], p["Tc"], A))
+
+
+def fit_kap(energy: np.ndarray, f_obs: np.ndarray, mask: np.ndarray, A: float) -> "FitResult | None":
+    """Fit a single kappa distribution over every usable point; a kappa railed at its
+    upper bound is a Maxwellian, and is rejected like in the multi-population fits."""
+    Eg, fg = energy[mask], f_obs[mask]
+    if len(Eg) < 4:
+        return None
+    n0, T0 = _init_maxwell_slope(energy, f_obs, mask, 0.0, np.inf, A)
+    kap0 = _init_kappa_slope(energy, f_obs, mask, 800, 30000)
+
+    def params(popt):
+        if popt[2] >= 11.9:
+            return None
+        return dict(model="kap", nc=10 ** popt[0], Tc=10 ** popt[1], kappa=popt[2])
+
+    return _single_population_fit(
+        "kap",
+        lambda E, log_n, log_T, kappa: _log_safe(kappa_distribution(E, 10 ** log_n, 10 ** log_T, kappa, A)),
+        [np.log10(n0), np.log10(min(T0, 3e4)), kap0], ([-3, 0, 1.55], [4, 4.5, 12]),
+        params, Eg, fg, lambda E, p: kappa_distribution(E, p["nc"], p["Tc"], p["kappa"], A))
+
+
 def fit_max_kap(energy: np.ndarray, f_obs: np.ndarray, mask: np.ndarray,
                 A: float) -> "FitResult | None":
     """Fit a Maxwellian core + Kappa suprathermal halo."""
@@ -358,14 +406,26 @@ def usable_points(flux: np.ndarray, f_obs: np.ndarray) -> np.ndarray:
     return (flux >= NOISE_FLUX_THRESHOLD) & np.isfinite(f_obs) & (f_obs > 0)
 
 
+FIT_MODELS = {"max": fit_max, "kap": fit_kap, "max_kap": fit_max_kap, "2max": fit_2max,
+              "2max_kap": fit_2max_kap}
+# "auto" picks among the multi-population models only, as it always has; a single
+# population is fitted only when asked for.
+AUTO_MODELS = ("max_kap", "2max", "2max_kap")
+MODEL_CHOICES = {
+    "Auto (best χ²)": "auto",
+    "Maxwellian": "max",
+    "Kappa": "kap",
+    "Maxwellian + kappa": "max_kap",
+    "2 Maxwellians": "2max",
+    "2 Maxwellians + kappa": "2max_kap",
+}
+
+
 def fit_candidates(energy: np.ndarray, f_obs: np.ndarray, mask: np.ndarray,
-                   A: float) -> list:
+                   A: float, model: str = "auto") -> list:
     """Every candidate model that converged, best (lowest reduced chi-squared) first."""
-    results = (
-        fit_max_kap(energy, f_obs, mask, A),
-        fit_2max(energy, f_obs, mask, A),
-        fit_2max_kap(energy, f_obs, mask, A),
-    )
+    names = AUTO_MODELS if model == "auto" else (model,)
+    results = (FIT_MODELS[name](energy, f_obs, mask, A) for name in names)
     return sorted((r for r in results if r is not None), key=lambda r: r.chi2)
 
 
@@ -382,6 +442,8 @@ def accepted_fit(candidates: list) -> "FitResult | None":
 
 
 _POPULATIONS = {
+    "max": {"core": ("maxwellian", "nc", "Tc")},
+    "kap": {"core": ("kappa", "nc", "Tc")},
     "max_kap": {"core": ("maxwellian", "nc", "Tc"), "halo": ("kappa", "nh", "Th")},
     "2max": {"core": ("maxwellian", "nc", "Tc"), "hot": ("maxwellian", "nh", "Th")},
     "2max_kap": {"core": ("maxwellian", "nc", "Tc"), "warm": ("maxwellian", "nw", "Tw"),
@@ -403,6 +465,8 @@ def model_components(params: dict, E_eV: np.ndarray, A: float) -> dict:
 def effective_temperature(params: dict) -> float:
     """Density-weighted effective temperature across all populations in a fit."""
     model = params["model"]
+    if model in ("max", "kap"):
+        return params["Tc"]
     if model in ("max_kap", "2max"):
         return (params["nc"] * params["Tc"] + params["nh"] * params["Th"]) / (
             params["nc"] + params["nh"]
