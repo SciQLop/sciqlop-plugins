@@ -94,9 +94,13 @@ pitch-angle panels, each needing its own product.
 - **Memory:** the worker memoizes the last `mms_part_getspec` result, so
   asking for energy right after pitch angle (same params, same fragment)
   costs no second compute.
-- **Downloads:** pyspedas's own CDF cache. Set via
-  `os.environ.setdefault("SPEDAS_DATA_DIR", ~/.cache/sciqlop/pyspedas)`
-  before importing pyspedas, so a user's existing setting wins.
+- **Downloads:** pyspedas's own CDF cache, stored **in the SciQLop
+  workspace**. Before importing pyspedas the worker sets
+  `SPEDAS_DATA_DIR = $SCIQLOP_WORKSPACE_DIR/spedas_data` (files land in
+  `<workspace>/spedas_data/mms/`). Works because SciQLop exports
+  `SCIQLOP_WORKSPACE_DIR`, a workspace switch restarts the process, and the
+  remote worker inherits `os.environ`. A user-set `MMS_DATA_DIR` still
+  wins (pyspedas's own precedence) — right for shared mirrors.
 
 ## Errors
 
