@@ -83,6 +83,16 @@ def test_traces_at_one_distance_share_their_tick_label():
     assert labels == {5.0: "A.HHZ (5.0°) / A.BHZ (5.0°)", 9.0: "B.HHZ (9.0°)"}
 
 
+def test_y_extent_covers_every_trace_and_its_swing():
+    """SciQLop never refits the y axis to a waterfall's offsets (it stays at its
+    default 0..5), so traces at 2..20 deg were clipped: the plot must set it."""
+    from sciqlop_sismo.waterfall import y_extent
+
+    lo, hi = y_extent(np.array([2.1, 5.0, 19.9]), gain=2.0)
+    assert lo < 2.1 - 2.0 and hi > 19.9 + 2.0
+    assert lo > 2.1 - 2 * 2.0 and hi < 19.9 + 2 * 2.0
+
+
 def test_trace_label_is_the_full_channel_code():
     from sciqlop_sismo.waterfall import trace_label
 

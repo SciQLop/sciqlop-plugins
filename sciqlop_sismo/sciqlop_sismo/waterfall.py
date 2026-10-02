@@ -145,6 +145,12 @@ class LiveWaterfall(QObject):
             self._on_failures(failures)
 
 
+def y_extent(offsets: np.ndarray, gain: float) -> tuple[float, float]:
+    """The y range holding every trace's full ±gain swing, plus a small margin."""
+    margin = 1.2 * gain
+    return float(np.min(offsets)) - margin, float(np.max(offsets)) + margin
+
+
 def trace_names(rows: Sequence[dict], offsets: np.ndarray, at_distance: bool) -> list[str]:
     if not at_distance:
         return [trace_label(row) for row in rows]
@@ -188,7 +194,10 @@ def plot_live_waterfall(panel, rows: Sequence[dict], origin: Optional[tuple[floa
     graph = panel.waterfall(grid, offsets, empty, name="waterfall",
                             normalize=True, offsets=offsets, gain=gain)
     names = trace_names(rows, offsets, at_distance=trace_distances(rows, origin) is not None)
-    _label_ticks(panel.plots[-1], tick_labels(names, offsets))
+    plot = panel.plots[-1]
+    # SciQLop never refits the y axis to a waterfall's offsets: it stays at its default 0..5.
+    plot.set_axis_range("y", *y_extent(offsets, gain))
+    _label_ticks(plot, tick_labels(names, offsets))
     _name_legend_entries(graph, names)
     feed = LiveWaterfall(fetch=fetch, uids=[waveform_uid(r) for r in rows],
                          sink=graph.set_data, on_failures=on_failures)

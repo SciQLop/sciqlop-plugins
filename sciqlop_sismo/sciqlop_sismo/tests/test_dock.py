@@ -581,3 +581,16 @@ def test_waterfall_legend_names_each_trace(qtbot, dock):
     panel = _plot_waterfall(qtbot, tab)
     graph = panel.waterfall.return_value
     graph._impl.set_labels.assert_called_once_with(["G.FAR.00.HHZ", "G.NEAR.00.HHZ"])
+
+
+def test_waterfall_y_axis_spans_every_trace(qtbot, dock, fake_catalog):
+    with patch("sciqlop_sismo.dock_events.search_events", return_value=fake_catalog):
+        with qtbot.waitSignal(dock.events_tab.search_finished, timeout=5000):
+            qtbot.mouseClick(dock.events_tab.search_button, _Qt_LeftButton())
+    dock.events_tab.events_table.selectRow(0)
+    tab = dock.stations_tab
+    _search_and_select_all_channels(qtbot, tab, _two_station_inventory())
+    panel = _plot_waterfall(qtbot, tab)
+    axis, lo, hi = panel.plots[-1].set_axis_range.call_args.args
+    offsets = panel.waterfall.call_args.kwargs["offsets"]
+    assert axis == "y" and lo < min(offsets) and hi > max(offsets)
