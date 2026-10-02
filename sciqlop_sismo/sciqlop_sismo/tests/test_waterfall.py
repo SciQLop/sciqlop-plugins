@@ -76,6 +76,13 @@ def test_co_located_stations_fall_back_to_even_spacing():
     assert trace_layout(rows, origin=(0.0, 0.0))[0].tolist() == [0.0, 1.0]
 
 
+def test_traces_at_one_distance_share_their_tick_label():
+    from sciqlop_sismo.waterfall import tick_labels
+
+    labels = tick_labels(["A.HHZ (5.0°)", "A.BHZ (5.0°)", "B.HHZ (9.0°)"], np.array([5.0, 5.0, 9.0]))
+    assert labels == {5.0: "A.HHZ (5.0°) / A.BHZ (5.0°)", 9.0: "B.HHZ (9.0°)"}
+
+
 def test_trace_label_is_the_full_channel_code():
     from sciqlop_sismo.waterfall import trace_label
 

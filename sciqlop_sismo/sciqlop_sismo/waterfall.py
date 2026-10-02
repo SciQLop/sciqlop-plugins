@@ -145,17 +145,35 @@ class LiveWaterfall(QObject):
             self._on_failures(failures)
 
 
-def _tick_labels(rows: Sequence[dict], offsets: np.ndarray, at_distance: bool) -> dict:
+def trace_names(rows: Sequence[dict], offsets: np.ndarray, at_distance: bool) -> list[str]:
     if not at_distance:
-        return {float(y): trace_label(row) for y, row in zip(offsets, rows)}
-    return {float(y): f"{trace_label(row)} ({y:.1f}°)" for y, row in zip(offsets, rows)}
+        return [trace_label(row) for row in rows]
+    return [f"{trace_label(row)} ({y:.1f}°)" for y, row in zip(offsets, rows)]
 
 
-def _label_traces(plot, labels: dict) -> None:
+def tick_labels(names: Sequence[str], offsets: np.ndarray) -> dict[float, str]:
+    """One y tick per trace; traces at one distance (e.g. HHZ and BHZ of a
+    station) share their tick instead of overwriting each other's name."""
+    ticks: dict[float, list[str]] = {}
+    for y, name in zip(offsets, names):
+        ticks.setdefault(float(y), []).append(name)
+    return {y: " / ".join(names_at_y) for y, names_at_y in ticks.items()}
+
+
+def _label_ticks(plot, labels: dict) -> None:
     try:
         plot.set_axis_tick_labels("y", labels)
     except AttributeError:
         pass  # text ticks need SciQLop >= 0.14; the traces still plot unlabelled
+
+
+def _name_legend_entries(graph, names: list[str]) -> None:
+    # Reach-through: user_api's Waterfall has no labels setter and creates the
+    # graph with labels=[], so the legend falls back to "component N".
+    try:
+        graph._impl.set_labels(names)
+    except (AttributeError, RuntimeError):
+        pass
 
 
 def plot_live_waterfall(panel, rows: Sequence[dict], origin: Optional[tuple[float, float]],
@@ -169,8 +187,9 @@ def plot_live_waterfall(panel, rows: Sequence[dict], origin: Optional[tuple[floa
     offsets, gain = trace_layout(rows, origin)
     graph = panel.waterfall(grid, offsets, empty, name="waterfall",
                             normalize=True, offsets=offsets, gain=gain)
-    at_distance = trace_distances(rows, origin) is not None
-    _label_traces(panel.plots[-1], _tick_labels(rows, offsets, at_distance))
+    names = trace_names(rows, offsets, at_distance=trace_distances(rows, origin) is not None)
+    _label_ticks(panel.plots[-1], tick_labels(names, offsets))
+    _name_legend_entries(graph, names)
     feed = LiveWaterfall(fetch=fetch, uids=[waveform_uid(r) for r in rows],
                          sink=graph.set_data, on_failures=on_failures)
     # Reach-through: user_api exposes no public "time range changed" hook; it

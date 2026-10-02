@@ -22,6 +22,16 @@ def fake_inventory():
     return Inventory(networks=[net], source="test")
 
 
+@pytest.fixture(autouse=True)
+def _no_availability_probe():
+    """The "Only with data" check is on by default and would hit the network:
+    pass inventories through untouched unless a test patches it itself."""
+    passthrough = lambda inv, *a, **k: (inv, 0)  # noqa: E731
+    with patch("sciqlop_sismo.dock_stations.drop_channels_without_data", side_effect=passthrough), \
+         patch("sciqlop_sismo.dock_events.drop_channels_without_data", side_effect=passthrough):
+        yield
+
+
 @pytest.fixture
 def mock_provider():
     return MagicMock()
@@ -508,3 +518,66 @@ def test_stations_tree_sorts_channels_by_sample_rate_numerically(qtbot, dock):
     assert rates == ["1.00 Hz", "20.00 Hz", "100.00 Hz"]
     payload = model.data(model.index(0, 0, sta), Qt.ItemDataRole.UserRole)
     assert payload["sample_rate"] == 1.0
+
+
+def _find_stations_near_event(qtbot, dock, fake_catalog, inventory):
+    tab = dock.events_tab
+    _search_events(qtbot, tab, fake_catalog)
+    tab.events_table.selectRow(0)
+    with patch("sciqlop_sismo.dock_events.search_stations", return_value=inventory):
+        with qtbot.waitSignal(tab.stations_finished, timeout=5000):
+            qtbot.mouseClick(tab.find_stations_button, _Qt_LeftButton())
+    return tab
+
+
+def _keep_only(station):
+    def drop(inv, start, end, routing, timeout=None):
+        kept = inv.select(station=station)
+        return kept, sum(len(s) for n in inv for s in n) - sum(len(s) for n in kept for s in n)
+    return drop
+
+
+def test_find_stations_hides_channels_without_data_by_default(qtbot, dock, fake_catalog):
+    assert dock.events_tab.only_with_data_check.isChecked()
+    with patch("sciqlop_sismo.dock_events.drop_channels_without_data", side_effect=_keep_only("NEAR")) as d:
+        tab = _find_stations_near_event(qtbot, dock, fake_catalog, _two_station_inventory())
+    assert _column(tab.stations_table, 1) == ["NEAR"]
+    assert "1 without data hidden" in dock.status_label.text()
+    _, start, end = d.call_args.args[:3]
+    assert end - start == timedelta(minutes=30)
+
+
+def test_find_stations_can_show_every_channel(qtbot, dock, fake_catalog):
+    dock.events_tab.only_with_data_check.setChecked(False)
+    with patch("sciqlop_sismo.dock_events.drop_channels_without_data") as d:
+        tab = _find_stations_near_event(qtbot, dock, fake_catalog, _two_station_inventory())
+    d.assert_not_called()
+    assert sorted(_column(tab.stations_table, 1)) == ["FAR", "NEAR"]
+
+
+def test_a_failed_availability_check_keeps_the_list_and_says_so(qtbot, dock, fake_catalog):
+    with patch("sciqlop_sismo.dock_events.drop_channels_without_data", side_effect=TimeoutError("slow")):
+        tab = _find_stations_near_event(qtbot, dock, fake_catalog, _two_station_inventory())
+    assert sorted(_column(tab.stations_table, 1)) == ["FAR", "NEAR"]
+    assert "couldn't check data availability" in dock.status_label.text()
+
+
+def test_stations_search_hides_channels_without_data_by_default(qtbot, dock):
+    tab = dock.stations_tab
+    assert tab.only_with_data_check.isChecked()
+    with patch("sciqlop_sismo.dock_stations.search_stations", return_value=_two_station_inventory()), \
+         patch("sciqlop_sismo.dock_stations.drop_channels_without_data", side_effect=_keep_only("FAR")):
+        with qtbot.waitSignal(tab.search_finished, timeout=5000):
+            qtbot.mouseClick(tab.search_button, _Qt_LeftButton())
+    model = tab.results_tree.model()
+    net = model.index(0, 0)
+    assert [model.data(model.index(r, 0, net)) for r in range(model.rowCount(net))] == ["FAR"]
+    assert "1 without data hidden" in dock.status_label.text()
+
+
+def test_waterfall_legend_names_each_trace(qtbot, dock):
+    tab = dock.stations_tab
+    _search_and_select_all_channels(qtbot, tab, _two_station_inventory())
+    panel = _plot_waterfall(qtbot, tab)
+    graph = panel.waterfall.return_value
+    graph._impl.set_labels.assert_called_once_with(["G.FAR.00.HHZ", "G.NEAR.00.HHZ"])

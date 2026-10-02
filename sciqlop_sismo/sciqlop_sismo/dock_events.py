@@ -11,13 +11,13 @@ from PySide6.QtCore import (
     QObject, QRunnable, Qt, QThreadPool, Signal,
 )
 from PySide6.QtWidgets import (
-    QAbstractItemView, QComboBox, QDateTimeEdit, QDoubleSpinBox,
+    QAbstractItemView, QCheckBox, QComboBox, QDateTimeEdit, QDoubleSpinBox,
     QHBoxLayout, QHeaderView, QLabel, QLineEdit, QPushButton,
     QTableWidget, QVBoxLayout, QWidget,
 )
 
-from .dock_stations import _waterfall_supported, open_waterfall
-from .fdsn_client import search_events, search_stations
+from .dock_stations import _waterfall_supported, open_waterfall, run_station_search, with_note
+from .fdsn_client import drop_channels_without_data, search_events, search_stations
 from .sortable import SortableTableItem, sorting_paused
 
 
@@ -46,15 +46,16 @@ class _StationsSignals(QObject):
 
 
 class _SearchStationsRunnable(QRunnable):
-    def __init__(self, signals: _StationsSignals, **kwargs):
+    def __init__(self, signals: _StationsSignals, only_with_data: bool, **kwargs):
         super().__init__()
         self._signals = signals
+        self._only_with_data = only_with_data
         self._kwargs = kwargs
 
     def run(self):
         try:
-            inv = search_stations(**self._kwargs)
-            self._signals.completed.emit(inv)
+            self._signals.completed.emit(run_station_search(
+                search_stations, drop_channels_without_data, self._kwargs, self._only_with_data))
         except Exception as exc:  # noqa: BLE001
             self._signals.failed.emit(f"{type(exc).__name__}: {exc}")
 
@@ -123,6 +124,11 @@ class EventsTab(QWidget):
         self.channel_edit = QLineEdit("HH?,BH?")
         self.routing_combo = QComboBox()
         self.routing_combo.addItems(["iris-federator", "eida-routing", "IRIS", "RESIF", "GEOFON", "IPGP"])
+        self.only_with_data_check = QCheckBox("Only with data")
+        self.only_with_data_check.setChecked(True)
+        self.only_with_data_check.setToolTip(
+            "Hide channels whose data centre returns no samples around the event "
+            "(installed, but restricted or never archived)")
         self.find_stations_button = QPushButton("Find stations")
         self.add_all_button = QPushButton("Add all to inventory")
         self.plot_waterfall_button = QPushButton("Plot waterfall")
@@ -139,6 +145,7 @@ class EventsTab(QWidget):
         ):
             radius_row.addWidget(QLabel(label))
             radius_row.addWidget(w)
+        radius_row.addWidget(self.only_with_data_check)
         radius_row.addWidget(self.find_stations_button)
         radius_row.addWidget(self.add_all_button)
         radius_row.addWidget(self.plot_waterfall_button)
@@ -226,7 +233,7 @@ class EventsTab(QWidget):
         self._pending_stations_query = ((origin.latitude, origin.longitude), t_start, t_end)
         self._status_sink("Searching stations around event…")
         QThreadPool.globalInstance().start(_SearchStationsRunnable(
-            self._stations_signals,
+            self._stations_signals, self.only_with_data_check.isChecked(),
             network="*", station="*", location="*",
             channel=self.channel_edit.text(),
             start_time=t_start, end_time=t_end,
@@ -236,7 +243,8 @@ class EventsTab(QWidget):
             max_radius_deg=self.max_radius_spin.value(),
         ))
 
-    def _on_stations_completed(self, inv):
+    def _on_stations_completed(self, result):
+        inv, note = result
         self._stations_query = self._pending_stations_query
         rows = []
         for net in inv.networks:
@@ -253,7 +261,7 @@ class EventsTab(QWidget):
             self.stations_table.setRowCount(len(rows))
             for r, row in enumerate(rows):
                 self._fill_station_row(r, row)
-        self._status_sink(f"Found {len(rows)} channel(s) near event")
+        self._status_sink(with_note(f"Found {len(rows)} channel(s) near event", note))
         self.stations_finished.emit()
 
     def _fill_station_row(self, r: int, row: dict) -> None:

@@ -14,11 +14,11 @@ from PySide6.QtCore import (
 )
 from PySide6.QtGui import QStandardItem, QStandardItemModel
 from PySide6.QtWidgets import (
-    QAbstractItemView, QComboBox, QDateTimeEdit, QHBoxLayout, QLabel,
+    QAbstractItemView, QCheckBox, QComboBox, QDateTimeEdit, QHBoxLayout, QLabel,
     QLineEdit, QPushButton, QTreeView, QVBoxLayout, QWidget,
 )
 
-from .fdsn_client import search_stations
+from .fdsn_client import drop_channels_without_data, search_stations
 from .sortable import SORT_ROLE, sortable_tree_item, sorting_paused
 from .waterfall import order_rows, plot_live_waterfall
 
@@ -89,21 +89,40 @@ def open_waterfall(provider, rows: list[dict], origin: Optional[tuple], start: d
     status_sink(f"{summary}; " + "; ".join(failures) if failures else summary)
 
 
+def run_station_search(search: Callable, drop: Callable, kwargs: dict,
+                       only_with_data: bool) -> tuple:
+    """(inventory, status note). A failed availability check keeps the full
+    list and says so, rather than failing the whole search."""
+    inv = search(**kwargs)
+    if not only_with_data:
+        return inv, ""
+    try:
+        inv, hidden = drop(inv, kwargs["start_time"], kwargs["end_time"], kwargs["routing"])
+    except Exception as exc:  # noqa: BLE001
+        return inv, f"couldn't check data availability: {type(exc).__name__}: {exc}"
+    return inv, f"{hidden} without data hidden"
+
+
+def with_note(message: str, note: str) -> str:
+    return f"{message} ({note})" if note else message
+
+
 class _SearchSignals(QObject):
     completed = Signal(object)
     failed = Signal(str)
 
 
 class _SearchRunnable(QRunnable):
-    def __init__(self, signals: _SearchSignals, **kwargs):
+    def __init__(self, signals: _SearchSignals, only_with_data: bool, **kwargs):
         super().__init__()
         self._signals = signals
+        self._only_with_data = only_with_data
         self._kwargs = kwargs
 
     def run(self):
         try:
-            inv = search_stations(**self._kwargs)
-            self._signals.completed.emit(inv)
+            self._signals.completed.emit(run_station_search(
+                search_stations, drop_channels_without_data, self._kwargs, self._only_with_data))
         except Exception as exc:  # noqa: BLE001
             self._signals.failed.emit(f"{type(exc).__name__}: {exc}")
 
@@ -149,6 +168,12 @@ class StationsTab(QWidget):
         )
         times.addWidget(QLabel("Routing"))
         times.addWidget(self.routing_combo)
+        self.only_with_data_check = QCheckBox("Only with data")
+        self.only_with_data_check.setChecked(True)
+        self.only_with_data_check.setToolTip(
+            "Hide channels whose data centre returns no samples for the window "
+            "(installed, but restricted or never archived)")
+        times.addWidget(self.only_with_data_check)
         self.search_button = QPushButton("Search")
         times.addWidget(self.search_button)
         root.addLayout(times)
@@ -188,7 +213,7 @@ class StationsTab(QWidget):
     def _on_search_clicked(self):
         self._status_sink(f"Searching {self.routing_combo.currentText()}…")
         QThreadPool.globalInstance().start(_SearchRunnable(
-            self._signals,
+            self._signals, self.only_with_data_check.isChecked(),
             network=self.network_edit.text(),
             station=self.station_edit.text(),
             location=self.location_edit.text(),
@@ -203,12 +228,13 @@ class StationsTab(QWidget):
         return tuple(p.dateTime().toPython().replace(tzinfo=timezone.utc)
                      for p in (self.start_picker, self.end_picker))
 
-    def _on_search_completed(self, inv):
+    def _on_search_completed(self, result):
+        inv, note = result
         self._populate_tree(inv)
         n_chans = sum(
             len(s.channels) for net in inv.networks for s in net.stations
         )
-        self._status_sink(f"Found {n_chans} channel(s)")
+        self._status_sink(with_note(f"Found {n_chans} channel(s)", note))
         self.search_finished.emit()
 
     def _on_search_failed(self, message: str):
