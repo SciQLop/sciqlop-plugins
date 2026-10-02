@@ -49,6 +49,33 @@ def test_rows_without_coordinates_go_last_instead_of_failing():
     assert [r["station"] for r in order_rows(rows, origin=(0.0, 0.0))] == ["NEAR", "LOST"]
 
 
+def test_traces_sit_at_their_epicentral_distance():
+    """A record section's y axis is the distance: that is what shows the moveout."""
+    from sciqlop_sismo.waterfall import TRACE_GAIN, trace_layout
+
+    rows = [_row("NEAR", 0.0, 1.0), _row("MID", 0.0, 20.0), _row("FAR", 0.0, 60.0)]
+    offsets, gain = trace_layout(rows, origin=(0.0, 0.0))
+    assert np.allclose(offsets, [1.0, 20.0, 60.0])
+    assert gain == pytest.approx(TRACE_GAIN * 59.0 / 2)
+
+
+def test_traces_are_evenly_spaced_without_an_event_or_coordinates():
+    from sciqlop_sismo.waterfall import TRACE_GAIN, trace_layout
+
+    rows = [_row("A", 0.0, 1.0), _row("B", 0.0, 20.0)]
+    assert trace_layout(rows, origin=None)[0].tolist() == [0.0, 1.0]
+    lost = [rows[0], {**rows[1], "latitude": None}]
+    offsets, gain = trace_layout(lost, origin=(0.0, 0.0))
+    assert offsets.tolist() == [0.0, 1.0] and gain == TRACE_GAIN
+
+
+def test_co_located_stations_fall_back_to_even_spacing():
+    from sciqlop_sismo.waterfall import trace_layout
+
+    rows = [_row("A", 0.0, 10.0), _row("B", 0.0, 10.0)]
+    assert trace_layout(rows, origin=(0.0, 0.0))[0].tolist() == [0.0, 1.0]
+
+
 def test_trace_label_is_the_full_channel_code():
     from sciqlop_sismo.waterfall import trace_label
 

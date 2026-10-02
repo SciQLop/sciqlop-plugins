@@ -364,7 +364,10 @@ def test_plot_waterfall_sorts_by_distance_to_the_selected_event(qtbot, dock, fak
     tab = dock.stations_tab
     _search_and_select_all_channels(qtbot, tab, _two_station_inventory())
     panel = _plot_waterfall(qtbot, tab)
-    assert _y_labels(panel) == ["G.NEAR.00.HHZ", "G.FAR.00.HHZ"]
+    labels = _y_labels(panel)
+    assert labels[0].startswith("G.NEAR.00.HHZ (") and labels[1].startswith("G.FAR.00.HHZ (")
+    offsets = panel.waterfall.call_args.kwargs["offsets"]
+    assert offsets[0] == pytest.approx(0.1, abs=0.01) and offsets[1] == pytest.approx(15.0, abs=0.01)
 
 
 def test_plot_waterfall_follows_the_panel_time_range(qtbot, dock, mock_provider):
@@ -406,7 +409,8 @@ def test_events_tab_waterfall_sorts_stations_near_the_event(qtbot, dock, fake_ca
     with patch("sciqlop_sismo.dock_stations._create_plot_panel", return_value=panel), \
          patch("sciqlop_sismo.dock_stations._time_range", side_effect=lambda a, b: (a, b)):
         qtbot.mouseClick(tab.plot_waterfall_button, _Qt_LeftButton())
-    assert _y_labels(panel) == ["G.NEAR.00.HHZ", "G.FAR.00.HHZ"]
+    assert [label.split(" ")[0] for label in _y_labels(panel)] == ["G.NEAR.00.HHZ", "G.FAR.00.HHZ"]
+    assert panel.waterfall.call_args.kwargs["offsets"][1] == pytest.approx(15.0, abs=0.01)
     origin = datetime(2024, 4, 2, 14, 0, tzinfo=timezone.utc)
     assert panel.time_range == ((origin - timedelta(minutes=5)).timestamp(),
                                 (origin + timedelta(minutes=25)).timestamp())

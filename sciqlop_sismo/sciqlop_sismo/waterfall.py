@@ -17,7 +17,7 @@ from speasy.core import datetime64_to_epoch
 # simplify: linear interpolation onto a fixed grid can skip short spikes.
 # Upgrade path: a per-bin min/max envelope (what NeoQCP does for line plots).
 DEFAULT_POINTS = 4000
-TRACE_GAIN = 0.45  # normalized traces are ±1; keep neighbours from overlapping
+TRACE_GAIN = 0.45  # normalized traces are ±1; × the mean gap keeps neighbours apart
 DEBOUNCE_MS = 200
 
 
@@ -43,6 +43,27 @@ def order_rows(rows: Sequence[dict], origin: Optional[tuple[float, float]]) -> l
     if origin is None:
         return list(rows)
     return sorted(rows, key=lambda row: _distance_deg(row, origin))
+
+
+def trace_distances(rows: Sequence[dict], origin: Optional[tuple[float, float]]):
+    """Epicentral distance (°) per row, or None when they can't lay out a record
+    section: no event, a station without coordinates, or all at one distance."""
+    if origin is None or not rows:
+        return None
+    distances = np.array([_distance_deg(row, origin) for row in rows])
+    if not np.isfinite(distances).all() or np.ptp(distances) == 0.0:
+        return None
+    return distances
+
+
+def trace_layout(rows: Sequence[dict], origin: Optional[tuple[float, float]]):
+    """(offsets, gain): each trace's y position and half-height. A trace sits at
+    its distance — the record section's y axis, which shows the moveout — or,
+    without usable distances, at its index."""
+    distances = trace_distances(rows, origin)
+    if distances is None:
+        return np.arange(len(rows), dtype=float), TRACE_GAIN
+    return distances, TRACE_GAIN * float(np.ptp(distances)) / max(len(rows) - 1, 1)
 
 
 def common_grid(t0: float, t1: float, points: int) -> np.ndarray:
@@ -124,21 +145,32 @@ class LiveWaterfall(QObject):
             self._on_failures(failures)
 
 
-def _label_traces(plot, rows: Sequence[dict]) -> None:
+def _tick_labels(rows: Sequence[dict], offsets: np.ndarray, at_distance: bool) -> dict:
+    if not at_distance:
+        return {float(y): trace_label(row) for y, row in zip(offsets, rows)}
+    return {float(y): f"{trace_label(row)} ({y:.1f}°)" for y, row in zip(offsets, rows)}
+
+
+def _label_traces(plot, labels: dict) -> None:
     try:
-        plot.set_axis_tick_labels("y", {i: trace_label(row) for i, row in enumerate(rows)})
+        plot.set_axis_tick_labels("y", labels)
     except AttributeError:
         pass  # text ticks need SciQLop >= 0.14; the traces still plot unlabelled
 
 
-def plot_live_waterfall(panel, rows: Sequence[dict], fetch: Callable, t0: float, t1: float,
+def plot_live_waterfall(panel, rows: Sequence[dict], origin: Optional[tuple[float, float]],
+                        fetch: Callable, t0: float, t1: float,
                         on_failures: Callable[[list[str]], None]) -> LiveWaterfall:
-    """One waterfall plot in `panel`, kept in sync with the panel's time range."""
+    """One waterfall plot in `panel`, kept in sync with the panel's time range.
+    `rows` must already be ordered (see `order_rows`). Keep the returned feed
+    referenced: once collected, its timer and range connection die silently."""
     grid = common_grid(t0, t1, DEFAULT_POINTS)
     empty = np.full((len(rows), len(grid)), np.nan)
-    graph = panel.waterfall(grid, np.arange(len(rows)), empty, name="waterfall",
-                            normalize=True, offsets=1.0, gain=TRACE_GAIN)
-    _label_traces(panel.plots[-1], rows)
+    offsets, gain = trace_layout(rows, origin)
+    graph = panel.waterfall(grid, offsets, empty, name="waterfall",
+                            normalize=True, offsets=offsets, gain=gain)
+    at_distance = trace_distances(rows, origin) is not None
+    _label_traces(panel.plots[-1], _tick_labels(rows, offsets, at_distance))
     feed = LiveWaterfall(fetch=fetch, uids=[waveform_uid(r) for r in rows],
                          sink=graph.set_data, on_failures=on_failures)
     # Reach-through: user_api exposes no public "time range changed" hook; it

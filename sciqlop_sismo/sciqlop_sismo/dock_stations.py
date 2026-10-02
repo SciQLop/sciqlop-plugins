@@ -77,7 +77,7 @@ def open_waterfall(provider, rows: list[dict], origin: Optional[tuple], start: d
     rows = order_rows(rows, origin)
     try:
         feed = plot_live_waterfall(
-            panel, rows, fetch=provider.get_data, t0=start.timestamp(), t1=stop.timestamp(),
+            panel, rows, origin, fetch=provider.get_data, t0=start.timestamp(), t1=stop.timestamp(),
             on_failures=lambda f: status_sink("Waterfall: failed " + "; ".join(f)),
         )
     except Exception as exc:  # noqa: BLE001
