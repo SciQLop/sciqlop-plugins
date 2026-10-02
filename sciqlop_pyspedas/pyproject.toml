@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sciqlop-pyspedas"
+version = "0.1.0"
+description = "Experimental SciQLop plugin: MMS particle spectra computed by pyspedas"
+requires-python = ">=3.10"
+dependencies = [
+    "pyspedas>=2.2,<3",
+    "speasy>=1.7",
+    "numpy",
+    "SciQLop>=0.13.0,<0.15.0",
+]
+
+[project.optional-dependencies]
+test = ["pytest"]
+
+[project.entry-points."sciqlop.plugins"]
+sciqlop_pyspedas = "sciqlop_pyspedas"
+
+[tool.setuptools.packages.find]
+include = ["sciqlop_pyspedas*"]
+
+[tool.setuptools.package-data]
+sciqlop_pyspedas = ["plugin.json"]
+
+[tool.pytest.ini_options]
+markers = ["live: tests that download real MMS data (slow; skipped by default)"]
+addopts = "-m 'not live'"

@@ -1,0 +1,16 @@
+{
+  "name": "pyspedas",
+  "version": "0.1.0",
+  "description": "Experimental: MMS FPI/HPCA energy, pitch-angle and gyrophase spectrograms computed by pyspedas",
+  "authors": [
+    {
+      "name": "Alexis Jeandet",
+      "email": "alexis.jeandet@member.fsf.org",
+      "organization": "LPP"
+    }
+  ],
+  "license": "MIT",
+  "python_dependencies": ["pyspedas>=2.2,<3", "speasy>=1.7", "numpy", "SciQLop>=0.13.0,<0.15.0"],
+  "dependencies": [],
+  "disabled": false
+}
