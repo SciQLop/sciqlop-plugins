@@ -10,7 +10,7 @@ from datetime import date
 import numpy as np
 
 from .moments_compute import DayFits, fit_day
-from .moments_fit import FIT_MODELS, SPECIES_MASS_TABLE, accepted_fit, kinetic_energy_eV, flux_to_phase_space_density, model_components, \
+from .moments_fit import FIT_MODELS, SPECIES_MASS_TABLE, accepted_fit, chi2_limit, kinetic_energy_eV, noise_floor, flux_to_phase_space_density, model_components, \
     usable_points
 from .moments_source import DaySpectra, fetch_day
 
@@ -28,10 +28,10 @@ class LoadedDay:
     error: "str | None"
 
 
-def load_day(species: str, day: date, model: str = "auto") -> LoadedDay:
+def load_day(species: str, day: date, model: str = "auto", floor: str = "legacy") -> LoadedDay:
     try:
         spectra = fetch_day(species, day)
-        fits = fit_day(species, day, model) if spectra is not None else None
+        fits = fit_day(species, day, model, floor) if spectra is not None else None
     except Exception as e:
         log.exception("Failed to load MSA %s fits for %s", species, day)
         return LoadedDay(None, None, f"Failed to load MSA {species} on {day}: {e}")
@@ -52,19 +52,24 @@ class RecordView:
     f_obs: np.ndarray
     used: np.ndarray
     candidates: list
+    floor_flux: float
+    chi2_max: float
 
     @property
     def accepted(self):
-        return accepted_fit(self.candidates)
+        return accepted_fit(self.candidates, self.chi2_max)
 
 
-def record_view(spectra: DaySpectra, fits: DayFits, index: int, species: str) -> RecordView:
+def record_view(spectra: DaySpectra, fits: DayFits, index: int, species: str,
+                floor: str = "legacy") -> RecordView:
     A, q = SPECIES_MASS_TABLE[species]
+    floor_flux, _ = noise_floor(floor)
     flux = spectra.flux[index]
     f_obs = flux_to_phase_space_density(spectra.energy, flux, A, q)
     return RecordView(time=float(spectra.time[index]), energy=kinetic_energy_eV(spectra.energy, q),
-                      flux=flux, f_obs=f_obs, used=usable_points(flux, f_obs),
-                      candidates=list(fits.candidates[index]))
+                      flux=flux, f_obs=f_obs, used=usable_points(flux, f_obs, floor_flux),
+                      candidates=list(fits.candidates[index]), floor_flux=floor_flux,
+                      chi2_max=chi2_limit(floor))
 
 
 def _nan_columns(view: RecordView, count: int) -> np.ndarray:

@@ -119,3 +119,16 @@ def test_callback_fits_with_the_model_picked_in_its_knob():
         callback(1736300000.0, 1736300060.0, model="kap")
 
     assert fit_day.call_args.args[2] == "kap"
+
+
+def test_callback_fits_with_the_noise_floor_picked_in_its_knob():
+    import inspect
+    from sciqlop_msa import moments_vp
+
+    callback = moments_vp._make_callback("h_plus", "density")
+    assert inspect.signature(callback, eval_str=True).parameters["floor"].default == "legacy"
+
+    with patch("sciqlop_msa.moments_vp.fit_day", return_value=_day_fits()) as fit_day:
+        callback(1736300000.0, 1736300060.0, floor="2")
+
+    assert fit_day.call_args.args[3] == "2"

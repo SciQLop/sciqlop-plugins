@@ -23,3 +23,10 @@ def test_doc_states_the_thresholds_the_code_uses():
 def test_doc_ships_in_the_wheel():
     pyproject = tomllib.loads((PACKAGE.parent / "pyproject.toml").read_text())
     assert "moments_method.md" in pyproject["tool"]["setuptools"]["package-data"]["sciqlop_msa"]
+
+
+def test_doc_explains_the_noise_floor_options():
+    for label in moments_fit.FLOOR_CHOICES:
+        assert label in DOC, label
+    assert moments_fit.FLUX_PER_COUNT == 1e3 and "10³" in DOC
+    assert moments_fit.CHI2_MAX_WEIGHTED == 50 and "above **50**" in DOC

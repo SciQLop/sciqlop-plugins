@@ -12,8 +12,9 @@ from datetime import date, timedelta
 
 import numpy as np
 
-from .moments_fit import (SPECIES_MASS_TABLE, accepted_fit, fit_candidates,
-                          flux_to_phase_space_density, kinetic_energy_eV, usable_points)
+from .moments_fit import (SPECIES_MASS_TABLE, accepted_fit, chi2_limit, fit_candidates,
+                          flux_to_phase_space_density, kinetic_energy_eV, noise_floor, poisson_sigma,
+                          usable_points)
 from .moments_source import fetch_day
 
 _MIN_POINTS_TO_FIT = 6
@@ -35,7 +36,7 @@ class DayFits:
     candidates: list
 
 
-def _fit_day_uncached(species: str, day: date, model: str = "auto") -> "DayFits | None":
+def _fit_day_uncached(species: str, day: date, model: str = "auto", floor: str = "legacy") -> "DayFits | None":
     spectra = fetch_day(species, day)
     if spectra is None:
         return None
@@ -47,10 +48,10 @@ def _fit_day_uncached(species: str, day: date, model: str = "auto") -> "DayFits 
     T_eff = np.full(n, np.nan)
     chosen_model = np.full(n, "", dtype="<U16")
     chi2 = np.full(n, np.nan)
-    candidates = [record_candidates(spectra.energy, spectra.flux[i], A, q, model) for i in range(n)]
+    candidates = [record_candidates(spectra.energy, spectra.flux[i], A, q, model, floor) for i in range(n)]
 
     for i in range(n):
-        result = accepted_fit(candidates[i])
+        result = accepted_fit(candidates[i], chi2_limit(floor))
         if result is None:
             continue
         n_tot[i] = result.n_tot
@@ -63,12 +64,15 @@ def _fit_day_uncached(species: str, day: date, model: str = "auto") -> "DayFits 
                    candidates=candidates)
 
 
-def record_candidates(energy: np.ndarray, flux_row: np.ndarray, A: float, q: int, model: str = "auto") -> list:
+def record_candidates(energy: np.ndarray, flux_row: np.ndarray, A: float, q: int, model: str = "auto",
+                      floor: str = "legacy") -> list:
     f_obs = flux_to_phase_space_density(energy, flux_row, A, q)
-    mask = usable_points(flux_row, f_obs)
+    floor_flux, weighted = noise_floor(floor)
+    mask = usable_points(flux_row, f_obs, floor_flux)
     if mask.sum() < _MIN_POINTS_TO_FIT:
         return []
-    return fit_candidates(kinetic_energy_eV(energy, q), f_obs, mask, A, model)
+    sigma = poisson_sigma(flux_row) if weighted else None
+    return fit_candidates(kinetic_energy_eV(energy, q), f_obs, mask, A, model, sigma)
 
 
 _cached_fit_day = None
@@ -82,14 +86,14 @@ def _make_cached_fit_day():
     from speasy.core.cache import CacheCall
 
     @CacheCall(cache_retention=timedelta(days=30), is_pure=True)
-    def _cached(species: str, day: date, model: str, version: int):
-        return _fit_day_uncached(species, day, model)
+    def _cached(species: str, day: date, model: str, floor: str, version: int):
+        return _fit_day_uncached(species, day, model, floor)
 
     return _cached
 
 
-def fit_day(species: str, day: date, model: str = "auto") -> "DayFits | None":
+def fit_day(species: str, day: date, model: str = "auto", floor: str = "legacy") -> "DayFits | None":
     global _cached_fit_day
     if _cached_fit_day is None:
         _cached_fit_day = _make_cached_fit_day()
-    return _cached_fit_day(species, day, model, _FIT_CACHE_VERSION)
+    return _cached_fit_day(species, day, model, floor, _FIT_CACHE_VERSION)

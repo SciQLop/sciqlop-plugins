@@ -114,7 +114,7 @@ def test_load_day_fits_with_the_chosen_model():
             patch("sciqlop_msa.moments_inspect.fit_day", return_value="fits") as fit_day:
         moments_inspect.load_day("h_plus", date(2025, 1, 8), "kap")
 
-    assert fit_day.call_args.args == ("h_plus", date(2025, 1, 8), "kap")
+    assert fit_day.call_args.args == ("h_plus", date(2025, 1, 8), "kap", "legacy")
 
 
 def test_record_view_plots_alphas_on_their_kinetic_energy():
@@ -124,3 +124,24 @@ def test_record_view_plots_alphas_on_their_kinetic_energy():
     view = moments_inspect.record_view(spectra, fits, 0, "alphas")
 
     np.testing.assert_allclose(view.energy, 2 * spectra.energy)
+
+
+def test_load_day_fits_with_the_chosen_floor():
+    with patch("sciqlop_msa.moments_inspect.fetch_day", return_value=_synthetic_day_spectra()), \
+            patch("sciqlop_msa.moments_inspect.fit_day", return_value="fits") as fit_day:
+        moments_inspect.load_day("h_plus", date(2025, 1, 8), "auto", "2")
+
+    assert fit_day.call_args.args == ("h_plus", date(2025, 1, 8), "auto", "2")
+
+
+def test_record_view_marks_points_used_under_the_chosen_floor():
+    spectra = _synthetic_day_spectra()
+    fits = type("Fits", (), {"candidates": [[], []]})()
+
+    legacy = moments_inspect.record_view(spectra, fits, 0, "h_plus")
+    counts = moments_inspect.record_view(spectra, fits, 0, "h_plus", floor="2")
+
+    np.testing.assert_array_equal(counts.used, (spectra.flux[0] >= 2 * moments_fit.FLUX_PER_COUNT)
+                                  & np.isfinite(counts.f_obs) & (counts.f_obs > 0))
+    assert counts.used.sum() > legacy.used.sum()
+    assert counts.floor_flux == 2 * moments_fit.FLUX_PER_COUNT

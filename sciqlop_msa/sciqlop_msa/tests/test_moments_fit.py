@@ -295,3 +295,43 @@ def test_a_chosen_model_is_the_only_candidate_and_auto_is_unchanged():
     assert [c.model for c in moments_fit.fit_candidates(energy, f_obs, mask, A, model="kap")] == ["kap"]
     assert {c.model for c in moments_fit.fit_candidates(energy, f_obs, mask, A)} <= {"max_kap", "2max", "2max_kap"}
     assert set(moments_fit.MODEL_CHOICES.values()) == {"auto"} | set(moments_fit.FIT_MODELS)
+
+
+def test_noise_floor_choices_map_to_a_flux_threshold_and_a_weighting():
+    assert moments_fit.noise_floor("legacy") == (1e5, False)
+    assert moments_fit.noise_floor("2") == (2 * moments_fit.FLUX_PER_COUNT, True)
+    assert "legacy" in moments_fit.FLOOR_CHOICES.values()
+
+
+def test_poisson_sigma_is_the_relative_error_of_the_counts():
+    counts = np.array([1.0, 4.0, 100.0])
+
+    sigma = moments_fit.poisson_sigma(counts * moments_fit.FLUX_PER_COUNT)
+
+    np.testing.assert_allclose(sigma, [1.0, 0.5, 0.1])
+
+
+def test_usable_points_follow_the_chosen_floor():
+    flux = np.array([3e3, 5e4, 2e5])
+    f_obs = np.ones(3)
+
+    assert moments_fit.usable_points(flux, f_obs).tolist() == [False, False, True]
+    assert moments_fit.usable_points(flux, f_obs, floor_flux=2e3).tolist() == [True, True, True]
+
+
+def test_weighted_fit_of_poisson_counts_recovers_the_plasma_with_chi2_near_one():
+    energy, A = np.logspace(0, np.log10(39200), 64), 1.00728
+    f_true = (moments_fit.maxwellian(energy, 45.0, 280.0, A)
+              + moments_fit.kappa_distribution(energy, 0.08, 5000.0, 3.5, A))
+    m, e_J = moments_fit.ion_mass_kg(A), energy * moments_fit.ELEMENTARY_CHARGE
+    expected_counts = f_true * 2 * e_J ** 2 / (m ** 2 * 1e4) / moments_fit.FLUX_PER_COUNT
+    counts = np.random.default_rng(3).poisson(expected_counts).astype(float)
+    flux = counts * moments_fit.FLUX_PER_COUNT
+    f_obs = moments_fit.flux_to_phase_space_density(energy, flux, A, 1)
+    mask = moments_fit.usable_points(flux, f_obs, floor_flux=2 * moments_fit.FLUX_PER_COUNT)
+
+    result = moments_fit.fit_max_kap(energy, f_obs, mask, A, sigma=moments_fit.poisson_sigma(flux))
+
+    assert result.params["nc"] == pytest.approx(45.0, rel=0.05)
+    assert result.params["Tc"] == pytest.approx(280.0, rel=0.05)
+    assert 0.3 < result.chi2 < 3.0

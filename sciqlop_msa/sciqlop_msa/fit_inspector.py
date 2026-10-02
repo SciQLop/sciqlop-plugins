@@ -9,7 +9,7 @@ from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QTabWidget, QTextBrowser, QDateEdit, QHBoxLayout, QLabel, QPushButton, QSlider,
                                QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
 
-from .moments_fit import CHI2_MAX, MODEL_CHOICES, NOISE_FLUX_THRESHOLD, SPECIES_MASS_TABLE
+from .moments_fit import FLOOR_CHOICES, MODEL_CHOICES, SPECIES_MASS_TABLE
 from .moments_inspect import BEST_CURVE_LABELS, CANDIDATE_MODELS, best_curves, candidate_totals, \
     inspectable_records, load_day, record_view
 
@@ -41,12 +41,12 @@ def _where(mask: np.ndarray, values: np.ndarray) -> np.ndarray:
     return np.ascontiguousarray(np.where(mask, values, np.nan))
 
 
-def _candidate_row(candidate, index: int, accepted) -> tuple:
+def _candidate_row(candidate, index: int, accepted, chi2_max: float) -> tuple:
     params = ", ".join(f"{k}={v:.3g}" for k, v in candidate.params.items() if k != "model")
     if candidate is accepted:
         status = "accepted"
     elif index == 0:
-        status = f"rejected (χ² > {CHI2_MAX:g})"
+        status = f"rejected (χ² > {chi2_max:g})"
     else:
         status = ""
     return (candidate.model, f"{candidate.chi2:.3g}", f"{candidate.n_tot:.3g}", f"{candidate.T_c:.3g}",
@@ -56,10 +56,10 @@ def _candidate_row(candidate, index: int, accepted) -> tuple:
 class _DayLoader(QObject):
     loaded = Signal(object)
 
-    def load(self, species: str, day: date, model: str):
+    def load(self, species: str, day: date, model: str, floor: str):
         # The first fit of a day runs every record through up to three curve_fits: keep it off the GUI thread.
-        threading.Thread(target=lambda: self.loaded.emit((species, day, model, load_day(species, day, model))),
-                         daemon=True).start()
+        request = (species, day, model, floor)
+        threading.Thread(target=lambda: self.loaded.emit((request, load_day(*request))), daemon=True).start()
 
 
 class FitInspector(QWidget):
@@ -82,6 +82,9 @@ class FitInspector(QWidget):
         self._model = QComboBox()
         for label, model in MODEL_CHOICES.items():
             self._model.addItem(label, model)
+        self._floor = QComboBox()
+        for label, floor in FLOOR_CHOICES.items():
+            self._floor.addItem(label, floor)
         load = QPushButton("Load day")
         load.clicked.connect(self._request_day)
         self._record = QSlider(Qt.Horizontal)
@@ -98,7 +101,8 @@ class FitInspector(QWidget):
         self._table.horizontalHeader().setStretchLastSection(True)
 
         controls = QHBoxLayout()
-        for widget in (QLabel("Species"), self._species, QLabel("Day"), self._day, QLabel("Model"), self._model, load, self._fitted_only):
+        for widget in (QLabel("Species"), self._species, QLabel("Day"), self._day, QLabel("Model"), self._model,
+                       QLabel("Floor"), self._floor, load, self._fitted_only):
             controls.addWidget(widget)
         controls.addWidget(self._record, stretch=1)
         inspector = QWidget()
@@ -120,22 +124,24 @@ class FitInspector(QWidget):
         self._loader.load(*self._request())
 
     def _request(self) -> tuple:
-        return self._species.currentText(), self._day.date().toPython(), self._model.currentData()
+        return (self._species.currentText(), self._day.date().toPython(), self._model.currentData(),
+                self._floor.currentData())
 
     def _on_day_loaded(self, result):
-        species, day, model, loaded = result
-        if (species, day, model) != self._request():
+        request, loaded = result
+        if request != self._request():
             return
+        species, _, _, floor = request
         if loaded.error:
             self._status.setText(loaded.error)
             return
-        self._day_data = (species, loaded.spectra, loaded.fits)
+        self._day_data = (species, floor, loaded.spectra, loaded.fits)
         self._reset_records()
 
     def _reset_records(self):
         if self._day_data is None:
             return
-        self._records = inspectable_records(self._day_data[2], self._fitted_only.isChecked())
+        self._records = inspectable_records(self._day_data[3], self._fitted_only.isChecked())
         self._record.setEnabled(bool(self._records))
         if not self._records:
             self._status.setText("No record of this day has a fit; untick 'Fitted records only' to see them all.")
@@ -147,8 +153,8 @@ class FitInspector(QWidget):
         self._show_record(self._records[0])
 
     def _show_record(self, index: int):
-        species, spectra, fits = self._day_data
-        view = record_view(spectra, fits, index, species)
+        species, floor, spectra, fits = self._day_data
+        view = record_view(spectra, fits, index, species, floor)
         A = SPECIES_MASS_TABLE[species][0]
         self._ensure_graphs(view.energy)
         self._update_graphs(view, A)
@@ -168,8 +174,7 @@ class FitInspector(QWidget):
         self._graphs = {
             "flux_used": self._flux_plot.scatter(energy, nan, ["used"], [_USED], GraphMarkerShape.FilledCircle),
             "flux_dropped": self._flux_plot.scatter(energy, nan, ["dropped"], [_DROPPED], GraphMarkerShape.Circle),
-            "floor": self._flux_plot.line(energy, np.full(len(energy), NOISE_FLUX_THRESHOLD), ["noise floor"],
-                                          [_FLOOR]),
+            "floor": self._flux_plot.line(energy, nan, ["noise floor"], [_FLOOR]),
             "f_used": self._psd_plot.scatter(energy, nan, ["used"], [_USED], GraphMarkerShape.FilledCircle),
             "f_dropped": self._psd_plot.scatter(energy, nan, ["dropped"], [_DROPPED], GraphMarkerShape.Circle),
             "candidates": self._psd_plot.line(energy, nans(len(CANDIDATE_MODELS)),
@@ -182,6 +187,7 @@ class FitInspector(QWidget):
         energy, g = view.energy, self._graphs
         g["flux_used"].set_data(energy, _where(view.used, view.flux))
         g["flux_dropped"].set_data(energy, _where(~view.used, view.flux))
+        g["floor"].set_data(energy, np.full(len(energy), view.floor_flux))
         g["f_used"].set_data(energy, _where(view.used, view.f_obs))
         g["f_dropped"].set_data(energy, _where(~view.used, view.f_obs))
         g["candidates"].set_data(energy, np.ascontiguousarray(candidate_totals(view, A)))
@@ -191,7 +197,7 @@ class FitInspector(QWidget):
             plot.replot()
 
     def _fill_table(self, view):
-        rows = [_candidate_row(c, i, view.accepted) for i, c in enumerate(view.candidates)]
+        rows = [_candidate_row(c, i, view.accepted, view.chi2_max) for i, c in enumerate(view.candidates)]
         self._table.setRowCount(len(rows))
         for r, row in enumerate(rows):
             for c, text in enumerate(row):

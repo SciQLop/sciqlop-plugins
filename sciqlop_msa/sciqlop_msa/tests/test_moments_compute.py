@@ -118,7 +118,7 @@ def test_each_model_has_its_own_cached_day(monkeypatch):
     from sciqlop_msa import moments_compute
     calls = []
     monkeypatch.setattr(moments_compute, "_fit_day_uncached",
-                        lambda species, day, model="auto": calls.append(model) or model)
+                        lambda species, day, model="auto", floor="legacy": calls.append(model) or model)
 
     assert moments_compute.fit_day("h_plus", date(2025, 1, 8), "kap") == "kap"
     assert moments_compute.fit_day("h_plus", date(2025, 1, 8), "2max") == "2max"
@@ -145,3 +145,39 @@ def test_alpha_moments_are_recovered_from_their_kinetic_energy():
 
     assert result.T_c[0] == pytest.approx(400.0, rel=0.02)
     assert result.n_tot[0] == pytest.approx(2.0, rel=0.05)
+
+
+def _low_flux_day_spectra():
+    """A real-looking plasma whose flux stays under the original 10^5 floor (under 100 counts)."""
+    A, q = moments_fit.SPECIES_MASS_TABLE["h_plus"]
+    energy = np.logspace(0, np.log10(39200), 64)
+    f_true = moments_fit.maxwellian(energy, 0.05, 300.0, A)
+    m, e_J = moments_fit.ion_mass_kg(A), energy * moments_fit.ELEMENTARY_CHARGE
+    counts = np.random.default_rng(5).poisson(f_true * 2 * e_J ** 2 / (m ** 2 * 1e4) / moments_fit.FLUX_PER_COUNT)
+    flux = counts.astype(float) * moments_fit.FLUX_PER_COUNT
+    assert np.nanmax(flux) < moments_fit.NOISE_FLUX_THRESHOLD
+    return DaySpectra(time=np.array([1736300000.0]), energy=energy, flux=flux[np.newaxis, :])
+
+
+def test_a_counts_floor_fits_records_the_original_floor_drops():
+    from sciqlop_msa import moments_compute
+
+    with patch("sciqlop_msa.moments_compute.fetch_day", return_value=_low_flux_day_spectra()):
+        legacy = moments_compute._fit_day_uncached("h_plus", date(2025, 1, 8), model="max", floor="legacy")
+        counts = moments_compute._fit_day_uncached("h_plus", date(2025, 1, 8), model="max", floor="2")
+
+    assert legacy.candidates[0] == [] and np.isnan(legacy.n_tot[0])
+    assert counts.n_tot[0] == pytest.approx(0.05, rel=0.15)
+    assert counts.T_c[0] == pytest.approx(300.0, rel=0.15)
+
+
+def test_each_floor_has_its_own_cached_day(monkeypatch):
+    from sciqlop_msa import moments_compute
+    calls = []
+    monkeypatch.setattr(moments_compute, "_fit_day_uncached",
+                        lambda species, day, model="auto", floor="legacy": calls.append(floor) or floor)
+
+    assert moments_compute.fit_day("h_plus", date(2025, 1, 8), "auto", "legacy") == "legacy"
+    assert moments_compute.fit_day("h_plus", date(2025, 1, 8), "auto", "2") == "2"
+    assert moments_compute.fit_day("h_plus", date(2025, 1, 8), "auto", "legacy") == "legacy"
+    assert calls == ["legacy", "2"]

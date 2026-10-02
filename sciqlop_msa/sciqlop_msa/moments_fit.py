@@ -19,6 +19,11 @@ from scipy.special import gamma
 ELEMENTARY_CHARGE = 1.602176634e-19  # C
 ATOMIC_MASS_UNIT = 1.66053906660e-27  # kg
 NOISE_FLUX_THRESHOLD = 1e5  # cm^-2 s^-1 sr^-1 eV^-1
+# simplify: one count is worth ~1e3 of differential energy flux on every energy step
+# (median of L2pre flux / L1 corrected counts, H+ and alphas, 2024-09-04 and 2025-01-08,
+# 5-95% spread 9e2-1.2e3). Counts are derived from the flux with this constant; reading
+# the L1 counts themselves would be exact.
+FLUX_PER_COUNT = 1.0e3
 # Real spectra fit to reduced chi2 ~ 0.002-0.09; pure-noise "fits" land at ~3.7-4.4.
 # Reject anything above this ceiling as an unconverged/noise fit rather than a real one.
 CHI2_MAX = 1.0
@@ -83,8 +88,14 @@ def kappa_distribution(E_eV: np.ndarray, n_cc: float, T_eV: float, kappa: float,
     return norm * (1.0 + v2 / (kappa * theta2)) ** -(kappa + 1)
 
 
-def _reduced_chi2(f_obs: np.ndarray, f_model: np.ndarray, n_params: int) -> float:
+def _take(sigma, subset):
+    return None if sigma is None else sigma[subset]
+
+
+def _reduced_chi2(f_obs: np.ndarray, f_model: np.ndarray, n_params: int, sigma=None) -> float:
     residual = _log_safe(f_obs) - _log_safe(np.maximum(f_model, 1e-300))
+    if sigma is not None:
+        residual = residual / sigma
     return float(np.sum(residual ** 2) / max(len(f_obs) - n_params, 1))
 
 
@@ -117,22 +128,23 @@ def _init_kappa_slope(energy: np.ndarray, f_obs: np.ndarray, mask: np.ndarray,
     return float(np.clip(-slope - 1.0, 1.6, 10.0))
 
 
-def _single_population_fit(model: str, log_model, p0: list, bounds: tuple, params, Eg, fg,
+def _single_population_fit(model: str, log_model, p0: list, bounds: tuple, params, Eg, fg, sg,
                            f_model) -> "FitResult | None":
     try:
-        popt, _ = curve_fit(log_model, Eg, np.log(fg), p0=p0, bounds=bounds, maxfev=10000)
+        popt, _ = curve_fit(log_model, Eg, np.log(fg), p0=p0, bounds=bounds, sigma=sg, maxfev=10000)
     except (RuntimeError, ValueError):
         return None
     p = params(popt)
     if p is None:
         return None
     return FitResult(n_tot=p["nc"], T_c=p["Tc"], T_eff=p["Tc"], model=model,
-                     chi2=_reduced_chi2(fg, f_model(Eg, p), len(p0)), params=p)
+                     chi2=_reduced_chi2(fg, f_model(Eg, p), len(p0), sg), params=p)
 
 
-def fit_max(energy: np.ndarray, f_obs: np.ndarray, mask: np.ndarray, A: float) -> "FitResult | None":
+def fit_max(energy: np.ndarray, f_obs: np.ndarray, mask: np.ndarray, A: float, sigma=None) -> "FitResult | None":
     """Fit a single Maxwellian over every usable point."""
     Eg, fg = energy[mask], f_obs[mask]
+    sg = _take(sigma, mask)
     if len(Eg) < 3:
         return None
     n0, T0 = _init_maxwell_slope(energy, f_obs, mask, 0.0, np.inf, A)
@@ -141,13 +153,14 @@ def fit_max(energy: np.ndarray, f_obs: np.ndarray, mask: np.ndarray, A: float) -
         lambda E, log_n, log_T: _log_safe(maxwellian(E, 10 ** log_n, 10 ** log_T, A)),
         [np.log10(n0), np.log10(min(T0, 3e4))], ([-3, 0], [4, 4.5]),
         lambda popt: dict(model="max", nc=10 ** popt[0], Tc=10 ** popt[1]),
-        Eg, fg, lambda E, p: maxwellian(E, p["nc"], p["Tc"], A))
+        Eg, fg, sg, lambda E, p: maxwellian(E, p["nc"], p["Tc"], A))
 
 
-def fit_kap(energy: np.ndarray, f_obs: np.ndarray, mask: np.ndarray, A: float) -> "FitResult | None":
+def fit_kap(energy: np.ndarray, f_obs: np.ndarray, mask: np.ndarray, A: float, sigma=None) -> "FitResult | None":
     """Fit a single kappa distribution over every usable point; a kappa railed at its
     upper bound is a Maxwellian, and is rejected like in the multi-population fits."""
     Eg, fg = energy[mask], f_obs[mask]
+    sg = _take(sigma, mask)
     if len(Eg) < 4:
         return None
     n0, T0 = _init_maxwell_slope(energy, f_obs, mask, 0.0, np.inf, A)
@@ -162,13 +175,14 @@ def fit_kap(energy: np.ndarray, f_obs: np.ndarray, mask: np.ndarray, A: float) -
         "kap",
         lambda E, log_n, log_T, kappa: _log_safe(kappa_distribution(E, 10 ** log_n, 10 ** log_T, kappa, A)),
         [np.log10(n0), np.log10(min(T0, 3e4)), kap0], ([-3, 0, 1.55], [4, 4.5, 12]),
-        params, Eg, fg, lambda E, p: kappa_distribution(E, p["nc"], p["Tc"], p["kappa"], A))
+        params, Eg, fg, sg, lambda E, p: kappa_distribution(E, p["nc"], p["Tc"], p["kappa"], A))
 
 
 def fit_max_kap(energy: np.ndarray, f_obs: np.ndarray, mask: np.ndarray,
-                A: float) -> "FitResult | None":
+                A: float, sigma=None) -> "FitResult | None":
     """Fit a Maxwellian core + Kappa suprathermal halo."""
     Eg, fg = energy[mask], f_obs[mask]
+    sg = _take(sigma, mask)
     nc0, Tc0 = _init_maxwell_slope(energy, f_obs, mask, 20, 700, A)
     kap0 = _init_kappa_slope(energy, f_obs, mask, 800, 30000)
     nh0, Th0 = 0.15 * nc0, 10 * Tc0
@@ -179,7 +193,7 @@ def fit_max_kap(energy: np.ndarray, f_obs: np.ndarray, mask: np.ndarray,
     try:
         pm, _ = curve_fit(
             lambda E, log_n, log_T: _log_safe(maxwellian(E, 10 ** log_n, 10 ** log_T, A)),
-            Eg[mc], np.log(fg[mc]),
+            Eg[mc], np.log(fg[mc]), sigma=_take(sg, mc),
             p0=[np.log10(nc0), np.log10(Tc0)],
             bounds=([-3, 0], [4, 3]),
             maxfev=10000,
@@ -194,7 +208,7 @@ def fit_max_kap(energy: np.ndarray, f_obs: np.ndarray, mask: np.ndarray,
         try:
             pk, _ = curve_fit(
                 lambda E, log_n, log_T, kappa: _log_safe(kappa_distribution(E, 10 ** log_n, 10 ** log_T, kappa, A)),
-                Eg[mk], np.log(residual[mk]),
+                Eg[mk], np.log(residual[mk]), sigma=_take(sg, mk),
                 p0=[np.log10(max(nh0, 0.001)), np.log10(max(Th0, 30)), kap0],
                 bounds=([-3, 1.5, 1.55], [4, 4.5, 12]),
                 maxfev=10000,
@@ -213,7 +227,7 @@ def fit_max_kap(energy: np.ndarray, f_obs: np.ndarray, mask: np.ndarray,
 
     try:
         popt, _ = curve_fit(
-            joint_model, Eg, np.log(fg),
+            joint_model, Eg, np.log(fg), sigma=sg,
             p0=[np.log10(nc_seed), np.log10(Tc_seed), np.log10(nh_seed), np.log10(Th_seed), kap_seed],
             bounds=([-3, 0, -3, 1.5, 1.55], [4, 3, 4, 4.5, 12]),
             maxfev=40000,
@@ -232,15 +246,16 @@ def fit_max_kap(energy: np.ndarray, f_obs: np.ndarray, mask: np.ndarray,
         T_c=Tc_f,
         T_eff=effective_temperature(params),
         model="max_kap",
-        chi2=_reduced_chi2(fg, f_model, 5),
+        chi2=_reduced_chi2(fg, f_model, 5, sg),
         params=params,
     )
 
 
 def fit_2max(energy: np.ndarray, f_obs: np.ndarray, mask: np.ndarray,
-            A: float) -> "FitResult | None":
+            A: float, sigma=None) -> "FitResult | None":
     """Fit two independent Maxwellians (cold core + warm secondary population)."""
     Eg, fg = energy[mask], f_obs[mask]
+    sg = _take(sigma, mask)
     nc0, Tc0 = _init_maxwell_slope(energy, f_obs, mask, 10, 400, A)
     nh0, Th0 = _init_maxwell_slope(energy, f_obs, mask, 300, 8000, A)
 
@@ -250,7 +265,7 @@ def fit_2max(energy: np.ndarray, f_obs: np.ndarray, mask: np.ndarray,
     try:
         pm, _ = curve_fit(
             lambda E, log_n, log_T: _log_safe(maxwellian(E, 10 ** log_n, 10 ** log_T, A)),
-            Eg[mc], np.log(fg[mc]),
+            Eg[mc], np.log(fg[mc]), sigma=_take(sg, mc),
             p0=[np.log10(nc0), np.log10(Tc0)],
             bounds=([-3, 0], [4, 3.5]),
             maxfev=10000,
@@ -266,7 +281,7 @@ def fit_2max(energy: np.ndarray, f_obs: np.ndarray, mask: np.ndarray,
     try:
         ph, _ = curve_fit(
             lambda E, log_n, log_T: _log_safe(maxwellian(E, 10 ** log_n, 10 ** log_T, A)),
-            Eg[mh], np.log(residual[mh]),
+            Eg[mh], np.log(residual[mh]), sigma=_take(sg, mh),
             p0=[np.log10(max(nh0, 0.001)), np.log10(max(Th0, 30))],
             bounds=([-3, 1.5], [4, 4.5]),
             maxfev=10000,
@@ -283,7 +298,7 @@ def fit_2max(energy: np.ndarray, f_obs: np.ndarray, mask: np.ndarray,
 
     try:
         popt, _ = curve_fit(
-            joint_model, Eg, np.log(fg),
+            joint_model, Eg, np.log(fg), sigma=sg,
             p0=[np.log10(nc_seed), np.log10(Tc_seed), np.log10(nh_seed), np.log10(Th_seed)],
             bounds=([-3, 0, -3, 1.5], [4, 3.5, 4, 4.5]),
             maxfev=40000,
@@ -302,15 +317,16 @@ def fit_2max(energy: np.ndarray, f_obs: np.ndarray, mask: np.ndarray,
         T_c=Tc_f,
         T_eff=effective_temperature(params),
         model="2max",
-        chi2=_reduced_chi2(fg, f_model, 4),
+        chi2=_reduced_chi2(fg, f_model, 4, sg),
         params=params,
     )
 
 
 def fit_2max_kap(energy: np.ndarray, f_obs: np.ndarray, mask: np.ndarray,
-                 A: float) -> "FitResult | None":
+                 A: float, sigma=None) -> "FitResult | None":
     """Fit cold core + warm secondary Maxwellian + Kappa suprathermal halo."""
     Eg, fg = energy[mask], f_obs[mask]
+    sg = _take(sigma, mask)
     nc0, Tc0 = _init_maxwell_slope(energy, f_obs, mask, 10, 200, A)
     nw0, Tw0 = _init_maxwell_slope(energy, f_obs, mask, 200, 1500, A)
     kap0 = _init_kappa_slope(energy, f_obs, mask, 1500, 30000)
@@ -321,7 +337,7 @@ def fit_2max_kap(energy: np.ndarray, f_obs: np.ndarray, mask: np.ndarray,
     try:
         pm, _ = curve_fit(
             lambda E, log_n, log_T: _log_safe(maxwellian(E, 10 ** log_n, 10 ** log_T, A)),
-            Eg[mc], np.log(fg[mc]),
+            Eg[mc], np.log(fg[mc]), sigma=_take(sg, mc),
             p0=[np.log10(nc0), np.log10(Tc0)],
             bounds=([-3, 0.5], [4, 2.5]),
             maxfev=10000,
@@ -337,7 +353,7 @@ def fit_2max_kap(energy: np.ndarray, f_obs: np.ndarray, mask: np.ndarray,
     try:
         pw, _ = curve_fit(
             lambda E, log_n, log_T: _log_safe(maxwellian(E, 10 ** log_n, 10 ** log_T, A)),
-            Eg[mw], np.log(residual1[mw]),
+            Eg[mw], np.log(residual1[mw]), sigma=_take(sg, mw),
             p0=[np.log10(max(nw0, 0.001)), np.log10(max(Tw0, 30))],
             bounds=([-3, 2], [4, 3.5]),
             maxfev=10000,
@@ -352,7 +368,7 @@ def fit_2max_kap(energy: np.ndarray, f_obs: np.ndarray, mask: np.ndarray,
         try:
             pk, _ = curve_fit(
                 lambda E, log_n, log_T, kappa: _log_safe(kappa_distribution(E, 10 ** log_n, 10 ** log_T, kappa, A)),
-                Eg[mk], np.log(residual2[mk]),
+                Eg[mk], np.log(residual2[mk]), sigma=_take(sg, mk),
                 p0=[np.log10(0.1), np.log10(5000), kap0],
                 bounds=([-4, 3, 1.55], [3, 4.5, 12]),
                 maxfev=10000,
@@ -372,7 +388,7 @@ def fit_2max_kap(energy: np.ndarray, f_obs: np.ndarray, mask: np.ndarray,
 
     try:
         popt, _ = curve_fit(
-            joint_model, Eg, np.log(fg),
+            joint_model, Eg, np.log(fg), sigma=sg,
             p0=[
                 np.log10(nc_seed), np.log10(Tc_seed),
                 np.log10(nw_seed), np.log10(Tw_seed),
@@ -402,14 +418,50 @@ def fit_2max_kap(energy: np.ndarray, f_obs: np.ndarray, mask: np.ndarray,
         T_c=Tc_f,
         T_eff=effective_temperature(params),
         model="2max_kap",
-        chi2=_reduced_chi2(fg, f_model, 7),
+        chi2=_reduced_chi2(fg, f_model, 7, sg),
         params=params,
     )
 
 
-def usable_points(flux: np.ndarray, f_obs: np.ndarray) -> np.ndarray:
-    """Points a fit may use: above the instrument noise floor, finite and positive."""
-    return (flux >= NOISE_FLUX_THRESHOLD) & np.isfinite(f_obs) & (f_obs > 0)
+def usable_points(flux: np.ndarray, f_obs: np.ndarray, floor_flux: float = NOISE_FLUX_THRESHOLD) -> np.ndarray:
+    """Points a fit may use: above the noise floor, finite and positive."""
+    return (flux >= floor_flux) & np.isfinite(f_obs) & (f_obs > 0)
+
+
+def poisson_sigma(flux: np.ndarray) -> np.ndarray:
+    """Uncertainty of ln f: the relative error 1/sqrt(counts) of the counts behind the flux."""
+    with np.errstate(divide="ignore", invalid="ignore"):  # zero-count points are masked out anyway
+        return 1.0 / np.sqrt(flux / FLUX_PER_COUNT)
+
+
+# label -> key; "legacy" is the original fixed flux floor with an unweighted fit, a number
+# is a floor in counts with a Poisson-weighted fit.
+FLOOR_CHOICES = {
+    "10⁵ flux, unweighted (original)": "legacy",
+    "1 count, Poisson-weighted": "1",
+    "2 counts, Poisson-weighted": "2",
+    "5 counts, Poisson-weighted": "5",
+    "10 counts, Poisson-weighted": "10",
+}
+
+
+# Real records (2024-09-04, 2025-01-08, floor 2 counts) fit at a median weighted chi2 of
+# 12-22 (90th percentile 21-230); fits to random counts with no plasma shape land at 97 and
+# above (1st percentile), median 178.
+CHI2_MAX_WEIGHTED = 50.0
+
+
+def chi2_limit(floor_key: str) -> float:
+    """The weighted chi2 is in units of the Poisson errors (~1 for a good fit), on another
+    scale than the original unweighted log-space chi2."""
+    return CHI2_MAX if floor_key == "legacy" else CHI2_MAX_WEIGHTED
+
+
+def noise_floor(key: str) -> tuple:
+    """(flux threshold, whether the fit is Poisson-weighted) for a FLOOR_CHOICES key."""
+    if key == "legacy":
+        return NOISE_FLUX_THRESHOLD, False
+    return int(key) * FLUX_PER_COUNT, True
 
 
 FIT_MODELS = {"max": fit_max, "kap": fit_kap, "max_kap": fit_max_kap, "2max": fit_2max,
@@ -428,21 +480,21 @@ MODEL_CHOICES = {
 
 
 def fit_candidates(energy: np.ndarray, f_obs: np.ndarray, mask: np.ndarray,
-                   A: float, model: str = "auto") -> list:
+                   A: float, model: str = "auto", sigma=None) -> list:
     """Every candidate model that converged, best (lowest reduced chi-squared) first."""
     names = AUTO_MODELS if model == "auto" else (model,)
-    results = (FIT_MODELS[name](energy, f_obs, mask, A) for name in names)
+    results = (FIT_MODELS[name](energy, f_obs, mask, A, sigma) for name in names)
     return sorted((r for r in results if r is not None), key=lambda r: r.chi2)
 
 
 def best_fit(energy: np.ndarray, f_obs: np.ndarray, mask: np.ndarray,
-            A: float) -> "FitResult | None":
-    candidates = fit_candidates(energy, f_obs, mask, A)
+            A: float, sigma=None) -> "FitResult | None":
+    candidates = fit_candidates(energy, f_obs, mask, A, sigma=sigma)
     return candidates[0] if candidates else None
 
 
-def accepted_fit(candidates: list) -> "FitResult | None":
-    if candidates and candidates[0].chi2 <= CHI2_MAX:
+def accepted_fit(candidates: list, chi2_max: float = CHI2_MAX) -> "FitResult | None":
+    if candidates and candidates[0].chi2 <= chi2_max:
         return candidates[0]
     return None
 
