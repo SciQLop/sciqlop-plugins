@@ -9,9 +9,15 @@ name: SciQLop compatibility smoke
 # Default: smokes against SciQLop `main`. Use the workflow_dispatch input
 # to point it at a specific pre-release (`0.12.0.dev0`), tagged version,
 # or commit SHA.
+#
+# A push smokes only the plugins whose folder it touched (see
+# .github/scripts/smoke_plugins.py); scheduled and manual runs smoke them all.
+# Tags are not smoked: a release tag points at a commit already smoked when
+# its branch was pushed.
 
 on:
   push:
+    branches: ["**"]
   workflow_dispatch:
     inputs:
       sciqlop_ref:
@@ -23,19 +29,26 @@ on:
     - cron: "0 6 * * 1"
 
 jobs:
+  plugins:
+    runs-on: ubuntu-latest
+    outputs:
+      plugins: ${{ steps.pick.outputs.plugins }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # to diff the push against its previous commit
+      - id: pick
+        run: python .github/scripts/smoke_plugins.py "${{ github.event_name }}" "${{ github.event.before }}" "${{ github.sha }}" >> "$GITHUB_OUTPUT"
+
   smoke:
+    needs: plugins
+    if: needs.plugins.outputs.plugins != '[]'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        plugin:
-          - { dir: sciqlop_albert,   pkg: sciqlop_albert }
-          - { dir: sciqlop_claude,   pkg: sciqlop_claude }
-          - { dir: sciqlop_copilot,  pkg: sciqlop_copilot }
-          - { dir: sciqlop_kimi,     pkg: sciqlop_kimi }
-          - { dir: sciqlop_msa,      pkg: sciqlop_msa }
-          - { dir: sciqlop_radio,    pkg: sciqlop_radio }
-          - { dir: cdf_workbench,    pkg: cdf_workbench }
+        # each plugin's folder and package share its name
+        plugin: ${{ fromJSON(needs.plugins.outputs.plugins) }}
     steps:
       - uses: actions/checkout@v4
 
@@ -57,22 +70,23 @@ jobs:
           REF="${{ github.event.inputs.sciqlop_ref || 'main' }}"
           # Treat anything matching a semver-ish pattern as a PyPI release
           # (e.g. "0.12.0", "0.12.0.dev0", "0.11.4"); everything else is a
-          # git ref against SciQLop/SciQLop.
+          # git ref against SciQLop/SciQLop. [all]: bare sciqlop is only the
+          # launcher, without PySide6 or the app itself.
           if [[ "$REF" =~ ^[0-9]+\.[0-9]+\.[0-9]+([a-z0-9.]*)$ ]]; then
-            pip install "sciqlop==${REF}"
+            pip install "sciqlop[all]==${REF}"
           else
-            pip install "sciqlop @ git+https://github.com/SciQLop/SciQLop@${REF}"
+            pip install "sciqlop[all] @ git+https://github.com/SciQLop/SciQLop@${REF}"
           fi
           pip install pytest  # some plugins import pytest at top level via tests
 
-      - name: Install plugin ${{ matrix.plugin.dir }}
-        run: pip install ./${{ matrix.plugin.dir }}
+      - name: Install plugin ${{ matrix.plugin }}
+        run: pip install ./${{ matrix.plugin }}
 
       - name: Install plugin runtime deps from plugin.json
         run: |
           python - <<'PY'
           import json, subprocess, sys, pathlib
-          mf = pathlib.Path("${{ matrix.plugin.dir }}/${{ matrix.plugin.pkg }}/plugin.json")
+          mf = pathlib.Path("${{ matrix.plugin }}/${{ matrix.plugin }}/plugin.json")
           if not mf.exists():
               print(f"no plugin.json at {mf} — nothing to install")
               sys.exit(0)
@@ -117,7 +131,7 @@ jobs:
           except ImportError:
               pass
 
-          plugin_pkg = "${{ matrix.plugin.pkg }}"
+          plugin_pkg = "${{ matrix.plugin }}"
           mod = importlib.import_module(plugin_pkg)
           assert hasattr(mod, "load"), f"{plugin_pkg} has no load() entry point"
 
