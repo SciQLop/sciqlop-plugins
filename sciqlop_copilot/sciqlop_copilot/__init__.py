@@ -117,8 +117,29 @@ class _DeviceLoginDialog(QDialog):
         return self._token
 
 
+_signing_in = False
+
+
 def run_sign_in_flow(parent) -> bool:
-    """Run the device-flow login dialog end-to-end. Returns True on success."""
+    """Run the device-flow login dialog end-to-end. Returns True on success.
+
+    The dock re-activates the backend on every re-bind, and each activation can
+    ask for a sign-in, some queued before the first one finished: sign in only
+    when no token is stored, and never twice at once.
+    """
+    global _signing_in
+    if load_github_token():
+        return True
+    if _signing_in:
+        return False
+    _signing_in = True
+    try:
+        return _sign_in(parent)
+    finally:
+        _signing_in = False
+
+
+def _sign_in(parent) -> bool:
     dialog = _DeviceLoginDialog(parent)
     if dialog.exec() != QDialog.Accepted or not dialog.token:
         return False

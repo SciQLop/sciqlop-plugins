@@ -1,4 +1,6 @@
 """Copilot backend settings — GitHub OAuth token in keyring, tuning in YAML."""
+import logging
+
 from pydantic import Field, field_validator
 from SciQLop.components.settings import SettingsCategory
 from SciQLop.components.settings.backend import ConfigEntry
@@ -6,24 +8,36 @@ from SciQLop.components.settings.backend import ConfigEntry
 _KEYRING_SERVICE = "sciqlop_copilot"
 _KEYRING_USERNAME = "github_token"
 
+log = logging.getLogger(__name__)
+
+# The token also lives here for the session: without a usable keyring (no Secret
+# Service, e.g. in a container) a token that is never found again sent the user
+# through the sign-in over and over.
+_session_token = ""
+
 
 def load_github_token() -> str:
     try:
         import keyring
-        return keyring.get_password(_KEYRING_SERVICE, _KEYRING_USERNAME) or ""
+        return keyring.get_password(_KEYRING_SERVICE, _KEYRING_USERNAME) or _session_token
     except Exception:
-        return ""
+        return _session_token
 
 
 def save_github_token(token: str) -> None:
+    global _session_token
+    _session_token = token
     try:
         import keyring
         keyring.set_password(_KEYRING_SERVICE, _KEYRING_USERNAME, token)
     except Exception:
-        pass
+        log.warning("Could not store the GitHub token in the system keyring; "
+                    "you will have to sign in again after a restart", exc_info=True)
 
 
 def clear_github_token() -> None:
+    global _session_token
+    _session_token = ""
     try:
         import keyring
         keyring.delete_password(_KEYRING_SERVICE, _KEYRING_USERNAME)
