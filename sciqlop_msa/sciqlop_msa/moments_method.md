@@ -144,6 +144,10 @@ From the accepted fit of each record:
 
 They are published as the products `msa/moments_fit/<species>/density`, `T_c` and `T_eff`. Records without an accepted fit have no value.
 
+## Comparing the models
+
+**Tools → MSA Quick-Looks → Ground Moments, all models — <species>** opens a panel with one plot per moment (density, T_c, T_eff). Each plot draws all six model choices at once, with the original noise floor, one line per model, labelled in the legend.
+
 ## Caching
 
 The plugin fits whole UTC days. The result of each species, day, model and noise floor is cached for 30 days. The first plot of a day can take a while; later plots and model switches back to an already fitted model are immediate.
