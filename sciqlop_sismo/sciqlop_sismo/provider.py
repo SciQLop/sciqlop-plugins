@@ -25,7 +25,7 @@ from .fdsn_client import fetch_stream
 from .local_files import ChannelInfo
 from .process import default_pipeline
 from .settings import SismoSettings
-from .worker import raw_cache_key
+from .worker import CACHE_MARGINS, fetch_raw_counts, is_settled, raw_cache_key
 from .stream_to_variable import (
     spectrogram_from_stream,
     stream_to_speasy_variable,
@@ -156,13 +156,14 @@ class SismoProvider(DataProvider):
             return self._fetch_stream_for_meta(meta, nslc, t0, t1, routing)
         dataset_uid = f"{nslc[0]}/{nslc[1]}/{nslc[2]}.{nslc[3]}"
         counts = self._get_raw_counts(
-            raw_cache_key(dataset_uid, routing), t0, t1, nslc=nslc, routing=routing
+            raw_cache_key(dataset_uid, routing), t0, t1, nslc=nslc, routing=routing,
+            disable_cache=not is_settled(t0, t1),
         )
         if counts is None:
             return None
         return variable_to_stream(counts, nslc, meta.get("sampling_rate_hz"))
 
-    @Cacheable(prefix="sismo", fragment_hours=lambda product: 1)
+    @Cacheable(prefix="sismo", fragment_hours=lambda product: 1, cache_margins=CACHE_MARGINS)
     def _get_raw_counts(
         self, product, start_time, stop_time, *, nslc=None, routing=None
     ):
@@ -172,27 +173,16 @@ class SismoProvider(DataProvider):
         the three kinds of one channel+routing share one fetch while a
         routing change misses the old route's fragments and refetches.
         `nslc`/`routing` ride along as kwargs for the fetch; when absent
-        they fall back to the stored channel record.
-
-        Returns None for a window with no data so a gap doesn't fail the whole
-        request — Speasy's fragment cache stores nothing for a None fragment."""
-        from obspy.clients.fdsn.header import FDSNNoDataException
-
+        they fall back to the stored channel record."""
         if nslc is None or routing is None:
             record = self._record_for_dataset_uid(product)
             nslc = (record["network"], record["station"],
                     record["location"], record["channel"])
             routing = record["routing"]
-        try:
-            stream = fetch_stream(
-                tuple(nslc), start_time, stop_time, routing=routing,
-                timeout=self._settings.fetch_timeout_s, allow_empty=True,
-            )
-        except FDSNNoDataException:
-            return None
-        if len(stream) == 0:
-            return None
-        return stream_to_speasy_variable(stream, channel=tuple(nslc)[3], units="counts")
+        return fetch_raw_counts(
+            nslc, start_time, stop_time, routing=routing,
+            timeout_s=self._settings.fetch_timeout_s,
+        )
 
     def _record_for_dataset_uid(self, uid: str) -> dict:
         bare = uid.split("#", 1)[0]

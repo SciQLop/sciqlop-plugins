@@ -81,6 +81,13 @@ def stream_to_speasy_variable(
     return SpeasyVariable(axes=[time_axis], values=values, columns=[channel])
 
 
+def empty_variable(channel: str, units: str) -> SpeasyVariable:
+    """A zero-sample 1-D variable: the "sure there is no data" answer."""
+    time_axis = VariableTimeAxis(values=np.array([], dtype="datetime64[ns]"))
+    values = DataContainer(values=np.empty((0, 1)), meta={"UNITS": units}, name=channel)
+    return SpeasyVariable(axes=[time_axis], values=values, columns=[channel])
+
+
 def spectrogram_from_stream(
     stream: Stream,
     channel: str,

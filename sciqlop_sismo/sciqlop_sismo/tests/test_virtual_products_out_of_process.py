@@ -308,3 +308,23 @@ def test_live_registration_rejects_unknown_kind():
             kinds=("waveform", "bogus"),
             vp_factory=lambda *a, **k: object(),
         )
+
+
+def test_worker_no_data_window_is_cached_and_never_blocks_other_threads():
+    import threading
+    from unittest.mock import patch
+
+    from obspy.clients.fdsn.header import FDSNNoDataException
+
+    from sciqlop_sismo.virtual_products import build_live_callback
+
+    callback = build_live_callback(kind="waveform", **_snapshot())
+    t0, t1 = _utc(2026, 1, 2).timestamp(), _utc(2026, 1, 2, 0, 30).timestamp()
+    with patch("sciqlop_sismo.worker.fetch_stream",
+               side_effect=FDSNNoDataException("no data")) as fs:
+        assert callback(t0, t1) is None
+        other = threading.Thread(target=lambda: callback(t0, t1), daemon=True)
+        other.start()
+        other.join(5.0)
+        assert not other.is_alive(), "gap request hung on a stale fragment lock"
+    assert fs.call_count == 1, f"a known gap must be cached; fetched {fs.call_count}x"

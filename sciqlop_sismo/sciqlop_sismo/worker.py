@@ -16,7 +16,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import threading
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -26,6 +26,7 @@ from speasy.products.variable import SpeasyVariable
 from .fdsn_client import fetch_stream
 from .process import bandpass, detrend
 from .stream_to_variable import (
+    empty_variable,
     spectrogram_from_stream,
     stream_to_speasy_variable,
     variable_to_stream,
@@ -64,36 +65,54 @@ def _fetch_lock_for(dataset_uid: str) -> threading.Lock:
         return _fetch_locks.setdefault(dataset_uid, threading.Lock())
 
 
+CACHE_MARGINS = 1.2
+FRAGMENT = timedelta(hours=1)
+# simplify: one fixed archive latency for every network; some lag far longer.
+# Upgrade path: per-routing latency, or a short cache lifetime for recent fragments.
+ARCHIVE_LATENCY = timedelta(hours=2)
+
+
+def is_settled(start: datetime, stop: datetime, now: Optional[datetime] = None) -> bool:
+    """True when every hour fragment Speasy fetches for `[start, stop]` lies far
+    enough in the past that the archive has it all, so caching it (even as
+    empty) is final. Bounds Speasy's margin padding plus hour rounding."""
+    now = now or datetime.now(tz=timezone.utc)
+    padded_stop = stop + (stop - start) * (CACHE_MARGINS - 1) + FRAGMENT
+    return padded_stop < now - ARCHIVE_LATENCY
+
+
+def fetch_raw_counts(nslc, start_time, stop_time, *, routing, timeout_s) -> SpeasyVariable:
+    """Raw counts for one channel; an empty variable when FDSN reports no data.
+
+    Empty (not None) is the convention for "sure there is no data": Speasy
+    caches it, while a None leaves the fragments locked for other threads."""
+    from obspy.clients.fdsn.header import FDSNNoDataException
+
+    channel = tuple(nslc)[3]
+    try:
+        stream = fetch_stream(
+            tuple(nslc), start_time, stop_time,
+            routing=routing, timeout=timeout_s, allow_empty=True,
+        )
+    except FDSNNoDataException:
+        return empty_variable(channel=channel, units="counts")
+    if len(stream) == 0:
+        return empty_variable(channel=channel, units="counts")
+    return stream_to_speasy_variable(stream, channel=channel, units="counts")
+
+
 class _RawCountsCache:
     """Method-style holder so speasy's `Cacheable` (which wraps
     `(self, product, start_time, stop_time, ...)`) keeps its range-aware
     fragment behavior. One module-level instance; never pickled — the
     worker process re-imports this module fresh."""
 
-    @Cacheable(prefix="sismo", fragment_hours=lambda product: 1)
+    @Cacheable(prefix="sismo", fragment_hours=lambda product: 1, cache_margins=CACHE_MARGINS)
     def raw_counts(
         self, product, start_time, stop_time, *, nslc, routing, timeout_s
-    ) -> Optional[SpeasyVariable]:
-        """Range-aware-cached raw counts for one channel (dataset uid `product`).
-
-        Returns None for a window with no data so a gap doesn't fail the whole
-        request — Speasy's fragment cache stores nothing for a None fragment."""
-        from obspy.clients.fdsn.header import FDSNNoDataException
-
-        try:
-            stream = fetch_stream(
-                tuple(nslc),
-                start_time,
-                stop_time,
-                routing=routing,
-                timeout=timeout_s,
-                allow_empty=True,
-            )
-        except FDSNNoDataException:
-            return None
-        if len(stream) == 0:
-            return None
-        return stream_to_speasy_variable(stream, channel=nslc[3], units="counts")
+    ) -> SpeasyVariable:
+        """Range-aware-cached raw counts for one channel (dataset uid `product`)."""
+        return fetch_raw_counts(nslc, start_time, stop_time, routing=routing, timeout_s=timeout_s)
 
 
 _RAW_COUNTS = _RawCountsCache()
@@ -157,6 +176,7 @@ def sismo_worker_callback(
                     nslc=nslc,
                     routing=routing,
                     timeout_s=fetch_timeout_s,
+                    disable_cache=not is_settled(t0, t1),
                 )
             if counts is None:
                 return None

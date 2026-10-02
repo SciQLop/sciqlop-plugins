@@ -92,7 +92,7 @@ def test_get_data_waveform_dispatches_through_fetch_and_pipeline(provider, fake_
         sampling_rate_hz=100.0, routing="iris-federator",
     )
     uid = "G/SSB/00.HHZ/waveform"
-    with patch("sciqlop_sismo.provider.fetch_stream", return_value=fake_stream) as fs:
+    with patch("sciqlop_sismo.worker.fetch_stream", return_value=fake_stream) as fs:
         var = provider.get_data(uid, _utc(2026, 1, 1), _utc(2026, 1, 1, 0, 1))
     fs.assert_called_once()
     assert isinstance(var, SpeasyVariable)
@@ -107,7 +107,7 @@ def test_get_data_raw_skips_pipeline(provider, fake_stream):
         sampling_rate_hz=100.0, routing="iris-federator",
     )
     uid = "G/SSB/00.HHZ/raw"
-    with patch("sciqlop_sismo.provider.fetch_stream", return_value=fake_stream):
+    with patch("sciqlop_sismo.worker.fetch_stream", return_value=fake_stream):
         var = provider.get_data(uid, _utc(2026, 1, 1), _utc(2026, 1, 1, 0, 1))
     assert var.unit == "counts"
 
@@ -119,7 +119,7 @@ def test_get_data_spectrogram_returns_2d_variable(provider, fake_stream):
         sampling_rate_hz=100.0, routing="iris-federator",
     )
     uid = "G/SSB/00.HHZ/spectrogram"
-    with patch("sciqlop_sismo.provider.fetch_stream", return_value=fake_stream):
+    with patch("sciqlop_sismo.worker.fetch_stream", return_value=fake_stream):
         var = provider.get_data(uid, _utc(2026, 1, 1), _utc(2026, 1, 1, 0, 1))
     assert var.values.ndim == 2
 
@@ -182,7 +182,7 @@ def test_get_data_accepts_numpy_datetime64_and_float(provider, fake_stream):
     uid = "G/SSB/00.HHZ/waveform"
     t0_np = np.datetime64("2026-01-01T00:00:00")
     t1_float = datetime(2026, 1, 1, 0, 1, tzinfo=timezone.utc).timestamp()
-    with patch("sciqlop_sismo.provider.fetch_stream", return_value=fake_stream):
+    with patch("sciqlop_sismo.worker.fetch_stream", return_value=fake_stream):
         var = provider.get_data(uid, t0_np, t1_float)
     assert isinstance(var, SpeasyVariable)
 
