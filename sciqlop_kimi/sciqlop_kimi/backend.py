@@ -8,6 +8,7 @@ user's Kimi Code config. Auth belongs to the CLI — the user runs
 """
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 from typing import List, Optional
 
@@ -25,7 +26,16 @@ class KimiBackend(AcpAgentBackend):
     cli_label = "Kimi Code"
 
     def acp_command(self) -> List[str]:
+        if shutil.which("kimi") is None:
+            raise RuntimeError("kimi CLI not found on PATH — install Kimi Code first.")
         return ["kimi", "acp"]
+
+    def check_prerequisites(self) -> None:
+        # Deliberately lenient, like OpencodeBackend: AcpAgentBackend.__init__ calls
+        # this, and raising here escapes the agent dock's construction and fails the
+        # load() of this and every later agent plugin. acp_command() is the gate, at
+        # spawn time, and its error shows in the chat.
+        return None
 
 
 def fetch_models() -> List[tuple[str, Optional[str]]]:
