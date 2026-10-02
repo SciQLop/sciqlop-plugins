@@ -1,6 +1,6 @@
 {
   "name": "Sismo",
-  "version": "0.3.4",
+  "version": "0.3.5",
   "description": "FDSN/ObsPy seismic waveforms exposed as Speasy products",
   "authors": [
     {
