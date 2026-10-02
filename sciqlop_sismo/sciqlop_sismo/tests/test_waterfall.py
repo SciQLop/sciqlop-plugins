@@ -56,7 +56,7 @@ def test_traces_sit_at_their_epicentral_distance():
     rows = [_row("NEAR", 0.0, 1.0), _row("MID", 0.0, 20.0), _row("FAR", 0.0, 60.0)]
     offsets, gain = trace_layout(rows, origin=(0.0, 0.0))
     assert np.allclose(offsets, [1.0, 20.0, 60.0])
-    assert gain == pytest.approx(TRACE_GAIN * 59.0 / 2)
+    assert gain == pytest.approx(TRACE_GAIN * 19.0), "swing sized by the tightest gap"
 
 
 def test_traces_are_evenly_spaced_without_an_event_or_coordinates():
@@ -76,11 +76,43 @@ def test_co_located_stations_fall_back_to_even_spacing():
     assert trace_layout(rows, origin=(0.0, 0.0))[0].tolist() == [0.0, 1.0]
 
 
-def test_traces_at_one_distance_share_their_tick_label():
-    from sciqlop_sismo.waterfall import tick_labels
+def _station_channels(sta, lon, locs, chans):
+    return [{**_row(sta, 0.0, lon), "location": loc, "channel": cha} for loc in locs for cha in chans]
 
-    labels = tick_labels(["A.HHZ (5.0°)", "A.BHZ (5.0°)", "B.HHZ (9.0°)"], np.array([5.0, 5.0, 9.0]))
-    assert labels == {5.0: "A.HHZ (5.0°) / A.BHZ (5.0°)", 9.0: "B.HHZ (9.0°)"}
+
+def _kip_and_th04():
+    """The real selection that broke 0.4.2: KIP has 9 channels at one distance
+    (3 location codes x 3 components), TH04 has 3."""
+    from sciqlop_sismo.waterfall import order_rows
+
+    rows = (_station_channels("KIP", 33.0, ["00", "10", "60"], ["BH1", "BH2", "BHZ"])
+            + _station_channels("TH04", 38.2, [""], ["HHE", "HHN", "HHZ"]))
+    return order_rows(rows, origin=(0.0, 0.0))
+
+
+def test_channels_at_one_distance_fan_out_instead_of_overlapping():
+    from sciqlop_sismo.waterfall import trace_layout
+
+    offsets, gain = trace_layout(_kip_and_th04(), origin=(0.0, 0.0))
+    gaps = np.diff(offsets)
+    assert (gaps > 0).all(), "two traces on one y overlap completely"
+    assert 2 * gain < gaps.min(), "neighbouring swings must not overlap"
+    assert offsets[0] == pytest.approx(33.0) and offsets[-1] < 38.2 + 2.0
+
+
+def test_every_trace_gets_its_own_short_tick_label():
+    """Joining the names of co-located channels into one tick made a label as
+    wide as the window, and Qt squeezed the plot into a sliver to fit it."""
+    from sciqlop_sismo.waterfall import tick_labels, trace_layout, trace_names
+
+    from sciqlop_sismo.waterfall import trace_distances
+
+    rows = _kip_and_th04()
+    offsets, _ = trace_layout(rows, origin=(0.0, 0.0))
+    labels = tick_labels(trace_names(rows, trace_distances(rows, (0.0, 0.0))), offsets)
+    assert len(labels) == len(rows)
+    assert max(len(text) for text in labels.values()) <= len("DY.TH04.00.HHZ 180.0°")
+    assert "/" not in "".join(labels.values())
 
 
 def test_y_extent_covers_every_trace_and_its_swing():
@@ -204,3 +236,12 @@ def test_a_closed_panel_stops_the_feed_instead_of_raising(qtbot):
     feed.on_range_changed(_Range(10.0, 20.0))
     qtbot.wait(50)
     assert calls == [1]
+
+
+def test_labels_state_the_true_distance_not_the_fanned_out_row():
+    from sciqlop_sismo.waterfall import trace_distances, trace_names
+
+    rows = _kip_and_th04()
+    names = trace_names(rows, trace_distances(rows, (0.0, 0.0)))
+    assert {n.split(" ")[1] for n in names if ".KIP." in n} == {"33.0°"}
+    assert trace_names(rows[:2], None) == ["G.KIP.00.BH1", "G.KIP.00.BH2"]

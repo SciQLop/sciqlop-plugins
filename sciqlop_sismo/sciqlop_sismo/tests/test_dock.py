@@ -375,7 +375,7 @@ def test_plot_waterfall_sorts_by_distance_to_the_selected_event(qtbot, dock, fak
     _search_and_select_all_channels(qtbot, tab, _two_station_inventory())
     panel = _plot_waterfall(qtbot, tab)
     labels = _y_labels(panel)
-    assert labels[0].startswith("G.NEAR.00.HHZ (") and labels[1].startswith("G.FAR.00.HHZ (")
+    assert labels[0].startswith("G.NEAR.00.HHZ ") and labels[1].startswith("G.FAR.00.HHZ ")
     offsets = panel.waterfall.call_args.kwargs["offsets"]
     assert offsets[0] == pytest.approx(0.1, abs=0.01) and offsets[1] == pytest.approx(15.0, abs=0.01)
 

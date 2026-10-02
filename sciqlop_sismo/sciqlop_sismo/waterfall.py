@@ -56,14 +56,24 @@ def trace_distances(rows: Sequence[dict], origin: Optional[tuple[float, float]])
     return distances
 
 
+def fan_out(distances: np.ndarray, min_gap: float) -> np.ndarray:
+    """Sorted distances pushed up just enough that consecutive traces sit at least
+    `min_gap` apart: y[i] = max(d[i], y[i-1] + min_gap). Channels of one station
+    (components, location codes) share a distance and would otherwise overlap."""
+    steps = np.arange(len(distances)) * min_gap
+    return np.maximum.accumulate(distances - steps) + steps
+
+
 def trace_layout(rows: Sequence[dict], origin: Optional[tuple[float, float]]):
     """(offsets, gain): each trace's y position and half-height. A trace sits at
-    its distance — the record section's y axis, which shows the moveout — or,
-    without usable distances, at its index."""
+    its distance — the record section's y axis, which shows the moveout — fanned
+    out where channels tie; without usable distances, at its index. `rows` must
+    be in distance order (`order_rows`)."""
     distances = trace_distances(rows, origin)
     if distances is None:
         return np.arange(len(rows), dtype=float), TRACE_GAIN
-    return distances, TRACE_GAIN * float(np.ptp(distances)) / max(len(rows) - 1, 1)
+    offsets = fan_out(distances, min_gap=float(np.ptp(distances)) / (2 * len(rows)))
+    return offsets, TRACE_GAIN * float(np.diff(offsets).min())
 
 
 def common_grid(t0: float, t1: float, points: int) -> np.ndarray:
@@ -151,19 +161,18 @@ def y_extent(offsets: np.ndarray, gain: float) -> tuple[float, float]:
     return float(np.min(offsets)) - margin, float(np.max(offsets)) + margin
 
 
-def trace_names(rows: Sequence[dict], offsets: np.ndarray, at_distance: bool) -> list[str]:
-    if not at_distance:
+def trace_names(rows: Sequence[dict], distances: Optional[np.ndarray]) -> list[str]:
+    """Labels state the true distance, never the fanned-out row position."""
+    if distances is None:
         return [trace_label(row) for row in rows]
-    return [f"{trace_label(row)} ({y:.1f}°)" for y, row in zip(offsets, rows)]
+    return [f"{trace_label(row)} {d:.1f}°" for d, row in zip(distances, rows)]
 
 
 def tick_labels(names: Sequence[str], offsets: np.ndarray) -> dict[float, str]:
-    """One y tick per trace; traces at one distance (e.g. HHZ and BHZ of a
-    station) share their tick instead of overwriting each other's name."""
-    ticks: dict[float, list[str]] = {}
-    for y, name in zip(offsets, names):
-        ticks.setdefault(float(y), []).append(name)
-    return {y: " / ".join(names_at_y) for y, names_at_y in ticks.items()}
+    """One short tick per trace. Offsets are distinct (see `fan_out`), so no two
+    traces compete for a tick — and names are never joined: Qt widens the axis
+    to the longest label, squeezing the plot."""
+    return {float(y): name for y, name in zip(offsets, names)}
 
 
 def _label_ticks(plot, labels: dict) -> None:
@@ -193,7 +202,7 @@ def plot_live_waterfall(panel, rows: Sequence[dict], origin: Optional[tuple[floa
     offsets, gain = trace_layout(rows, origin)
     graph = panel.waterfall(grid, offsets, empty, name="waterfall",
                             normalize=True, offsets=offsets, gain=gain)
-    names = trace_names(rows, offsets, at_distance=trace_distances(rows, origin) is not None)
+    names = trace_names(rows, trace_distances(rows, origin))
     plot = panel.plots[-1]
     # SciQLop never refits the y axis to a waterfall's offsets: it stays at its default 0..5.
     plot.set_axis_range("y", *y_extent(offsets, gain))
