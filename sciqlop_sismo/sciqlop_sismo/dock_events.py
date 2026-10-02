@@ -13,11 +13,12 @@ from PySide6.QtCore import (
 from PySide6.QtWidgets import (
     QAbstractItemView, QComboBox, QDateTimeEdit, QDoubleSpinBox,
     QHBoxLayout, QHeaderView, QLabel, QLineEdit, QPushButton,
-    QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
+    QTableWidget, QVBoxLayout, QWidget,
 )
 
 from .dock_stations import _waterfall_supported, open_waterfall
 from .fdsn_client import search_events, search_stations
+from .sortable import SortableTableItem, sorting_paused
 
 
 class _EventsSignals(QObject):
@@ -108,6 +109,7 @@ class EventsTab(QWidget):
         )
         self.events_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.events_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.events_table.setSortingEnabled(True)
         self.events_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         root.addWidget(self.events_table, 1)
 
@@ -148,6 +150,7 @@ class EventsTab(QWidget):
         )
         self.stations_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.stations_table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        self.stations_table.setSortingEnabled(True)
         self.stations_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         root.addWidget(self.stations_table, 1)
 
@@ -168,19 +171,34 @@ class EventsTab(QWidget):
 
     def _on_events_completed(self, catalog):
         self._events = list(catalog)
-        self.events_table.setRowCount(len(self._events))
-        for row, event in enumerate(self._events):
-            origin = event.preferred_origin()
-            mag = event.preferred_magnitude()
-            t = origin.time.datetime
-            self.events_table.setItem(row, 0, QTableWidgetItem(t.isoformat()))
-            self.events_table.setItem(row, 1, QTableWidgetItem(f"{origin.latitude:.3f}"))
-            self.events_table.setItem(row, 2, QTableWidgetItem(f"{origin.longitude:.3f}"))
-            depth_km = (origin.depth or 0.0) / 1000.0
-            self.events_table.setItem(row, 3, QTableWidgetItem(f"{depth_km:.1f}"))
-            self.events_table.setItem(row, 4, QTableWidgetItem(f"{mag.mag:.1f}"))
+        with sorting_paused(self.events_table):
+            self.events_table.setRowCount(len(self._events))
+            for row, event in enumerate(self._events):
+                self._fill_event_row(row, event)
         self._status_sink(f"Found {len(self._events)} event(s)")
         self.search_finished.emit()
+
+    def _fill_event_row(self, row: int, event) -> None:
+        origin = event.preferred_origin()
+        mag = event.preferred_magnitude()
+        depth_km = (origin.depth or 0.0) / 1000.0
+        t = origin.time.datetime
+        cells = (
+            SortableTableItem(t.isoformat()),
+            SortableTableItem(f"{origin.latitude:.3f}", float(origin.latitude)),
+            SortableTableItem(f"{origin.longitude:.3f}", float(origin.longitude)),
+            SortableTableItem(f"{depth_km:.1f}", depth_km),
+            SortableTableItem(f"{mag.mag:.1f}", float(mag.mag)),
+        )
+        cells[0].setData(Qt.ItemDataRole.UserRole, row)  # index into self._events
+        for col, cell in enumerate(cells):
+            self.events_table.setItem(row, col, cell)
+
+    def _selected_event(self):
+        """The selected event — looked up by the index its row carries, since a
+        sorted table's row number no longer matches `self._events`."""
+        item = self.events_table.item(self.events_table.currentRow(), 0)
+        return None if item is None else self._events[item.data(Qt.ItemDataRole.UserRole)]
 
     def _on_events_failed(self, message: str):
         self._status_sink(f"Event search failed: {message}")
@@ -188,18 +206,17 @@ class EventsTab(QWidget):
 
     def selected_origin(self) -> Optional[tuple[float, float]]:
         """(latitude, longitude) of the selected event, or None."""
-        idx = self.events_table.currentRow()
-        if idx < 0 or idx >= len(self._events):
+        event = self._selected_event()
+        if event is None:
             return None
-        origin = self._events[idx].preferred_origin()
+        origin = event.preferred_origin()
         return float(origin.latitude), float(origin.longitude)
 
     def _on_find_stations(self):
-        idx = self.events_table.currentRow()
-        if idx < 0 or idx >= len(self._events):
+        event = self._selected_event()
+        if event is None:
             self._status_sink("No event selected")
             return
-        event = self._events[idx]
         origin = event.preferred_origin()
         t0 = origin.time.datetime
         if t0.tzinfo is None:
@@ -232,17 +249,24 @@ class EventsTab(QWidget):
                         "sample_rate": float(chan.sample_rate or 0.0),
                         "start_date": chan.start_date, "end_date": chan.end_date,
                     })
-        self.stations_table.setRowCount(len(rows))
-        for r, row in enumerate(rows):
-            self.stations_table.setItem(r, 0, QTableWidgetItem(row["network"]))
-            self.stations_table.setItem(r, 1, QTableWidgetItem(row["station"]))
-            self.stations_table.setItem(r, 2, QTableWidgetItem(f"{row['location']}.{row['channel']}"))
-            self.stations_table.setItem(r, 3, QTableWidgetItem(f"{row['sample_rate']:.2f} Hz"))
-            self.stations_table.setItem(r, 4, QTableWidgetItem(f"{row['start_date']} → {row['end_date']}"))
-            item = self.stations_table.item(r, 0)
-            item.setData(Qt.ItemDataRole.UserRole, row)
+        with sorting_paused(self.stations_table):
+            self.stations_table.setRowCount(len(rows))
+            for r, row in enumerate(rows):
+                self._fill_station_row(r, row)
         self._status_sink(f"Found {len(rows)} channel(s) near event")
         self.stations_finished.emit()
+
+    def _fill_station_row(self, r: int, row: dict) -> None:
+        cells = (
+            SortableTableItem(row["network"]),
+            SortableTableItem(row["station"]),
+            SortableTableItem(f"{row['location']}.{row['channel']}"),
+            SortableTableItem(f"{row['sample_rate']:.2f} Hz", row["sample_rate"]),
+            SortableTableItem(f"{row['start_date']} → {row['end_date']}"),
+        )
+        cells[0].setData(Qt.ItemDataRole.UserRole, row)
+        for col, cell in enumerate(cells):
+            self.stations_table.setItem(r, col, cell)
 
     def _on_stations_failed(self, message: str):
         self._status_sink(f"Station search failed: {message}")

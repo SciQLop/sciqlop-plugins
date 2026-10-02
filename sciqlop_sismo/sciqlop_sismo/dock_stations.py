@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
 )
 
 from .fdsn_client import search_stations
+from .sortable import SORT_ROLE, sortable_tree_item, sorting_paused
 from .waterfall import order_rows, plot_live_waterfall
 
 
@@ -158,6 +159,7 @@ class StationsTab(QWidget):
         self._model = QStandardItemModel()
         self._model.setHorizontalHeaderLabels(["Code", "Sample rate", "Coverage"])
         self.results_tree.setModel(self._model)
+        self.results_tree.setSortingEnabled(True)
         root.addWidget(self.results_tree, 1)
 
         buttons = QHBoxLayout()
@@ -214,34 +216,18 @@ class StationsTab(QWidget):
         self.search_finished.emit()
 
     def _populate_tree(self, inv):
-        self._model.clear()
-        self._model.setHorizontalHeaderLabels(["Code", "Sample rate", "Coverage"])
-        for net in inv.networks:
-            net_item = QStandardItem(net.code)
-            net_item.setEditable(False)
-            for sta in net.stations:
-                sta_item = QStandardItem(sta.code)
-                sta_item.setEditable(False)
-                for chan in sta.channels:
-                    loc_chan = f"{chan.location_code}.{chan.code}"
-                    chan_item = QStandardItem(loc_chan)
-                    chan_item.setEditable(False)
-                    chan_item.setData({
-                        "network": net.code, "station": sta.code,
-                        "latitude": sta.latitude, "longitude": sta.longitude,
-                        "location": chan.location_code, "channel": chan.code,
-                        "sample_rate": float(chan.sample_rate or 0.0),
-                        "start_date": chan.start_date,
-                        "end_date": chan.end_date,
-                    }, Qt.ItemDataRole.UserRole)
-                    rate_item = QStandardItem(f"{chan.sample_rate or 0:.2f} Hz")
-                    rate_item.setEditable(False)
-                    coverage = f"{chan.start_date} → {chan.end_date}"
-                    cov_item = QStandardItem(coverage)
-                    cov_item.setEditable(False)
-                    sta_item.appendRow([chan_item, rate_item, cov_item])
-                net_item.appendRow([sta_item])
-            self._model.appendRow([net_item])
+        with sorting_paused(self.results_tree):
+            self._model.clear()
+            self._model.setSortRole(SORT_ROLE)
+            self._model.setHorizontalHeaderLabels(["Code", "Sample rate", "Coverage"])
+            for net in inv.networks:
+                net_item = sortable_tree_item(net.code)
+                for sta in net.stations:
+                    sta_item = sortable_tree_item(sta.code)
+                    for chan in sta.channels:
+                        sta_item.appendRow(_channel_tree_row(net, sta, chan))
+                    net_item.appendRow(_full_width_row(sta_item))
+                self._model.appendRow(_full_width_row(net_item))
         self.results_tree.expandAll()
 
     def _on_add_clicked(self):
@@ -313,6 +299,28 @@ class StationsTab(QWidget):
             if isinstance(payload, dict) and "channel" in payload:
                 rows.append(payload)
         return rows
+
+
+def _full_width_row(item) -> list:
+    """Qt's tree sort stops descending at a parent with fewer columns than the
+    sort column, so network/station rows get empty cells across all columns."""
+    return [item, sortable_tree_item(""), sortable_tree_item("")]
+
+
+def _channel_tree_row(net, sta, chan) -> list:
+    rate = float(chan.sample_rate or 0.0)
+    chan_item = sortable_tree_item(f"{chan.location_code}.{chan.code}")
+    chan_item.setData({
+        "network": net.code, "station": sta.code,
+        "latitude": sta.latitude, "longitude": sta.longitude,
+        "location": chan.location_code, "channel": chan.code,
+        "sample_rate": rate,
+        "start_date": chan.start_date,
+        "end_date": chan.end_date,
+    }, Qt.ItemDataRole.UserRole)
+    return [chan_item,
+            sortable_tree_item(f"{rate:.2f} Hz", rate),
+            sortable_tree_item(f"{chan.start_date} → {chan.end_date}")]
 
 
 def _to_qdatetime(dt: datetime):

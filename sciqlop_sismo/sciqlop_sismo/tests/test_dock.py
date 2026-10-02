@@ -416,3 +416,91 @@ def test_events_tab_waterfall_sorts_stations_near_the_event(qtbot, dock, fake_ca
 def test_events_tab_waterfall_needs_a_station_selection(qtbot, dock):
     qtbot.mouseClick(dock.events_tab.plot_waterfall_button, _Qt_LeftButton())
     assert "No station rows selected" in dock.status_label.text()
+
+
+def _catalog(*events):
+    """events: (lat, lon, mag) tuples."""
+    built = []
+    for i, (lat, lon, mag) in enumerate(events):
+        origin = MagicMock(latitude=lat, longitude=lon, depth=10000.0)
+        origin.time.datetime = datetime(2024, 4, 2, 14, i, tzinfo=timezone.utc)
+        event = MagicMock()
+        event.preferred_origin = MagicMock(return_value=origin)
+        event.preferred_magnitude = MagicMock(return_value=MagicMock(mag=mag))
+        built.append(event)
+    cat = MagicMock()
+    cat.__iter__ = MagicMock(side_effect=lambda: iter(built))
+    cat.__len__ = MagicMock(return_value=len(built))
+    return cat
+
+
+def _search_events(qtbot, tab, catalog):
+    with patch("sciqlop_sismo.dock_events.search_events", return_value=catalog):
+        with qtbot.waitSignal(tab.search_finished, timeout=5000):
+            qtbot.mouseClick(tab.search_button, _Qt_LeftButton())
+
+
+def _column(table, col):
+    return [table.item(r, col).text() for r in range(table.rowCount())]
+
+
+def test_events_sort_by_magnitude_numerically_and_keep_the_right_event(qtbot, dock):
+    from PySide6.QtCore import Qt
+    tab = dock.events_tab
+    _search_events(qtbot, tab, _catalog((10.0, 1.0, 10.0), (20.0, 2.0, 9.5), (30.0, 3.0, 4.2)))
+    assert tab.events_table.isSortingEnabled()
+    tab.events_table.sortItems(4, Qt.SortOrder.AscendingOrder)
+    assert _column(tab.events_table, 4) == ["4.2", "9.5", "10.0"]
+    tab.events_table.selectRow(0)
+    assert tab.selected_origin() == (30.0, 3.0)
+
+
+def test_events_refill_while_sorted_keeps_rows_whole(qtbot, dock):
+    from PySide6.QtCore import Qt
+    tab = dock.events_tab
+    _search_events(qtbot, tab, _catalog((10.0, 1.0, 5.0), (20.0, 2.0, 6.0)))
+    tab.events_table.sortItems(4, Qt.SortOrder.DescendingOrder)
+    _search_events(qtbot, tab, _catalog((1.0, 1.0, 7.0), (2.0, 2.0, 3.0), (3.0, 3.0, 5.0)))
+    rows = [(_column(tab.events_table, 1)[r], _column(tab.events_table, 4)[r]) for r in range(3)]
+    assert sorted(rows) == [("1.000", "7.0"), ("2.000", "3.0"), ("3.000", "5.0")]
+
+
+def _rate_inventory(*rates):
+    chans = [Channel(code=f"HH{i}", location_code="00", latitude=45.0, longitude=5.0,
+                     elevation=0.0, depth=0.0, sample_rate=rate,
+                     start_date=datetime(2010, 1, 1, tzinfo=timezone.utc),
+                     end_date=datetime(2099, 1, 1, tzinfo=timezone.utc))
+             for i, rate in enumerate(rates)]
+    sta = Station(code="SSB", latitude=45.0, longitude=5.0, elevation=0.0, channels=chans)
+    return Inventory(networks=[Network(code="G", stations=[sta])], source="test")
+
+
+def test_stations_near_event_sort_by_sample_rate_numerically(qtbot, dock, fake_catalog):
+    from PySide6.QtCore import Qt
+    tab = dock.events_tab
+    _search_events(qtbot, tab, fake_catalog)
+    tab.events_table.selectRow(0)
+    with patch("sciqlop_sismo.dock_events.search_stations", return_value=_rate_inventory(100.0, 20.0, 1.0)):
+        with qtbot.waitSignal(tab.stations_finished, timeout=5000):
+            qtbot.mouseClick(tab.find_stations_button, _Qt_LeftButton())
+    assert tab.stations_table.isSortingEnabled()
+    tab.stations_table.sortItems(3, Qt.SortOrder.AscendingOrder)
+    assert _column(tab.stations_table, 3) == ["1.00 Hz", "20.00 Hz", "100.00 Hz"]
+    tab.stations_table.selectRow(0)
+    assert [r["sample_rate"] for r in tab._selected_station_rows()] == [1.0]
+
+
+def test_stations_tree_sorts_channels_by_sample_rate_numerically(qtbot, dock):
+    from PySide6.QtCore import Qt
+    tab = dock.stations_tab
+    with patch("sciqlop_sismo.dock_stations.search_stations", return_value=_rate_inventory(100.0, 20.0, 1.0)):
+        with qtbot.waitSignal(tab.search_finished, timeout=5000):
+            qtbot.mouseClick(tab.search_button, _Qt_LeftButton())
+    assert tab.results_tree.isSortingEnabled()
+    tab.results_tree.sortByColumn(1, Qt.SortOrder.AscendingOrder)
+    model = tab.results_tree.model()
+    sta = model.index(0, 0, model.index(0, 0))
+    rates = [model.data(model.index(r, 1, sta)) for r in range(model.rowCount(sta))]
+    assert rates == ["1.00 Hz", "20.00 Hz", "100.00 Hz"]
+    payload = model.data(model.index(0, 0, sta), Qt.ItemDataRole.UserRole)
+    assert payload["sample_rate"] == 1.0
