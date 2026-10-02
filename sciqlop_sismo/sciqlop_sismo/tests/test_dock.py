@@ -387,3 +387,32 @@ def test_plot_waterfall_is_disabled_without_waterfall_support(qtbot, mock_provid
         qtbot.addWidget(w)
     assert not w.stations_tab.plot_waterfall_button.isEnabled()
     assert "0.13" in w.stations_tab.plot_waterfall_button.toolTip()
+
+
+def test_events_tab_waterfall_sorts_stations_near_the_event(qtbot, dock, fake_catalog, mock_provider):
+    """Stations found around an event plot as a record section: nearest first, over the
+    event's own search window (origin - 5 min .. + 25 min), not the Stations-tab pickers."""
+    tab = dock.events_tab
+    with patch("sciqlop_sismo.dock_events.search_events", return_value=fake_catalog):
+        with qtbot.waitSignal(tab.search_finished, timeout=5000):
+            qtbot.mouseClick(tab.search_button, _Qt_LeftButton())
+    tab.events_table.selectRow(0)
+    with patch("sciqlop_sismo.dock_events.search_stations", return_value=_two_station_inventory()):
+        with qtbot.waitSignal(tab.stations_finished, timeout=5000):
+            qtbot.mouseClick(tab.find_stations_button, _Qt_LeftButton())
+    tab.stations_table.selectAll()
+    panel = MagicMock()
+    panel.zoom_limit_seconds = 0
+    with patch("sciqlop_sismo.dock_stations._create_plot_panel", return_value=panel), \
+         patch("sciqlop_sismo.dock_stations._time_range", side_effect=lambda a, b: (a, b)):
+        qtbot.mouseClick(tab.plot_waterfall_button, _Qt_LeftButton())
+    assert _y_labels(panel) == ["G.NEAR.00.HHZ", "G.FAR.00.HHZ"]
+    origin = datetime(2024, 4, 2, 14, 0, tzinfo=timezone.utc)
+    assert panel.time_range == ((origin - timedelta(minutes=5)).timestamp(),
+                                (origin + timedelta(minutes=25)).timestamp())
+    assert mock_provider.add_channel.call_count == 2
+
+
+def test_events_tab_waterfall_needs_a_station_selection(qtbot, dock):
+    qtbot.mouseClick(dock.events_tab.plot_waterfall_button, _Qt_LeftButton())
+    assert "No station rows selected" in dock.status_label.text()

@@ -46,6 +46,48 @@ def _waterfall_supported() -> bool:
     return True
 
 
+def show_window(panel, start: datetime, stop: datetime) -> list[str]:
+    """A fresh panel shows "now", where an archive often has no data yet (IU.ADK lagged
+    ~8 h behind real time): show the searched window instead. Widen a shorter zoom
+    limit, or SciQLopPlots silently clips the window to it."""
+    try:
+        span = (stop - start).total_seconds()
+        if 0 < panel.zoom_limit_seconds < span:
+            panel.zoom_limit_seconds = span
+        panel.time_range = _time_range(start.timestamp(), stop.timestamp())
+    except Exception as exc:  # noqa: BLE001
+        return [f"couldn't set the time range: {exc}"]
+    return []
+
+
+_live_waterfalls = []  # strong refs: a feed must outlive the click handler that made it
+
+
+def open_waterfall(provider, rows: list[dict], origin: Optional[tuple], start: datetime,
+                   stop: datetime, status_sink: Callable[[str], None]) -> None:
+    """A new panel with a live waterfall of `rows` (already registered with the
+    provider), nearest first to `origin` when given, showing `start`..`stop`."""
+    global _live_waterfalls
+    try:
+        panel = _create_plot_panel()
+    except ImportError:
+        status_sink("SciQLop main-window plot API unavailable")
+        return
+    rows = order_rows(rows, origin)
+    try:
+        feed = plot_live_waterfall(
+            panel, rows, fetch=provider.get_data, t0=start.timestamp(), t1=stop.timestamp(),
+            on_failures=lambda f: status_sink("Waterfall: failed " + "; ".join(f)),
+        )
+    except Exception as exc:  # noqa: BLE001
+        status_sink(f"Waterfall failed: {type(exc).__name__}: {exc}")
+        return
+    _live_waterfalls = [w for w in _live_waterfalls if not w.stopped] + [feed]
+    failures = show_window(panel, start, stop)
+    summary = f"Waterfall of {len(rows)} channel(s)"
+    status_sink(f"{summary}; " + "; ".join(failures) if failures else summary)
+
+
 class _SearchSignals(QObject):
     completed = Signal(object)
     failed = Signal(str)
@@ -73,7 +115,6 @@ class StationsTab(QWidget):
         self._provider = provider
         self._status_sink = status_sink
         self.event_origin: Callable[[], Optional[tuple]] = lambda: None
-        self._waterfalls = []
         self._signals = _SearchSignals()
         self._signals.completed.connect(self._on_search_completed)
         self._signals.failed.connect(self._on_search_failed)
@@ -252,18 +293,7 @@ class StationsTab(QWidget):
         self._status_sink(f"{summary}; failed: " + "; ".join(failures) if failures else summary)
 
     def _show_searched_window(self, panel) -> list[str]:
-        """A fresh panel shows "now", where an archive often has no data yet (IU.ADK lagged
-        ~8 h behind real time): show the searched window instead. Widen a shorter zoom
-        limit, or SciQLopPlots silently clips the window to it."""
-        try:
-            start, stop = self._picked_window()
-            span = (stop - start).total_seconds()
-            if 0 < panel.zoom_limit_seconds < span:
-                panel.zoom_limit_seconds = span
-            panel.time_range = _time_range(start.timestamp(), stop.timestamp())
-        except Exception as exc:  # noqa: BLE001
-            return [f"couldn't set the time range: {exc}"]
-        return []
+        return show_window(panel, *self._picked_window())
 
     def _on_waterfall_clicked(self):
         rows = self._selected_channel_rows()
@@ -271,26 +301,8 @@ class StationsTab(QWidget):
             self._status_sink("No channel selected")
             return
         self._on_add_clicked()
-        try:
-            panel = _create_plot_panel()
-        except ImportError:
-            self._status_sink("SciQLop main-window plot API unavailable")
-            return
-        rows = order_rows(rows, self.event_origin())
-        start, stop = self._picked_window()
-        try:
-            feed = plot_live_waterfall(
-                panel, rows, fetch=self._provider.get_data,
-                t0=start.timestamp(), t1=stop.timestamp(),
-                on_failures=lambda f: self._status_sink("Waterfall: failed " + "; ".join(f)),
-            )
-        except Exception as exc:  # noqa: BLE001
-            self._status_sink(f"Waterfall failed: {type(exc).__name__}: {exc}")
-            return
-        self._waterfalls = [w for w in self._waterfalls if not w.stopped] + [feed]
-        failures = self._show_searched_window(panel)
-        summary = f"Waterfall of {len(rows)} channel(s)"
-        self._status_sink(f"{summary}; " + "; ".join(failures) if failures else summary)
+        open_waterfall(self._provider, rows, self.event_origin(), *self._picked_window(),
+                       status_sink=self._status_sink)
 
     def _selected_channel_rows(self) -> list[dict]:
         rows = []

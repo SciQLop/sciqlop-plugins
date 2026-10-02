@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
     QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
+from .dock_stations import _waterfall_supported, open_waterfall
 from .fdsn_client import search_events, search_stations
 
 
@@ -72,6 +73,9 @@ class EventsTab(QWidget):
         self._stations_signals.completed.connect(self._on_stations_completed)
         self._stations_signals.failed.connect(self._on_stations_failed)
         self._events = []  # cached list of obspy.event.Event from latest search
+        # (origin lat/lon, start, stop) behind the stations table; committed only when
+        # results land, so a failed search never pairs old stations with a new event.
+        self._stations_query = self._pending_stations_query = None
 
         root = QVBoxLayout(self)
         row = QHBoxLayout()
@@ -119,6 +123,12 @@ class EventsTab(QWidget):
         self.routing_combo.addItems(["iris-federator", "eida-routing", "IRIS", "RESIF", "GEOFON", "IPGP"])
         self.find_stations_button = QPushButton("Find stations")
         self.add_all_button = QPushButton("Add all to inventory")
+        self.plot_waterfall_button = QPushButton("Plot waterfall")
+        self.plot_waterfall_button.setToolTip(
+            "Selected stations stacked in one plot, nearest first to the event")
+        if not _waterfall_supported():
+            self.plot_waterfall_button.setEnabled(False)
+            self.plot_waterfall_button.setToolTip("Waterfall plots need SciQLop >= 0.13")
         for label, w in (
             ("Min radius°", self.min_radius_spin),
             ("Max radius°", self.max_radius_spin),
@@ -129,6 +139,7 @@ class EventsTab(QWidget):
             radius_row.addWidget(w)
         radius_row.addWidget(self.find_stations_button)
         radius_row.addWidget(self.add_all_button)
+        radius_row.addWidget(self.plot_waterfall_button)
         root.addLayout(radius_row)
 
         self.stations_table = QTableWidget(0, 5)
@@ -143,6 +154,7 @@ class EventsTab(QWidget):
         self.search_button.clicked.connect(self._on_search_events)
         self.find_stations_button.clicked.connect(self._on_find_stations)
         self.add_all_button.clicked.connect(self._on_add_all)
+        self.plot_waterfall_button.clicked.connect(self._on_plot_waterfall)
 
     def _on_search_events(self):
         self._status_sink(f"Searching {self.provider_combo.currentText()} events…")
@@ -194,6 +206,7 @@ class EventsTab(QWidget):
             t0 = t0.replace(tzinfo=timezone.utc)
         t_start = t0 - timedelta(minutes=5)
         t_end = t0 + timedelta(minutes=25)
+        self._pending_stations_query = ((origin.latitude, origin.longitude), t_start, t_end)
         self._status_sink("Searching stations around event…")
         QThreadPool.globalInstance().start(_SearchStationsRunnable(
             self._stations_signals,
@@ -207,12 +220,14 @@ class EventsTab(QWidget):
         ))
 
     def _on_stations_completed(self, inv):
+        self._stations_query = self._pending_stations_query
         rows = []
         for net in inv.networks:
             for sta in net.stations:
                 for chan in sta.channels:
                     rows.append({
                         "network": net.code, "station": sta.code,
+                        "latitude": sta.latitude, "longitude": sta.longitude,
                         "location": chan.location_code, "channel": chan.code,
                         "sample_rate": float(chan.sample_rate or 0.0),
                         "start_date": chan.start_date, "end_date": chan.end_date,
@@ -233,13 +248,25 @@ class EventsTab(QWidget):
         self._status_sink(f"Station search failed: {message}")
         self.stations_finished.emit()
 
+    def _selected_station_rows(self) -> list[dict]:
+        return [self.stations_table.item(index.row(), 0).data(Qt.ItemDataRole.UserRole)
+                for index in self.stations_table.selectionModel().selectedRows()]
+
+    def _on_plot_waterfall(self):
+        rows = self._selected_station_rows()
+        if not rows or self._stations_query is None:
+            self._status_sink("No station rows selected")
+            return
+        self._on_add_all()
+        origin, start, stop = self._stations_query
+        open_waterfall(self._provider, rows, origin, start, stop, status_sink=self._status_sink)
+
     def _on_add_all(self):
-        selected = self.stations_table.selectionModel().selectedRows()
+        selected = self._selected_station_rows()
         if not selected:
             self._status_sink("No station rows selected")
             return
-        for index in selected:
-            row = self.stations_table.item(index.row(), 0).data(Qt.ItemDataRole.UserRole)
+        for row in selected:
             self._provider.add_channel(
                 defer_refresh=True,
                 network=row["network"], station=row["station"],
