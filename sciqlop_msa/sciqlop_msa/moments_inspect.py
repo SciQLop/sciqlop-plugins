@@ -10,7 +10,7 @@ from datetime import date
 import numpy as np
 
 from .moments_compute import DayFits, fit_day
-from .moments_fit import FIT_MODELS, SPECIES_MASS_TABLE, accepted_fit, flux_to_phase_space_density, model_components, \
+from .moments_fit import FIT_MODELS, SPECIES_MASS_TABLE, accepted_fit, kinetic_energy_eV, flux_to_phase_space_density, model_components, \
     usable_points
 from .moments_source import DaySpectra, fetch_day
 
@@ -62,8 +62,9 @@ def record_view(spectra: DaySpectra, fits: DayFits, index: int, species: str) ->
     A, q = SPECIES_MASS_TABLE[species]
     flux = spectra.flux[index]
     f_obs = flux_to_phase_space_density(spectra.energy, flux, A, q)
-    return RecordView(time=float(spectra.time[index]), energy=spectra.energy, flux=flux, f_obs=f_obs,
-                      used=usable_points(flux, f_obs), candidates=list(fits.candidates[index]))
+    return RecordView(time=float(spectra.time[index]), energy=kinetic_energy_eV(spectra.energy, q),
+                      flux=flux, f_obs=f_obs, used=usable_points(flux, f_obs),
+                      candidates=list(fits.candidates[index]))
 
 
 def _nan_columns(view: RecordView, count: int) -> np.ndarray:

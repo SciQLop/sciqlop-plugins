@@ -124,3 +124,24 @@ def test_each_model_has_its_own_cached_day(monkeypatch):
     assert moments_compute.fit_day("h_plus", date(2025, 1, 8), "2max") == "2max"
     assert moments_compute.fit_day("h_plus", date(2025, 1, 8), "kap") == "kap"
     assert calls == ["kap", "2max"]
+
+
+def test_alpha_moments_are_recovered_from_their_kinetic_energy():
+    """The energy table is in volts (energy per charge): an alpha (q=2) at E volts has a
+    kinetic energy of 2E. Fitting the models on E returned T/q and n/q^1.5."""
+    from sciqlop_msa import moments_compute
+
+    A, q = moments_fit.SPECIES_MASS_TABLE["alphas"]
+    energy = np.logspace(0, np.log10(39200), 64)
+    kinetic = q * energy
+    f_true = moments_fit.maxwellian(kinetic, 2.0, 400.0, A)
+    m, e_kin_J = moments_fit.ion_mass_kg(A), kinetic * moments_fit.ELEMENTARY_CHARGE
+    flux = f_true * 2.0 * e_kin_J ** 2 / (m ** 2 * 1e4)
+    flux = np.where(flux >= moments_fit.NOISE_FLUX_THRESHOLD, flux, np.nan)
+    spectra = DaySpectra(time=np.array([1736300000.0]), energy=energy, flux=flux[np.newaxis, :])
+
+    with patch("sciqlop_msa.moments_compute.fetch_day", return_value=spectra):
+        result = moments_compute._fit_day_uncached("alphas", date(2025, 1, 8), model="max")
+
+    assert result.T_c[0] == pytest.approx(400.0, rel=0.02)
+    assert result.n_tot[0] == pytest.approx(2.0, rel=0.05)

@@ -115,3 +115,12 @@ def test_load_day_fits_with_the_chosen_model():
         moments_inspect.load_day("h_plus", date(2025, 1, 8), "kap")
 
     assert fit_day.call_args.args == ("h_plus", date(2025, 1, 8), "kap")
+
+
+def test_record_view_plots_alphas_on_their_kinetic_energy():
+    spectra = _synthetic_day_spectra()
+    fits = type("Fits", (), {"candidates": [[], []]})()
+
+    view = moments_inspect.record_view(spectra, fits, 0, "alphas")
+
+    np.testing.assert_allclose(view.energy, 2 * spectra.energy)

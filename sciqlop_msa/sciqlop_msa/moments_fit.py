@@ -50,6 +50,12 @@ def ion_mass_kg(A: float) -> float:
     return A * ATOMIC_MASS_UNIT
 
 
+def kinetic_energy_eV(E_per_charge: np.ndarray, q: int) -> np.ndarray:
+    """The MSA energy table is in volts (energy per charge): a q-charged ion at E volts
+    has q*E eV of kinetic energy. The models must see kinetic energy."""
+    return q * E_per_charge
+
+
 def flux_to_phase_space_density(E_eV: np.ndarray, F: np.ndarray, A: float, q: int) -> np.ndarray:
     """Convert differential directional energy flux [cm^-2 s^-1 sr^-1 eV^-1] to
     phase-space density [s^3/m^6] (Kara Youssef report, eq. 2)."""

@@ -13,7 +13,7 @@ from datetime import date, timedelta
 import numpy as np
 
 from .moments_fit import (SPECIES_MASS_TABLE, accepted_fit, fit_candidates,
-                          flux_to_phase_space_density, usable_points)
+                          flux_to_phase_space_density, kinetic_energy_eV, usable_points)
 from .moments_source import fetch_day
 
 _MIN_POINTS_TO_FIT = 6
@@ -68,13 +68,14 @@ def record_candidates(energy: np.ndarray, flux_row: np.ndarray, A: float, q: int
     mask = usable_points(flux_row, f_obs)
     if mask.sum() < _MIN_POINTS_TO_FIT:
         return []
-    return fit_candidates(energy, f_obs, mask, A, model)
+    return fit_candidates(kinetic_energy_eV(energy, q), f_obs, mask, A, model)
 
 
 _cached_fit_day = None
 # Bump when DayFits changes shape: cached entries live 30 days and an old pickle
 # would come back without the new fields.
-_FIT_CACHE_VERSION = 2
+# 3: alphas are fitted on kinetic energy (q*E), version 2 entries hold T/q, n/q^1.5.
+_FIT_CACHE_VERSION = 3
 
 
 def _make_cached_fit_day():
