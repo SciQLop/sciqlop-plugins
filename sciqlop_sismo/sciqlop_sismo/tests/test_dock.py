@@ -301,3 +301,89 @@ def test_a_failed_plot_is_reported_not_covered_by_a_success_message(qtbot, dock,
         qtbot.mouseClick(tab.plot_waveform_button, _Qt_LeftButton())
 
     assert "failed" in messages[-1].lower() and "sismo/G/SSB/00.HHZ/waveform" in messages[-1]
+
+
+def _two_station_inventory():
+    """FAR first in the inventory, so ordering by distance to an event at
+    (45, 5) must flip it."""
+    def station(code, lat):
+        chan = Channel(code="HHZ", location_code="00", latitude=lat, longitude=5.0,
+                       elevation=0.0, depth=0.0, sample_rate=100.0,
+                       start_date=datetime(2010, 1, 1, tzinfo=timezone.utc),
+                       end_date=datetime(2099, 1, 1, tzinfo=timezone.utc))
+        return Station(code=code, latitude=lat, longitude=5.0, elevation=0.0, channels=[chan])
+
+    net = Network(code="G", stations=[station("FAR", 60.0), station("NEAR", 45.1)])
+    return Inventory(networks=[net], source="test")
+
+
+def _search_and_select_all_channels(qtbot, tab, inventory):
+    with patch("sciqlop_sismo.dock_stations.search_stations", return_value=inventory):
+        with qtbot.waitSignal(tab.search_finished, timeout=5000):
+            qtbot.mouseClick(tab.search_button, _Qt_LeftButton())
+    model = tab.results_tree.model()
+    net = model.index(0, 0)
+    sel = tab.results_tree.selectionModel()
+    sel.clearSelection()
+    for s in range(model.rowCount(net)):
+        chan = model.index(0, 0, model.index(s, 0, net))
+        sel.select(chan, sel.SelectionFlag.Select | sel.SelectionFlag.Rows)
+
+
+def _plot_waterfall(qtbot, tab):
+    panel = MagicMock()
+    panel.zoom_limit_seconds = 0
+    with patch("sciqlop_sismo.dock_stations._create_plot_panel", return_value=panel), \
+         patch("sciqlop_sismo.dock_stations._time_range", side_effect=lambda a, b: (a, b)):
+        qtbot.mouseClick(tab.plot_waterfall_button, _Qt_LeftButton())
+    return panel
+
+
+def _y_labels(panel):
+    args, _ = panel.plots[-1].set_axis_tick_labels.call_args
+    assert args[0] == "y"
+    return [args[1][i] for i in sorted(args[1])]
+
+
+def test_plot_waterfall_draws_one_trace_per_selected_channel(qtbot, dock):
+    tab = dock.stations_tab
+    _search_and_select_all_channels(qtbot, tab, _two_station_inventory())
+    panel = _plot_waterfall(qtbot, tab)
+    panel.waterfall.assert_called_once()
+    x, y, z = panel.waterfall.call_args.args
+    assert len(y) == 2 and z.shape == (2, len(x))
+    assert panel.waterfall.call_args.kwargs["normalize"] is True
+    assert _y_labels(panel) == ["G.FAR.00.HHZ", "G.NEAR.00.HHZ"]
+
+
+def test_plot_waterfall_sorts_by_distance_to_the_selected_event(qtbot, dock, fake_catalog):
+    with patch("sciqlop_sismo.dock_events.search_events", return_value=fake_catalog):
+        with qtbot.waitSignal(dock.events_tab.search_finished, timeout=5000):
+            qtbot.mouseClick(dock.events_tab.search_button, _Qt_LeftButton())
+    dock.events_tab.events_table.selectRow(0)
+    tab = dock.stations_tab
+    _search_and_select_all_channels(qtbot, tab, _two_station_inventory())
+    panel = _plot_waterfall(qtbot, tab)
+    assert _y_labels(panel) == ["G.NEAR.00.HHZ", "G.FAR.00.HHZ"]
+
+
+def test_plot_waterfall_follows_the_panel_time_range(qtbot, dock, mock_provider):
+    tab = dock.stations_tab
+    _search_and_select_all_channels(qtbot, tab, _two_station_inventory())
+    panel = _plot_waterfall(qtbot, tab)
+    panel._impl.time_range_changed.connect.assert_called_once()
+    mock_provider.get_data.return_value = None
+    on_range_changed = panel._impl.time_range_changed.connect.call_args.args[0]
+    on_range_changed(MagicMock(start=lambda: 0.0, stop=lambda: 10.0))
+    qtbot.waitUntil(lambda: mock_provider.get_data.call_count == 2, timeout=3000)
+    uids = sorted(c.args[0] for c in mock_provider.get_data.call_args_list)
+    assert uids == ["G/FAR/00.HHZ/waveform", "G/NEAR/00.HHZ/waveform"]
+
+
+def test_plot_waterfall_is_disabled_without_waterfall_support(qtbot, mock_provider):
+    with patch("sciqlop_sismo.dock_stations._waterfall_supported", return_value=False):
+        from sciqlop_sismo.dock import SismoBrowserDock
+        w = SismoBrowserDock(provider=mock_provider)
+        qtbot.addWidget(w)
+    assert not w.stations_tab.plot_waterfall_button.isEnabled()
+    assert "0.13" in w.stations_tab.plot_waterfall_button.toolTip()

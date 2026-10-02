@@ -7,7 +7,7 @@ thread. No qasync (per `feedback_qasync_httpx_async_client`).
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Callable
+from typing import Callable, Optional
 
 from PySide6.QtCore import (
     QObject, QRunnable, Qt, QThreadPool, Signal,
@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
 )
 
 from .fdsn_client import search_stations
+from .waterfall import order_rows, plot_live_waterfall
 
 
 def _create_plot_panel():
@@ -37,6 +38,12 @@ def _time_range(t0, t1):
     return TimeRange(t0, t1)
 
 
+def _waterfall_supported() -> bool:
+    try:
+        from SciQLop.user_api.plot import Waterfall  # noqa: F401 — SciQLop >= 0.13
+    except ImportError:
+        return False
+    return True
 
 
 class _SearchSignals(QObject):
@@ -65,6 +72,8 @@ class StationsTab(QWidget):
         super().__init__(parent)
         self._provider = provider
         self._status_sink = status_sink
+        self.event_origin: Callable[[], Optional[tuple]] = lambda: None
+        self._waterfalls = []
         self._signals = _SearchSignals()
         self._signals.completed.connect(self._on_search_completed)
         self._signals.failed.connect(self._on_search_failed)
@@ -114,7 +123,15 @@ class StationsTab(QWidget):
         self.add_button = QPushButton("Add to inventory")
         self.plot_waveform_button = QPushButton("Plot waveform")
         self.plot_spectrogram_button = QPushButton("Plot spectrogram")
-        for b in (self.add_button, self.plot_waveform_button, self.plot_spectrogram_button):
+        self.plot_waterfall_button = QPushButton("Plot waterfall")
+        self.plot_waterfall_button.setToolTip(
+            "Selected waveforms stacked in one plot, nearest first to the event "
+            "selected in the Events tab")
+        if not _waterfall_supported():
+            self.plot_waterfall_button.setEnabled(False)
+            self.plot_waterfall_button.setToolTip("Waterfall plots need SciQLop >= 0.13")
+        for b in (self.add_button, self.plot_waveform_button, self.plot_spectrogram_button,
+                  self.plot_waterfall_button):
             buttons.addWidget(b)
         buttons.addStretch(1)
         root.addLayout(buttons)
@@ -123,6 +140,7 @@ class StationsTab(QWidget):
         self.add_button.clicked.connect(self._on_add_clicked)
         self.plot_waveform_button.clicked.connect(lambda: self._on_plot_clicked("waveform"))
         self.plot_spectrogram_button.clicked.connect(lambda: self._on_plot_clicked("spectrogram"))
+        self.plot_waterfall_button.clicked.connect(self._on_waterfall_clicked)
 
     def _on_search_clicked(self):
         self._status_sink(f"Searching {self.routing_combo.currentText()}…")
@@ -169,6 +187,7 @@ class StationsTab(QWidget):
                     chan_item.setEditable(False)
                     chan_item.setData({
                         "network": net.code, "station": sta.code,
+                        "latitude": sta.latitude, "longitude": sta.longitude,
                         "location": chan.location_code, "channel": chan.code,
                         "sample_rate": float(chan.sample_rate or 0.0),
                         "start_date": chan.start_date,
@@ -227,9 +246,15 @@ class StationsTab(QWidget):
                 panel.plot_product(path)
             except Exception as exc:  # noqa: BLE001
                 failures.append(f"{path}: {type(exc).__name__}: {exc}")
-        # A fresh panel shows "now", where an archive often has no data yet (IU.ADK lagged
-        # ~8 h behind real time): show the searched window instead. Widen a shorter zoom
-        # limit, or SciQLopPlots silently clips the window to it.
+        failures += self._show_searched_window(panel)
+        plotted = len(rows) - sum(1 for f in failures if f.startswith("sismo/"))
+        summary = f"Plotted {plotted}/{len(rows)} {kind}(s)"
+        self._status_sink(f"{summary}; failed: " + "; ".join(failures) if failures else summary)
+
+    def _show_searched_window(self, panel) -> list[str]:
+        """A fresh panel shows "now", where an archive often has no data yet (IU.ADK lagged
+        ~8 h behind real time): show the searched window instead. Widen a shorter zoom
+        limit, or SciQLopPlots silently clips the window to it."""
         try:
             start, stop = self._picked_window()
             span = (stop - start).total_seconds()
@@ -237,10 +262,35 @@ class StationsTab(QWidget):
                 panel.zoom_limit_seconds = span
             panel.time_range = _time_range(start.timestamp(), stop.timestamp())
         except Exception as exc:  # noqa: BLE001
-            failures.append(f"couldn't set the time range: {exc}")
-        plotted = len(rows) - sum(1 for f in failures if f.startswith("sismo/"))
-        summary = f"Plotted {plotted}/{len(rows)} {kind}(s)"
-        self._status_sink(f"{summary}; failed: " + "; ".join(failures) if failures else summary)
+            return [f"couldn't set the time range: {exc}"]
+        return []
+
+    def _on_waterfall_clicked(self):
+        rows = self._selected_channel_rows()
+        if not rows:
+            self._status_sink("No channel selected")
+            return
+        self._on_add_clicked()
+        try:
+            panel = _create_plot_panel()
+        except ImportError:
+            self._status_sink("SciQLop main-window plot API unavailable")
+            return
+        rows = order_rows(rows, self.event_origin())
+        start, stop = self._picked_window()
+        try:
+            feed = plot_live_waterfall(
+                panel, rows, fetch=self._provider.get_data,
+                t0=start.timestamp(), t1=stop.timestamp(),
+                on_failures=lambda f: self._status_sink("Waterfall: failed " + "; ".join(f)),
+            )
+        except Exception as exc:  # noqa: BLE001
+            self._status_sink(f"Waterfall failed: {type(exc).__name__}: {exc}")
+            return
+        self._waterfalls = [w for w in self._waterfalls if not w.stopped] + [feed]
+        failures = self._show_searched_window(panel)
+        summary = f"Waterfall of {len(rows)} channel(s)"
+        self._status_sink(f"{summary}; " + "; ".join(failures) if failures else summary)
 
     def _selected_channel_rows(self) -> list[dict]:
         rows = []

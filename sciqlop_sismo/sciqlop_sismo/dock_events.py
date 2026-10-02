@@ -5,7 +5,7 @@ Same threading model as the Stations tab (`QThreadPool` + `QRunnable`).
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from typing import Callable
+from typing import Callable, Optional
 
 from PySide6.QtCore import (
     QObject, QRunnable, Qt, QThreadPool, Signal,
@@ -173,6 +173,14 @@ class EventsTab(QWidget):
     def _on_events_failed(self, message: str):
         self._status_sink(f"Event search failed: {message}")
         self.search_finished.emit()
+
+    def selected_origin(self) -> Optional[tuple[float, float]]:
+        """(latitude, longitude) of the selected event, or None."""
+        idx = self.events_table.currentRow()
+        if idx < 0 or idx >= len(self._events):
+            return None
+        origin = self._events[idx].preferred_origin()
+        return float(origin.latitude), float(origin.longitude)
 
     def _on_find_stations(self):
         idx = self.events_table.currentRow()

@@ -46,7 +46,8 @@ _restore_real_pyside()
 
 # Stub the SciQLop modules the provider imports lazily. MagicMock auto-provides
 # `create_virtual_product` / `VirtualProductType`, so registration is a no-op.
-for _name in ("SciQLop", "SciQLop.user_api", "SciQLop.user_api.virtual_products"):
+for _name in ("SciQLop", "SciQLop.user_api", "SciQLop.user_api.virtual_products",
+              "SciQLop.user_api.plot"):
     sys.modules.setdefault(_name, MagicMock())
 
 
