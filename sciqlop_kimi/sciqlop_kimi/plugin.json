@@ -1,6 +1,6 @@
 {
   "name": "Kimi Chat",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Embedded Kimi chat dock for SciQLop, powered by the Kimi Code CLI over ACP. Delegates auth to the CLI (run `kimi login` once).",
   "authors": [
     {
