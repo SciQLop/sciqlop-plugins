@@ -24,5 +24,8 @@ def _isolate_caches():
 
     from speasy.core.cache import drop_matching_entries
 
+    from sciqlop_pyspedas import worker
+
     drop_matching_entries(re.compile(".*"))
+    worker.compute_all.cache_clear()
     yield
