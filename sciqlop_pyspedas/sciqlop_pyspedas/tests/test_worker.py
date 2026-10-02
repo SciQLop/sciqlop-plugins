@@ -81,14 +81,32 @@ def test_repeat_request_served_from_disk_cache(fake):
     assert len(fake.calls) == 1
 
 
-def test_no_data_is_cached_not_refetched(fake):
+def test_no_data_returns_none_and_is_retried_later(fake):
+    # pyspedas returns nothing both for real gaps and failed downloads, so an
+    # empty answer must never be cached or one glitch blanks the window forever.
     fake.has_data = False
-    first = _call("energy", T0, T0 + timedelta(minutes=30))
+    assert _call("energy", T0, T0 + timedelta(minutes=30)) is None
     worker.compute_all.cache_clear()
-    second = _call("energy", T0, T0 + timedelta(minutes=30))
-    assert first is None or len(first.time) == 0
-    assert second is None or len(second.time) == 0
-    assert len(fake.calls) == 1
+    fake.has_data = True
+    later = _call("energy", T0, T0 + timedelta(minutes=30))
+    assert later is not None and len(later.time) > 0
+    assert len(fake.calls) == 2
+
+
+def _span_hours(call):
+    t0, t1 = (datetime.strptime(t, "%Y-%m-%d/%H:%M:%S") for t in call["trange"])
+    return (t1 - t0).total_seconds() / 3600
+
+
+def test_compute_span_is_bounded_by_the_request(fake):
+    _call("energy", T0, T0 + timedelta(hours=6))
+    assert _span_hours(fake.calls[0]) <= 6
+
+
+def test_short_burst_request_computes_one_hour(fake):
+    start = T0 + timedelta(minutes=48)
+    _call("energy", start, start + timedelta(minutes=11, seconds=59), data_rate="brst")
+    assert _span_hours(fake.calls[0]) <= 1
 
 
 def test_cache_key_distinguishes_hpca_rates(fake):

@@ -74,12 +74,25 @@ def compute_all(source: Source, probe: str, data_rate: str, start: datetime, sto
         api.del_data("*")
 
 
+class _NothingToCache(Exception):
+    """pyspedas returned no spectrum: a real gap or a failed download, which it
+    cannot tell apart. Raised through Cacheable so the empty answer is never
+    stored; retrying a real gap only costs an SDC file-list query."""
+
+
 class _SpectrumCache:
     """Method-style holder: speasy's Cacheable wraps (self, product, start, stop, ...)."""
 
-    @Cacheable(prefix="pyspedas_mms", fragment_hours=lambda product: 1)
+    # simplify: a group mixing data and no-data hours still caches the empty hours.
+    # Upgrade path: split the result per hour and refuse to store empty hours.
+    # cache_margins=1.0 keeps the computed span at the hour-rounded request, so the
+    # range cap actually bounds the work.
+    @Cacheable(prefix="pyspedas_mms", fragment_hours=lambda product: 1, cache_margins=1.0)
     def spectrum(self, product, start_time, stop_time, *, source, probe, data_rate, output):
-        return compute_all(source, probe, data_rate, start_time, stop_time)[output]
+        result = compute_all(source, probe, data_rate, start_time, stop_time)[output]
+        if len(result.time) == 0:
+            raise _NothingToCache()
+        return result
 
 
 _CACHE = _SpectrumCache()
@@ -90,5 +103,8 @@ def worker_callback(start: float, stop: float, *, source: Source, output: str,
     t0 = datetime.fromtimestamp(float(start), tz=timezone.utc)
     t1 = datetime.fromtimestamp(float(stop), tz=timezone.utc)
     check_range(t0, t1, data_rate)
-    return _CACHE.spectrum(cache_key(source, probe, data_rate, output), t0, t1,
-                           source=source, probe=probe, data_rate=data_rate, output=output)
+    try:
+        return _CACHE.spectrum(cache_key(source, probe, data_rate, output), t0, t1,
+                               source=source, probe=probe, data_rate=data_rate, output=output)
+    except _NothingToCache:
+        return None
