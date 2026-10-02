@@ -1,11 +1,12 @@
 """Dock showing, record by record, the spectrum a moment fit used and every model it tried."""
 import threading
 from datetime import date, datetime, timezone
+from pathlib import Path
 
 import numpy as np
 from PySide6.QtCore import QDate, QObject, Qt, Signal
 from PySide6.QtGui import QColor
-from PySide6.QtWidgets import (QCheckBox, QComboBox, QDateEdit, QHBoxLayout, QLabel, QPushButton, QSlider,
+from PySide6.QtWidgets import (QCheckBox, QComboBox, QTabWidget, QTextBrowser, QDateEdit, QHBoxLayout, QLabel, QPushButton, QSlider,
                                QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
 
 from .moments_fit import CHI2_MAX, MODEL_CHOICES, NOISE_FLUX_THRESHOLD, SPECIES_MASS_TABLE
@@ -27,6 +28,13 @@ def _log_plot(x_label: str, y_label: str):
         axis.set_log(True)
         axis.set_label(label)
     return plot
+
+
+def _method_doc() -> QTextBrowser:
+    doc = QTextBrowser()
+    doc.setOpenExternalLinks(True)
+    doc.setMarkdown((Path(__file__).parent / "moments_method.md").read_text(encoding="utf-8"))
+    return doc
 
 
 def _where(mask: np.ndarray, values: np.ndarray) -> np.ndarray:
@@ -93,12 +101,18 @@ class FitInspector(QWidget):
         for widget in (QLabel("Species"), self._species, QLabel("Day"), self._day, QLabel("Model"), self._model, load, self._fitted_only):
             controls.addWidget(widget)
         controls.addWidget(self._record, stretch=1)
-        layout = QVBoxLayout(self)
+        inspector = QWidget()
+        layout = QVBoxLayout(inspector)
         layout.addLayout(controls)
         layout.addWidget(self._status)
         layout.addWidget(self._flux_plot, stretch=2)
         layout.addWidget(self._psd_plot, stretch=3)
         layout.addWidget(self._table, stretch=1)
+
+        tabs = QTabWidget()
+        tabs.addTab(inspector, "Inspector")
+        tabs.addTab(_method_doc(), "Method")
+        QVBoxLayout(self).addWidget(tabs)
 
     def _request_day(self):
         self._record.setEnabled(False)
