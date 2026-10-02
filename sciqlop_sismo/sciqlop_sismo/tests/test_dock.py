@@ -142,46 +142,27 @@ def test_plot_spectrogram_uses_spectrogram_uid(qtbot, dock, fake_inventory, mock
         assert args[0] == "sismo/G/SSB/00.HHZ/spectrogram"
 
 
-def test_plot_waveform_sets_panel_time_range_to_a_short_recent_window(
-        qtbot, dock, fake_inventory, mock_provider):
-    """A fresh SciQLop panel defaults its time range to "now" -- for a
-    channel whose data lives in the past (any real station, any archived
-    local file), the out-of-process callback then gets called for a window
-    with no data and silently renders an empty plot. The dock must push a
-    window onto the panel after plotting, the same way sciqlop_radio's dock
-    sets panel.time_range from the fetched rows' bounds after panel.plot(...).
-
-    That window must stay SHORT (well under the panel's default 1-day
-    zoom_limit_seconds) -- setting it to the channel's full nominal
-    coverage (start_date..end_date, which spans years for a still-running
-    station) gets silently centered-and-clipped by SciQLopPlots to a
-    1-day window around the MIDPOINT of that range, landing on an
-    arbitrary day with no guarantee of data. Ending the window at
-    min(now, channel end) and going back a fixed short duration keeps it
-    inside the zoom limit and biases it toward the point in the coverage
-    most likely to actually have data."""
+def test_plot_waveform_shows_the_searched_window(qtbot, dock, fake_inventory, mock_provider):
+    """A fresh panel defaults to "now", where an archive has no data yet (IU.ADK lagged ~8 h
+    behind real time): the panel must show the window the user searched, which is where they
+    expect data. A window longer than the panel's zoom limit widens the limit instead of
+    being silently clipped by SciQLopPlots."""
+    from sciqlop_sismo.dock_stations import _to_qdatetime
     tab = dock.stations_tab
-    with patch("sciqlop_sismo.dock_stations.search_stations", return_value=fake_inventory):
-        with qtbot.waitSignal(tab.search_finished, timeout=5000):
-            qtbot.mouseClick(tab.search_button, _Qt_LeftButton())
-    model = tab.results_tree.model()
-    chan = model.index(0, 0, model.index(0, 0, model.index(0, 0)))
-    sel = tab.results_tree.selectionModel()
-    sel.select(chan, sel.SelectionFlag.ClearAndSelect | sel.SelectionFlag.Rows)
-    panel = MagicMock()
-    sentinel = object()
-    before = datetime.now(tz=timezone.utc)
+    start = datetime(2026, 10, 2, 0, 0, tzinfo=timezone.utc)
+    stop = datetime(2026, 10, 2, 10, 1, tzinfo=timezone.utc)
+    tab.start_picker.setDateTime(_to_qdatetime(start))
+    tab.end_picker.setDateTime(_to_qdatetime(stop))
+    _search_and_select_first_channel(qtbot, tab, fake_inventory)
+    panel = _SciQLopLikePanel()
+    panel.zoom_limit_seconds = 3600.0
+
     with patch("sciqlop_sismo.dock_stations._create_plot_panel", return_value=panel), \
-         patch("sciqlop_sismo.dock_stations._time_range", return_value=sentinel) as tr:
+         patch("sciqlop_sismo.dock_stations._time_range", side_effect=lambda a, b: (a, b)):
         qtbot.mouseClick(tab.plot_waveform_button, _Qt_LeftButton())
-    after = datetime.now(tz=timezone.utc)
-    tr.assert_called_once()
-    (t0, t1), _ = tr.call_args
-    # fake_inventory's channel end_date is 2099 (still "operating"), so the
-    # window must end at now, not at that far-future nominal end_date.
-    assert before <= t1 <= after
-    assert t1 - t0 <= timedelta(hours=1)
-    assert panel.time_range is sentinel
+
+    assert panel.time_range == (start.timestamp(), stop.timestamp())
+    assert panel.zoom_limit_seconds == stop.timestamp() - start.timestamp()
 
 
 def test_plot_buttons_noop_when_create_plot_panel_unavailable(qtbot, dock, fake_inventory, mock_provider):
@@ -263,3 +244,60 @@ def test_local_tab_open_file_calls_provider(qtbot, dock, mock_provider, tmp_path
     mock_provider.add_channel_from_local.assert_called_once()
     info = mock_provider.add_channel_from_local.call_args.args[0]
     assert info.network == "XX"
+
+
+class _SciQLopLikePanel:
+    """Behaves like SciQLop's PlotPanel where it matters: plot() only takes a path, a
+    user_api VirtualProduct, a callable or data, and raises for the raw EasyProvider
+    objects the provider registers (a bare MagicMock accepted them and hid the bug)."""
+
+    def __init__(self, failing_paths=()):
+        self.plotted, self.time_range, self._failing = [], None, set(failing_paths)
+
+    def plot(self, product, *args, **kwargs):
+        if not isinstance(product, (str, list)):
+            raise ValueError("plot() could not interpret its arguments")
+        self.plotted.append(product)
+
+    def plot_product(self, path, *args, **kwargs):
+        if path in self._failing:
+            raise RuntimeError("no such product")
+        self.plotted.append(path)
+        return MagicMock(), MagicMock()
+
+
+def _search_and_select_first_channel(qtbot, tab, fake_inventory):
+    with patch("sciqlop_sismo.dock_stations.search_stations", return_value=fake_inventory):
+        with qtbot.waitSignal(tab.search_finished, timeout=5000):
+            qtbot.mouseClick(tab.search_button, _Qt_LeftButton())
+    model = tab.results_tree.model()
+    chan = model.index(0, 0, model.index(0, 0, model.index(0, 0)))
+    sel = tab.results_tree.selectionModel()
+    sel.select(chan, sel.SelectionFlag.ClearAndSelect | sel.SelectionFlag.Rows)
+
+
+def test_plot_waveform_plots_registered_channels_by_path(qtbot, dock, fake_inventory, mock_provider):
+    """The provider keeps raw EasyProvider objects (since the out-of-process products):
+    passing them to panel.plot() raised, every plot failed, and the panel stayed empty."""
+    mock_provider._virtual_products = {"sismo/G/SSB/00.HHZ/waveform": object()}
+    tab = dock.stations_tab
+    _search_and_select_first_channel(qtbot, tab, fake_inventory)
+    panel = _SciQLopLikePanel()
+
+    with patch("sciqlop_sismo.dock_stations._create_plot_panel", return_value=panel):
+        qtbot.mouseClick(tab.plot_waveform_button, _Qt_LeftButton())
+
+    assert panel.plotted == ["sismo/G/SSB/00.HHZ/waveform"]
+
+
+def test_a_failed_plot_is_reported_not_covered_by_a_success_message(qtbot, dock, fake_inventory, mock_provider):
+    tab = dock.stations_tab
+    _search_and_select_first_channel(qtbot, tab, fake_inventory)
+    panel = _SciQLopLikePanel(failing_paths={"sismo/G/SSB/00.HHZ/waveform"})
+    messages = []
+    tab._status_sink = messages.append
+
+    with patch("sciqlop_sismo.dock_stations._create_plot_panel", return_value=panel):
+        qtbot.mouseClick(tab.plot_waveform_button, _Qt_LeftButton())
+
+    assert "failed" in messages[-1].lower() and "sismo/G/SSB/00.HHZ/waveform" in messages[-1]

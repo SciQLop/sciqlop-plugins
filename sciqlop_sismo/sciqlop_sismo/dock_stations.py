@@ -6,7 +6,7 @@ thread. No qasync (per `feedback_qasync_httpx_async_client`).
 """
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Callable
 
 from PySide6.QtCore import (
@@ -37,15 +37,6 @@ def _time_range(t0, t1):
     return TimeRange(t0, t1)
 
 
-# A fresh panel's default zoom_limit_seconds is 1 day: a wider time_range
-# gets silently centered-and-clipped to that size (see PlotPanel.zoom_limit_seconds
-# docstring). A channel's nominal coverage (start_date..end_date) routinely
-# spans years for a still-operating station (end_date is often absent), so
-# pushing that full span lands the clip on an arbitrary day with no
-# guarantee of data. Stay well under the limit and end at the point in the
-# coverage most likely to actually have data: "now" for an active channel,
-# its real end_date for a retired one.
-_DEFAULT_PLOT_WINDOW = timedelta(hours=1)
 
 
 class _SearchSignals(QObject):
@@ -141,10 +132,15 @@ class StationsTab(QWidget):
             station=self.station_edit.text(),
             location=self.location_edit.text(),
             channel=self.channel_edit.text(),
-            start_time=self.start_picker.dateTime().toPython().replace(tzinfo=timezone.utc),
-            end_time=self.end_picker.dateTime().toPython().replace(tzinfo=timezone.utc),
+            start_time=self._picked_window()[0],
+            end_time=self._picked_window()[1],
             routing=self.routing_combo.currentText(),
         ))
+
+    def _picked_window(self) -> tuple:
+        """The Start/End UTC pickers as aware UTC datetimes."""
+        return tuple(p.dateTime().toPython().replace(tzinfo=timezone.utc)
+                     for p in (self.start_picker, self.end_picker))
 
     def _on_search_completed(self, inv):
         self._populate_tree(inv)
@@ -219,37 +215,32 @@ class StationsTab(QWidget):
         except ImportError:
             self._status_sink("SciQLop main-window plot API unavailable")
             return
+        failures = []
         for payload in rows:
             path = (
                 f"sismo/{payload['network']}/{payload['station']}/"
                 f"{payload['location']}.{payload['channel']}/{kind}"
             )
-            vp = self._provider._virtual_products.get(path)
+            # By path: the provider keeps raw EasyProvider objects, which panel.plot()
+            # rejects (it takes user_api VirtualProducts), the registered path it takes.
             try:
-                if vp is not None:
-                    panel.plot(vp)
-                else:
-                    panel.plot_product(path)
+                panel.plot_product(path)
             except Exception as exc:  # noqa: BLE001
-                self._status_sink(f"Plot failed for {path}: {type(exc).__name__}: {exc}")
-        # A fresh panel defaults its time range to "now" -- our products are
-        # live out-of-process callbacks (worker.py fetches whatever window
-        # SciQLop asks for), so without this every plot silently renders
-        # empty: the callback gets called for "now" instead of a window that
-        # actually has data. Mirrors sciqlop_radio's dock, which sets
-        # panel.time_range right after panel.plot(...) -- but unlike radio's
-        # naturally-short fetched-rows bounds, a channel's nominal coverage
-        # can span years, so end at the latest point likely to have data
-        # (now, or the channel's own end_date if it's already retired) and
-        # go back a short, zoom-limit-safe window (_DEFAULT_PLOT_WINDOW).
+                failures.append(f"{path}: {type(exc).__name__}: {exc}")
+        # A fresh panel shows "now", where an archive often has no data yet (IU.ADK lagged
+        # ~8 h behind real time): show the searched window instead. Widen a shorter zoom
+        # limit, or SciQLopPlots silently clips the window to it.
         try:
-            now = datetime.now(tz=timezone.utc)
-            t1 = min(max(_obspy_to_dt(p["end_date"]) for p in rows), now)
-            panel.time_range = _time_range(t1 - _DEFAULT_PLOT_WINDOW, t1)
+            start, stop = self._picked_window()
+            span = (stop - start).total_seconds()
+            if 0 < panel.zoom_limit_seconds < span:
+                panel.zoom_limit_seconds = span
+            panel.time_range = _time_range(start.timestamp(), stop.timestamp())
         except Exception as exc:  # noqa: BLE001
-            self._status_sink(f"Plotted, but couldn't set time range: {exc}")
-            return
-        self._status_sink(f"Plotted {len(rows)} {kind}(s)")
+            failures.append(f"couldn't set the time range: {exc}")
+        plotted = len(rows) - sum(1 for f in failures if f.startswith("sismo/"))
+        summary = f"Plotted {plotted}/{len(rows)} {kind}(s)"
+        self._status_sink(f"{summary}; failed: " + "; ".join(failures) if failures else summary)
 
     def _selected_channel_rows(self) -> list[dict]:
         rows = []
