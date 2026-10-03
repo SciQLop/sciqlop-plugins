@@ -68,15 +68,14 @@ def test_returns_requested_spectrum(fake):
 
 
 def test_sibling_spectra_share_one_compute(fake):
-    _call("energy", T0, T0 + timedelta(minutes=30))
-    _call("pa", T0, T0 + timedelta(minutes=30))
-    _call("gyro", T0, T0 + timedelta(minutes=30))
-    assert len(fake.calls) == 1
+    _call("energy", T0, T0 + timedelta(hours=24))
+    _call("pa", T0, T0 + timedelta(hours=24))
+    _call("gyro", T0, T0 + timedelta(hours=24))
+    assert len(fake.calls) == 24
 
 
 def test_repeat_request_served_from_disk_cache(fake):
     _call("energy", T0, T0 + timedelta(minutes=30))
-    worker.compute_all.cache_clear()
     _call("energy", T0, T0 + timedelta(minutes=30))
     assert len(fake.calls) == 1
 
@@ -86,27 +85,25 @@ def test_no_data_returns_none_and_is_retried_later(fake):
     # empty answer must never be cached or one glitch blanks the window forever.
     fake.has_data = False
     assert _call("energy", T0, T0 + timedelta(minutes=30)) is None
-    worker.compute_all.cache_clear()
     fake.has_data = True
     later = _call("energy", T0, T0 + timedelta(minutes=30))
     assert later is not None and len(later.time) > 0
     assert len(fake.calls) == 2
 
 
-def _span_hours(call):
-    t0, t1 = (datetime.strptime(t, "%Y-%m-%d/%H:%M:%S") for t in call["trange"])
-    return (t1 - t0).total_seconds() / 3600
+def _trange(call):
+    return [datetime.strptime(t, "%Y-%m-%d/%H:%M:%S") for t in call["trange"]]
 
 
-def test_compute_span_is_bounded_by_the_request(fake):
-    _call("energy", T0, T0 + timedelta(hours=6))
-    assert _span_hours(fake.calls[0]) <= 6
+def test_every_compute_is_one_hour_on_the_hour_grid(fake):
+    _call("energy", T0 + timedelta(minutes=30), T0 + timedelta(hours=3, minutes=10))
+    hours = [T0.replace(tzinfo=None) + timedelta(hours=h) for h in range(5)]
+    assert [_trange(c) for c in fake.calls] == [[a, b] for a, b in zip(hours, hours[1:])]
 
 
-def test_short_burst_request_computes_one_hour(fake):
-    start = T0 + timedelta(minutes=48)
-    _call("energy", start, start + timedelta(minutes=11, seconds=59), data_rate="brst")
-    assert _span_hours(fake.calls[0]) <= 1
+def test_burst_uses_the_same_fragments(fake):
+    _call("energy", T0, T0 + timedelta(hours=3), data_rate="brst")
+    assert len(fake.calls) == 3
 
 
 def test_cache_key_distinguishes_hpca_rates(fake):
@@ -115,18 +112,21 @@ def test_cache_key_distinguishes_hpca_rates(fake):
     assert [c["data_rate"] for c in fake.calls] == ["srvy", "brst"]
 
 
-def test_range_cap_boundary(fake):
+def test_long_window_is_returned_whole_and_trimmed(fake):
+    start = T0 + timedelta(minutes=30)
+    stop = start + timedelta(days=1)
+    v = _call("energy", start, stop)
+    assert len(fake.calls) == 25
+    naive = lambda t: np.datetime64(t.replace(tzinfo=None), "ns")
+    assert naive(start) <= v.time[0] <= naive(start + timedelta(minutes=1))
+    assert naive(stop - timedelta(minutes=1)) <= v.time[-1] <= naive(stop)
+    assert len(np.unique(v.time)) == len(v.time)
+
+
+def test_overlapping_window_reuses_cached_fragments(fake):
     _call("energy", T0, T0 + timedelta(hours=6))
-    with pytest.raises(worker.RangeTooLong, match="Zoom in"):
-        _call("energy", T0, T0 + timedelta(hours=6, seconds=1))
-    with pytest.raises(worker.RangeTooLong):
-        _call("energy", T0, T0 + timedelta(minutes=31), data_rate="brst")
-
-
-def test_refused_range_downloads_nothing(fake):
-    with pytest.raises(worker.RangeTooLong):
-        _call("energy", T0, T0 + timedelta(days=1))
-    assert fake.calls == []
+    _call("energy", T0, T0 + timedelta(hours=12))
+    assert len(fake.calls) == 12
 
 
 def test_store_cleared_after_compute(fake):

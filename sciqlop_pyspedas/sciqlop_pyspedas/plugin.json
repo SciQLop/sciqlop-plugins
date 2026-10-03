@@ -1,6 +1,6 @@
 {
   "name": "pyspedas",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Experimental: MMS FPI/HPCA energy, pitch-angle and gyrophase spectrograms computed by pyspedas",
   "authors": [
     {

@@ -1,36 +1,23 @@
-"""Worker-side MMS particle spectra: range cap → hour-fragment cache →
-one mms_part_getspec call for all spectra.
+"""Worker-side MMS particle spectra on a fixed cache grid: every window is cut
+into 1 h fragments aligned on UTC hours, each fragment is one
+mms_part_getspec call and one cache entry per spectrum.
 
 Runs in SciQLop's per-plugin remote worker: single-threaded, so pyspedas's
 global tplot store is never shared between concurrent requests."""
 import os
-from datetime import datetime, timezone
-from functools import lru_cache
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
-from speasy.core.cache import Cacheable
+import numpy as np
+from speasy.core.cache import add_item, get_item
+from speasy.products.variable import merge
 
 from .catalog import OUTPUTS, Source, cache_key, tplot_name
 from .convert import empty_spectrum, spectrum_variable
 
-# simplify: fixed caps tuned by hand during the experiment; burst requests
-# still compute whole hour fragments (burst data is sparse, so that stays small).
-# Upgrade path: a settings entry snapshotted into the callback at registration.
-MAX_HOURS = {"fast": 6.0, "srvy": 6.0, "brst": 0.5}
-
-
-class RangeTooLong(ValueError):
-    pass
-
-
-def check_range(start: datetime, stop: datetime, data_rate: str) -> None:
-    hours = (stop - start).total_seconds() / 3600
-    cap = MAX_HOURS[data_rate]
-    if hours > cap:
-        raise RangeTooLong(
-            f"MMS {data_rate} particle spectra: {hours:.1f} h requested, "
-            f"at most {cap:g} h per request. Zoom in."
-        )
+# One size for every data rate: bounds memory for burst electrons, and keeps
+# cache entries predictable (same key grid whatever window the user asks for).
+FRAGMENT = timedelta(hours=1)
 
 
 def configure_data_dir(environ=os.environ) -> None:
@@ -48,6 +35,14 @@ def _pyspedas_api() -> SimpleNamespace:
     return SimpleNamespace(getspec=mms_part_getspec, get_data=get_data, del_data=del_data)
 
 
+def fragments(start: datetime, stop: datetime):
+    """Start times of the fixed hour fragments covering [start, stop)."""
+    t = start.replace(minute=0, second=0, microsecond=0)
+    while t < stop:
+        yield t
+        t += FRAGMENT
+
+
 def _trange(start: datetime, stop: datetime) -> list:
     return [t.strftime("%Y-%m-%d/%H:%M:%S") for t in (start, stop)]
 
@@ -59,10 +54,8 @@ def _read_output(api, name: str, output: str, produced: list):
     return spectrum_variable(data.times, data.y, data.v, output, name)
 
 
-@lru_cache(maxsize=1)
 def compute_all(source: Source, probe: str, data_rate: str, start: datetime, stop: datetime) -> dict:
-    """All spectra for one window from a single getspec call; memoized so the
-    sibling spectra requested next for the same fragment cost nothing."""
+    """All spectra for one window from a single getspec call."""
     api = _pyspedas_api()
     try:
         produced = api.getspec(instrument=source.instrument, probe=probe, species=source.species,
@@ -74,37 +67,42 @@ def compute_all(source: Source, probe: str, data_rate: str, start: datetime, sto
         api.del_data("*")
 
 
-class _NothingToCache(Exception):
-    """pyspedas returned no spectrum: a real gap or a failed download, which it
-    cannot tell apart. Raised through Cacheable so the empty answer is never
-    stored; retrying a real gap only costs an SDC file-list query."""
+def _fragment_key(source, probe, data_rate, output, start: datetime) -> str:
+    return f"sciqlop_pyspedas/{cache_key(source, probe, data_rate, output)}/{start:%Y-%m-%dT%H}"
 
 
-class _SpectrumCache:
-    """Method-style holder: speasy's Cacheable wraps (self, product, start, stop, ...)."""
+def _compute_fragment(source, probe, data_rate, start: datetime) -> dict:
+    """Compute one fragment and cache every non-empty spectrum of it.
 
-    # simplify: a group mixing data and no-data hours still caches the empty hours.
-    # Upgrade path: split the result per hour and refuse to store empty hours.
-    # cache_margins=1.0 keeps the computed span at the hour-rounded request, so the
-    # range cap actually bounds the work.
-    @Cacheable(prefix="pyspedas_mms", fragment_hours=lambda product: 1, cache_margins=1.0)
-    def spectrum(self, product, start_time, stop_time, *, source, probe, data_rate, output):
-        result = compute_all(source, probe, data_rate, start_time, stop_time)[output]
-        if len(result.time) == 0:
-            raise _NothingToCache()
-        return result
+    Empty spectra are never cached: pyspedas returns nothing both for real gaps
+    and failed downloads, so caching would blank a window after one glitch.
+    Retrying a real gap only costs an SDC file-list query."""
+    spectra = compute_all(source, probe, data_rate, start, start + FRAGMENT)
+    for output, variable in spectra.items():
+        if len(variable.time):
+            add_item(_fragment_key(source, probe, data_rate, output, start), variable)
+    return spectra
 
 
-_CACHE = _SpectrumCache()
+def _fragment_spectrum(start: datetime, *, source, output, probe, data_rate):
+    cached = get_item(_fragment_key(source, probe, data_rate, output, start))
+    if cached is not None:
+        return cached
+    variable = _compute_fragment(source, probe, data_rate, start)[output]
+    return variable if len(variable.time) else None
+
+
+def _trim(variable, start: datetime, stop: datetime):
+    lo, hi = (np.datetime64(t.replace(tzinfo=None), "ns") for t in (start, stop))
+    keep = (variable.time >= lo) & (variable.time < hi)
+    return variable[keep] if keep.any() else None
 
 
 def worker_callback(start: float, stop: float, *, source: Source, output: str,
                     probe: str, data_rate: str):
     t0 = datetime.fromtimestamp(float(start), tz=timezone.utc)
     t1 = datetime.fromtimestamp(float(stop), tz=timezone.utc)
-    check_range(t0, t1, data_rate)
-    try:
-        return _CACHE.spectrum(cache_key(source, probe, data_rate, output), t0, t1,
-                               source=source, probe=probe, data_rate=data_rate, output=output)
-    except _NothingToCache:
-        return None
+    parts = [_fragment_spectrum(f, source=source, output=output, probe=probe, data_rate=data_rate)
+             for f in fragments(t0, t1)]
+    whole = merge([p for p in parts if p is not None])
+    return None if whole is None else _trim(whole, t0, t1)
