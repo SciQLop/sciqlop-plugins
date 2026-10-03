@@ -11,7 +11,7 @@ dependencies = [
     "pyspedas>=2.2,<3",
     "speasy>=1.7",
     "numpy",
-    "SciQLop>=0.13.0,<0.15.0",
+    "SciQLop>=0.14.0.dev0,<0.15.0",
 ]
 
 [project.optional-dependencies]
