@@ -143,7 +143,7 @@ def _register_entries(
     vp_types,
     speasy_module,
     *,
-    out_of_process: bool = True,
+    out_of_process: bool = False,
 ) -> CatalogRegistration:
     from .hints import extract_speasy_index_meta
 
@@ -181,7 +181,7 @@ def _register_entries(
 def register_catalog_products(
     catalog_path: Union[str, Path], *, speasy_module=None,
     vp_factory: Optional[Callable[..., Any]] = None,
-    out_of_process: bool = True,
+    out_of_process: bool = False,
 ) -> Optional[CatalogRegistration]:
     """Read the catalog and register one virtual product per resolvable entry.
 
@@ -189,8 +189,10 @@ def register_catalog_products(
     and `None` when SciQLop's virtual-products API isn't importable (headless
     tests) — mirroring `continuous.register_continuous_products`.
 
-    `out_of_process` defaults to True: each `speasy.get_data` fetch runs in
-    SciQLop's remote worker process instead of the GUI thread."""
+    `out_of_process` defaults to False, like native Speasy products. The fetch
+    already runs on SciQLop's fetch threads, and out of process only arrays
+    come back: SciQLop can't refine hints from the variable, so the log
+    scales (absent from the CDA inventory) are lost."""
     entries = load_catalog(catalog_path)
     if not entries:
         return CatalogRegistration()

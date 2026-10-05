@@ -188,7 +188,9 @@ def test_register_entries_registers_resolvable_skips_unresolvable():
     assert created[0][1] == "SPEC"
     assert created[0][2]["speasy_id"] == "amda/ok"
     assert created[0][2]["UNITS"] == "dB"
-    assert created[0][4] is True
+    # In-process like native Speasy: only then does SciQLop refine hints from
+    # the fetched variable (log scales live there, not in the CDA inventory).
+    assert created[0][4] is False
     assert reg.vps == {"radio/Wind/WAVES/RAD1": "VP[radio/Wind/WAVES/RAD1]"}
 
 
@@ -203,8 +205,8 @@ def test_register_entries_out_of_process_default_can_be_overridden():
         captured.append(out_of_process)
         return path
 
-    _register_entries(entries, vp_factory, _fake_vp_types(), sp, out_of_process=False)
-    assert captured == [False]
+    _register_entries(entries, vp_factory, _fake_vp_types(), sp, out_of_process=True)
+    assert captured == [True]
 
 
 def test_register_entries_passes_labels_for_non_spectrogram():
