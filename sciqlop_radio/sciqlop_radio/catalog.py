@@ -113,7 +113,8 @@ def _vp_type_for(entry_type: str, vp_types):
 
 def _build_callback(entry: "CuratedRadioProduct", speasy_module):
     """Return SciQLop's `(start: float, stop: float) -> SpeasyVariable | None`
-    callback. Never raises into SciQLop's data thread.
+    callback. Fetch errors propagate: SciQLop records them on the graph,
+    whereas returning None would pass a failure off as "no data in range".
 
     The signature is the canonical user_api shape: two annotated positional
     args, no `*args`/`**kwargs`. SciQLop's `extract_specs_from_callback`
@@ -124,11 +125,7 @@ def _build_callback(entry: "CuratedRadioProduct", speasy_module):
     def _cb(start: float, stop: float):
         t0 = datetime.fromtimestamp(start, tz=timezone.utc)
         t1 = datetime.fromtimestamp(stop, tz=timezone.utc)
-        try:
-            return speasy_module.get_data(entry.speasy_id, t0, t1)
-        except Exception as exc:  # noqa: BLE001
-            log.warning("catalog(%s): get_data failed: %s", entry.path, exc)
-            return None
+        return speasy_module.get_data(entry.speasy_id, t0, t1)
 
     return _cb
 

@@ -146,7 +146,10 @@ def test_callback_fetches_via_speasy_get_data():
     assert sp.calls and sp.calls[0][0] == "amda/x"
 
 
-def test_callback_swallows_get_data_error_returns_none():
+def test_callback_lets_get_data_error_reach_sciqlop():
+    """Returning None made a failed fetch look like "no data in range" and
+    hid a broken out-of-process Speasy for weeks. SciQLop records a raised
+    error on the graph instead (in-process and remote alike)."""
     from sciqlop_radio.catalog import CuratedRadioProduct, _build_callback
 
     def boom(pid, t0, t1):
@@ -155,7 +158,8 @@ def test_callback_swallows_get_data_error_returns_none():
     sp = SimpleNamespace(get_data=boom)
     e = CuratedRadioProduct(path="A/B", speasy_id="amda/x")
     cb = _build_callback(e, sp)
-    assert cb(1_700_000_000.0, 1_700_000_900.0) is None
+    with pytest.raises(RuntimeError, match="upstream down"):
+        cb(1_700_000_000.0, 1_700_000_900.0)
 
 
 def _fake_vp_types():
