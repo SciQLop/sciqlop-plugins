@@ -1,10 +1,13 @@
 """Real MMS SDC download + mms_part_getspec. Run with: -m live"""
+import importlib.util
 from datetime import datetime, timezone
 
 import numpy as np
 import pytest
 
-pytest.importorskip("pyspedas")
+# Not importorskip: importing pyspedas freezes its data dir before the fixture sets it.
+if importlib.util.find_spec("pyspedas") is None:
+    pytest.skip("pyspedas not installed", allow_module_level=True)
 
 from sciqlop_pyspedas import worker  # noqa: E402
 from sciqlop_pyspedas.catalog import SOURCES  # noqa: E402

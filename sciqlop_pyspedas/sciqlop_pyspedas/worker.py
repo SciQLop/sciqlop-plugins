@@ -32,6 +32,9 @@ def _pyspedas_api() -> SimpleNamespace:
     from pyspedas import del_data, get_data
     from pyspedas.projects.mms import mms_part_getspec
 
+    from . import espec, regrid
+    espec.install()
+    regrid.install()
     return SimpleNamespace(getspec=mms_part_getspec, get_data=get_data, del_data=del_data)
 
 
