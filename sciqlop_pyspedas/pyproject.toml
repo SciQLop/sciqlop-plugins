@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "sciqlop-pyspedas"
-version = "0.1.1"
+version = "0.1.2"
 description = "Experimental SciQLop plugin: MMS particle spectra computed by pyspedas"
 requires-python = ">=3.10"
 dependencies = [
