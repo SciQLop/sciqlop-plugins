@@ -14,12 +14,13 @@ authenticated for, and the values it returns are the only ones
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
 import sys
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from SciQLop.components.agents.acp import AcpAgentBackend
 from SciQLop.components.agents.acp.sessions import acp_config_options
@@ -188,4 +189,70 @@ def fetch_models() -> List[Tuple[str, Optional[str]]]:
         return choices
     models = acp_config_options([exe, "acp"]).get("model", [])
     choices.extend((label, value) for label, value in models if value)
-    return choices
+    return _promote(choices, best_free_model(model_metadata(exe)))
+
+
+def _promote(choices: List[Tuple[str, Optional[str]]], value: Optional[str]):
+    """Move `value` to the top; a no-op when ACP did not offer it."""
+    if value is None:
+        return choices
+    return sorted(choices, key=lambda choice: choice[1] != value)
+
+
+def model_metadata(exe: str) -> Dict[str, dict]:
+    """Per-model metadata (cost, capabilities, release date) from the CLI.
+
+    ACP's model list carries only labels and values, so ranking needs this
+    second, bounded call. Any failure just means no promotion.
+    """
+    try:
+        proc = subprocess.run(
+            [exe, "models", "--verbose"], capture_output=True, text=True, timeout=15
+        )
+    except (OSError, subprocess.SubprocessError):
+        return {}
+    return parse_verbose_models(proc.stdout)
+
+
+def parse_verbose_models(text: str) -> Dict[str, dict]:
+    """Parse `opencode models --verbose`: a `provider/id` line, then its JSON."""
+    decoder = json.JSONDecoder()
+    models: Dict[str, dict] = {}
+    pos = 0
+    while (brace := text.find("{", pos)) != -1:
+        header = text[pos:brace].strip().rpartition("\n")[2].strip()
+        try:
+            meta, pos = decoder.raw_decode(text, brace)
+        except json.JSONDecodeError:
+            break
+        if header:
+            models[header] = meta
+    return models
+
+
+def _is_free_agent_model(meta: dict) -> bool:
+    cost = meta.get("cost") or {}
+    capabilities = meta.get("capabilities") or {}
+    return (
+        meta.get("status", "active") == "active"
+        and cost.get("input") == 0
+        and cost.get("output") == 0
+        and capabilities.get("toolcall") is True
+    )
+
+
+def _free_model_rank(meta: dict) -> Tuple[bool, str, int]:
+    # simplify: opencode exposes no quality score, so "best" is a proxy —
+    # reasoning, then newest (free tiers rotate in fresh models), then context.
+    # Upgrade path: join a benchmark leaderboard if this picks poorly.
+    return (
+        bool((meta.get("capabilities") or {}).get("reasoning")),
+        meta.get("release_date") or "",
+        (meta.get("limit") or {}).get("context") or 0,
+    )
+
+
+def best_free_model(metadata: Dict[str, dict]) -> Optional[str]:
+    """Value of the highest-ranked free, tool-capable, active model, if any."""
+    candidates = {key: meta for key, meta in metadata.items() if _is_free_agent_model(meta)}
+    return max(candidates, key=lambda key: _free_model_rank(candidates[key]), default=None)
