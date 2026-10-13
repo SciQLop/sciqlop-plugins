@@ -238,6 +238,8 @@ def _is_free_agent_model(meta: dict) -> bool:
         and cost.get("input") == 0
         and cost.get("output") == 0
         and capabilities.get("toolcall") is True
+        # The agent inspects plot screenshots; text-only models can't see them.
+        and (capabilities.get("input") or {}).get("image") is True
     )
 
 
@@ -253,6 +255,6 @@ def _free_model_rank(meta: dict) -> Tuple[bool, str, int]:
 
 
 def best_free_model(metadata: Dict[str, dict]) -> Optional[str]:
-    """Value of the highest-ranked free, tool-capable, active model, if any."""
+    """Value of the highest-ranked free, active model with tools and image input."""
     candidates = {key: meta for key, meta in metadata.items() if _is_free_agent_model(meta)}
     return max(candidates, key=lambda key: _free_model_rank(candidates[key]), default=None)

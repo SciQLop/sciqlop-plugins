@@ -3,12 +3,16 @@ import json
 import subprocess
 
 
-def _meta(cost=0, toolcall=True, reasoning=True, release="2026-01-01", context=128000, status="active"):
+def _meta(cost=0, toolcall=True, reasoning=True, release="2026-01-01", context=128000, status="active", image=True):
     return {
         "status": status,
         "cost": {"input": cost, "output": cost, "cache": {"read": 0, "write": 0}},
         "limit": {"context": context, "output": 32000},
-        "capabilities": {"toolcall": toolcall, "reasoning": reasoning},
+        "capabilities": {
+            "toolcall": toolcall,
+            "reasoning": reasoning,
+            "input": {"text": True, "image": image},
+        },
         "release_date": release,
     }
 
@@ -43,6 +47,17 @@ def test_best_free_model_ignores_paid_toolless_and_deprecated_models():
         "ok": _meta(release="2025-01-01"),
     }
     assert bk.best_free_model(metadata) == "ok"
+
+
+def test_best_free_model_requires_image_input():
+    # The agent inspects plot screenshots; a text-only model can't see them.
+    from sciqlop_opencode import backend as bk
+
+    assert bk.best_free_model({
+        "text-only-newest": _meta(image=False, release="2026-10-01"),
+        "sees-images": _meta(release="2025-01-01"),
+    }) == "sees-images"
+    assert bk.best_free_model({"text-only": _meta(image=False)}) is None
 
 
 def test_best_free_model_prefers_reasoning_then_newest_then_largest_context():
