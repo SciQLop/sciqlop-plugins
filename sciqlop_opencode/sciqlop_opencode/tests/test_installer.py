@@ -1,5 +1,5 @@
 """Managed opencode install via the bundled npm: same mechanism as
-`npm i -g opencode-ai`, but into a user-writable prefix so it needs no
+`npm i -g @opencode/cli`, but into a user-writable prefix so it needs no
 admin rights and survives SciQLop updates (which wipe the bundled node dir)."""
 
 import subprocess
@@ -17,7 +17,7 @@ def test_install_command_targets_user_prefix(monkeypatch, tmp_path):
     cmd = inst.install_command(tmp_path)
     assert cmd[:2] == ["/x/node/npm", "install"]
     assert "--prefix" in cmd and str(tmp_path) in cmd
-    assert "opencode-ai" in cmd
+    assert "@opencode/cli" in cmd
     assert "-g" not in cmd
 
 
@@ -95,7 +95,7 @@ def test_install_command_spawns_node_with_cli_js(monkeypatch, tmp_path):
     monkeypatch.setattr(inst.shutil, "which", lambda _: str(npm))
     cmd = inst.install_command(tmp_path / "prefix")
     assert cmd[:2] == [str(node), str(cli)]
-    assert "--prefix" in cmd and "opencode-ai" in cmd
+    assert "--prefix" in cmd and "@opencode/cli" in cmd
 
 
 def test_install_command_falls_back_to_npm_entry_point(monkeypatch, tmp_path):

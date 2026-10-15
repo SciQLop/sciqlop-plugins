@@ -38,7 +38,7 @@ class _InstallDialog(QDialog):
     """Offers the one-click npm install and streams its progress.
 
     The worker thread runs `npm install --prefix <user-data>/opencode
-    opencode-ai` so a blocking install never stalls the Qt main thread.
+    @opencode/cli` so a blocking install never stalls the Qt main thread.
     """
 
     def __init__(self, parent=None):
@@ -50,7 +50,7 @@ class _InstallDialog(QDialog):
         layout.addWidget(
             QLabel(
                 "The opencode CLI was not found on this machine.\n"
-                "Install it now with the bundled npm? (~180 MB, no admin rights needed)"
+                "Install it now with the bundled npm? (~210 MB, no admin rights needed)"
             )
         )
         self._log = QTextEdit()

@@ -1,6 +1,6 @@
 """One-click opencode install through the bundled npm.
 
-Same mechanism as `npm i -g opencode-ai` (a thin wrapper plus a ~180 MB
+Same mechanism as `npm i -g @opencode/cli` (a thin wrapper plus a ~210 MB
 platform binary via optionalDependencies), but into a user-writable prefix
 under SciQLop's user-data dir: no admin rights, and it survives SciQLop
 updates, which wipe the bundled node dir. The launcher already prepends the
@@ -50,13 +50,13 @@ def _npm_cli_js(npm: str) -> Optional[str]:
 
 
 def install_command(prefix: Path) -> List[str]:
-    """npm argv installing opencode-ai into `prefix`. No `-g`: the global
+    """npm argv installing opencode 2 (`@opencode/cli`) into `prefix`. No `-g`: the global
     prefix would land inside the SciQLop install dir."""
     npm = find_npm()
     if npm is None:
         raise RuntimeError(
             "npm not found — install Node.js from https://nodejs.org, "
-            "then run `npm i -g opencode-ai` manually."
+            "then run `npm i -g @opencode/cli` manually."
         )
     node = _node_for_npm(npm)
     cli = _npm_cli_js(npm)

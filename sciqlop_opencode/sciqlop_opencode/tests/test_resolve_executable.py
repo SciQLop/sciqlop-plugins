@@ -125,13 +125,34 @@ def test_fetch_models_uses_resolved_command(monkeypatch):
     assert seen == [["/opt/homebrew/bin/opencode", "acp"]]
 
 
-def test_managed_executable_finds_postinstall_binary(monkeypatch, tmp_path):
-    bk = _mod()
-    bindir = tmp_path / "node_modules" / "opencode-ai" / "bin"
+def _fake_managed_binary(prefix, package):
+    bindir = prefix / "node_modules" / package / "bin"
     bindir.mkdir(parents=True)
     (bindir / "opencode.exe").write_bytes(b"fake")
+    return str(bindir / "opencode.exe")
+
+
+def test_managed_executable_finds_postinstall_binary(monkeypatch, tmp_path):
+    bk = _mod()
+    binary = _fake_managed_binary(tmp_path, "@opencode/cli")
     monkeypatch.setattr(bk, "managed_prefix", lambda: tmp_path)
-    assert bk.managed_executable() == str(bindir / "opencode.exe")
+    assert bk.managed_executable() == binary
+
+
+def test_managed_executable_still_finds_a_v1_install(monkeypatch, tmp_path):
+    # Installs made before the v2 switch keep working until reinstalled.
+    bk = _mod()
+    binary = _fake_managed_binary(tmp_path, "opencode-ai")
+    monkeypatch.setattr(bk, "managed_prefix", lambda: tmp_path)
+    assert bk.managed_executable() == binary
+
+
+def test_managed_executable_prefers_v2_over_v1(monkeypatch, tmp_path):
+    bk = _mod()
+    _fake_managed_binary(tmp_path, "opencode-ai")
+    v2 = _fake_managed_binary(tmp_path, "@opencode/cli")
+    monkeypatch.setattr(bk, "managed_prefix", lambda: tmp_path)
+    assert bk.managed_executable() == v2
 
 
 def test_managed_executable_returns_none_when_absent(monkeypatch, tmp_path):

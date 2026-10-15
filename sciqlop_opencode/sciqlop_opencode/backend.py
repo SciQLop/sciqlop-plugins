@@ -25,7 +25,9 @@ from typing import Dict, List, Optional, Tuple
 from SciQLop.components.agents.acp import AcpAgentBackend
 from SciQLop.components.agents.acp.sessions import acp_config_options
 
-NPM_PACKAGE = "opencode-ai"
+NPM_PACKAGE = "@opencode/cli"
+# Managed installs made before the opencode 2 switch; still runnable.
+LEGACY_NPM_PACKAGE = "opencode-ai"
 MANAGED_DIRNAME = "opencode"
 
 _DEFAULT_MODEL_CHOICES: List[Tuple[str, Optional[str]]] = [
@@ -45,18 +47,19 @@ def managed_prefix() -> Optional[Path]:
 def managed_executable() -> Optional[str]:
     """Real binary npm's postinstall drops under the managed prefix.
 
-    Verified against a real `npm install --prefix P opencode-ai`:
-    `P/node_modules/opencode-ai/bin/opencode.exe` is the platform binary
-    (an ELF on Linux despite the name). The bin/ path is used because on
-    Windows npm only writes `.cmd`/`.ps1` shims into `.bin`, which can't be
-    spawned without a shell.
+    Verified against a real `npm install --prefix P @opencode/cli`:
+    `P/node_modules/@opencode/cli/bin/opencode.exe` is the platform binary
+    (an ELF on Linux despite the name); v1's `opencode-ai` used the same
+    layout. The bin/ path is used because on Windows npm only writes
+    `.cmd`/`.ps1` shims into `.bin`, which can't be spawned without a shell.
     """
     prefix = managed_prefix()
     if prefix is None:
         return None
     candidates = [
-        prefix / "node_modules" / NPM_PACKAGE / "bin" / "opencode.exe",
-        prefix / "node_modules" / NPM_PACKAGE / "bin" / "opencode",
+        prefix / "node_modules" / package / "bin" / name
+        for package in (NPM_PACKAGE, LEGACY_NPM_PACKAGE)
+        for name in ("opencode.exe", "opencode")
     ]
     for candidate in candidates:
         if candidate.is_file():
@@ -143,13 +146,13 @@ def _missing_message() -> str:
     if os.name == "nt":
         install = (
             "install it with `scoop install opencode`, `choco install opencode` or "
-            "`npm i -g opencode-ai` — or click Install when the dock offers it. "
+            "`npm i -g @opencode/cli` — or click Install when the dock offers it. "
             "A WSL-only install is not reachable from native SciQLop."
         )
     elif sys.platform == "darwin":
-        install = "install it with `brew install anomalyco/tap/opencode` or `npm i -g opencode-ai`."
+        install = "install it with `brew install anomalyco/tap/opencode` or `npm i -g @opencode/cli`."
     else:
-        install = "install it with `curl -fsSL https://opencode.ai/install | bash` or `npm i -g opencode-ai`."
+        install = "install it with `curl -fsSL https://opencode.ai/install | bash` or `npm i -g @opencode/cli`."
     return f"opencode CLI not found — {install} Then run `opencode auth login` once."
 
 
@@ -203,53 +206,64 @@ def model_metadata(exe: str) -> Dict[str, dict]:
     """Per-model metadata (cost, capabilities, release date) from the CLI.
 
     ACP's model list carries only labels and values, so ranking needs this
-    second, bounded call. Any failure just means no promotion.
+    second, bounded call. `--standalone` runs a private server for the call:
+    plain `opencode api` would start opencode's persistent background service.
+    Any failure just means no promotion.
     """
     try:
         proc = subprocess.run(
-            [exe, "models", "--verbose"], capture_output=True, text=True, timeout=15
+            [exe, "api", "--standalone", "model.list"],
+            capture_output=True,
+            text=True,
+            timeout=30,
         )
     except (OSError, subprocess.SubprocessError):
         return {}
-    return parse_verbose_models(proc.stdout)
+    return parse_model_list(proc.stdout)
 
 
-def parse_verbose_models(text: str) -> Dict[str, dict]:
-    """Parse `opencode models --verbose`: a `provider/id` line, then its JSON."""
-    decoder = json.JSONDecoder()
-    models: Dict[str, dict] = {}
-    pos = 0
-    while (brace := text.find("{", pos)) != -1:
-        header = text[pos:brace].strip().rpartition("\n")[2].strip()
-        try:
-            meta, pos = decoder.raw_decode(text, brace)
-        except json.JSONDecodeError:
-            break
-        if header:
-            models[header] = meta
-    return models
+def parse_model_list(text: str) -> Dict[str, dict]:
+    """`{provider/id: meta}` from the `model.list` JSON response."""
+    try:
+        data = json.loads(text).get("data")
+    except (json.JSONDecodeError, AttributeError):
+        return {}
+    if not isinstance(data, list):
+        return {}
+    return {
+        f"{meta['providerID']}/{meta['id']}": meta
+        for meta in data
+        if isinstance(meta, dict) and "providerID" in meta and "id" in meta
+    }
+
+
+def _base_cost(meta: dict) -> dict:
+    # `cost` is a list of pricing tiers; the first is the base rate.
+    tiers = meta.get("cost") or [{}]
+    return tiers[0] if isinstance(tiers[0], dict) else {}
 
 
 def _is_free_agent_model(meta: dict) -> bool:
-    cost = meta.get("cost") or {}
+    cost = _base_cost(meta)
     capabilities = meta.get("capabilities") or {}
     return (
         meta.get("status", "active") == "active"
         and cost.get("input") == 0
         and cost.get("output") == 0
-        and capabilities.get("toolcall") is True
+        and capabilities.get("tools") is True
         # The agent inspects plot screenshots; text-only models can't see them.
-        and (capabilities.get("input") or {}).get("image") is True
+        and "image" in (capabilities.get("input") or [])
     )
 
 
-def _free_model_rank(meta: dict) -> Tuple[bool, str, int]:
+def _free_model_rank(meta: dict) -> Tuple[bool, int, int]:
     # simplify: opencode exposes no quality score, so "best" is a proxy —
-    # reasoning, then newest (free tiers rotate in fresh models), then context.
-    # Upgrade path: join a benchmark leaderboard if this picks poorly.
+    # reasoning (effort variants), then newest (free tiers rotate in fresh
+    # models), then context. Upgrade path: join a benchmark leaderboard if
+    # this picks poorly.
     return (
-        bool((meta.get("capabilities") or {}).get("reasoning")),
-        meta.get("release_date") or "",
+        bool(meta.get("variants")),
+        (meta.get("time") or {}).get("released") or 0,
         (meta.get("limit") or {}).get("context") or 0,
     )
 
