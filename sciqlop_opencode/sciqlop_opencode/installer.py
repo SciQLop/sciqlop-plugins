@@ -11,12 +11,16 @@ bundled node dir to the child's PATH, so `npm` resolves via `shutil.which`
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
 from typing import Callable, List, Optional
 
-from .backend import NPM_PACKAGE, managed_prefix
+from .backend import NPM_PACKAGE, is_managed, managed_prefix
+
+# CSI sequences (colors, cursor moves) from CLIs that draw spinners.
+_ANSI_ESCAPE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
 
 
 def find_npm() -> Optional[str]:
@@ -76,6 +80,18 @@ def install_command(prefix: Path) -> List[str]:
     ]
 
 
+def upgrade_command(exe: str) -> List[str]:
+    """argv moving the opencode 1 install at `exe` to opencode 2.
+
+    Our own install is simply reinstalled as v2 into its prefix. A user's
+    install goes through v1's `upgrade --major`, which knows how it was
+    installed (curl, brew, npm, scoop…) and removes v1 itself.
+    """
+    if is_managed(exe):
+        return install_command(ensure_managed_prefix())
+    return [exe, "upgrade", "--major"]
+
+
 def run_install(
     command: List[str], on_line: Optional[Callable[[str], None]] = None
 ) -> None:
@@ -95,7 +111,7 @@ def run_install(
     ) as proc:
         assert proc.stdout is not None
         for line in proc.stdout:
-            line = line.rstrip()
+            line = _ANSI_ESCAPE.sub("", line).rstrip()
             tail.append(line)
             tail[:] = tail[-20:]
             if on_line is not None:

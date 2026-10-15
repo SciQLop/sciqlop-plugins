@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -140,6 +141,27 @@ def resolve_opencode_executable() -> Optional[str]:
         ):
             return candidate
     return _shell_probe()
+
+
+def opencode_major_version(exe: str) -> Optional[int]:
+    """Major version of the CLI at `exe`, or None when it can't be told.
+
+    v1 prints `1.19.0`, v2 prints `opencode v2.0.29`.
+    """
+    try:
+        proc = subprocess.run(
+            [exe, "--version"], capture_output=True, text=True, timeout=10
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    match = re.search(r"(\d+)\.\d+\.\d+", proc.stdout)
+    return int(match.group(1)) if match else None
+
+
+def is_managed(exe: str) -> bool:
+    """True when `exe` is our own npm install, not one the user made."""
+    prefix = managed_prefix()
+    return prefix is not None and Path(exe).is_relative_to(prefix)
 
 
 def _missing_message() -> str:

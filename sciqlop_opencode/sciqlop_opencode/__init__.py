@@ -7,6 +7,7 @@ only a backend.
 """
 
 import threading
+from typing import Callable, List
 
 from PySide6.QtCore import QObject, QTimer, Signal
 from PySide6.QtWidgets import (
@@ -22,7 +23,13 @@ from PySide6.QtWidgets import (
 from SciQLop.components.agents import ensure_agent_dock, register_agent_backend
 
 from . import installer
-from .backend import OpencodeBackend, fetch_models, resolve_opencode_executable
+from .backend import (
+    OpencodeBackend,
+    fetch_models,
+    is_managed,
+    opencode_major_version,
+    resolve_opencode_executable,
+)
 
 
 class _InstallSignals(QObject):
@@ -35,31 +42,34 @@ class _InstallSignals(QObject):
 
 
 class _InstallDialog(QDialog):
-    """Offers the one-click npm install and streams its progress.
+    """Offers a one-click install (or upgrade) command and streams its progress.
 
-    The worker thread runs `npm install --prefix <user-data>/opencode
-    @opencode/cli` so a blocking install never stalls the Qt main thread.
+    The command runs on a worker thread so a blocking npm install or
+    `opencode upgrade` never stalls the Qt main thread.
     """
 
-    def __init__(self, parent=None):
+    def __init__(
+        self,
+        parent,
+        title: str,
+        message: str,
+        action: str,
+        command: Callable[[], List[str]],
+    ):
         super().__init__(parent)
-        self.setWindowTitle("Install opencode CLI?")
+        self.setWindowTitle(title)
         self._cancelled = False
+        self._command = command
 
         layout = QVBoxLayout(self)
-        layout.addWidget(
-            QLabel(
-                "The opencode CLI was not found on this machine.\n"
-                "Install it now with the bundled npm? (~210 MB, no admin rights needed)"
-            )
-        )
+        layout.addWidget(QLabel(message))
         self._log = QTextEdit()
         self._log.setReadOnly(True)
         self._log.hide()
         layout.addWidget(self._log)
 
         buttons = QDialogButtonBox(QDialogButtonBox.Cancel)
-        self._install_button = buttons.addButton("Install", QDialogButtonBox.AcceptRole)
+        self._install_button = buttons.addButton(action, QDialogButtonBox.AcceptRole)
         self._install_button.clicked.connect(self._start_install)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
@@ -73,8 +83,7 @@ class _InstallDialog(QDialog):
         self._install_button.setEnabled(False)
         self._log.show()
         try:
-            prefix = installer.ensure_managed_prefix()
-            command = installer.install_command(prefix)
+            command = self._command()
         except Exception as e:
             self._on_failure(str(e))
             return
@@ -97,7 +106,7 @@ class _InstallDialog(QDialog):
         self._log.append(line)
 
     def _on_failure(self, msg: str) -> None:
-        QMessageBox.warning(self, "Install failed", msg)
+        QMessageBox.warning(self, "opencode setup failed", msg)
         self.reject()
 
     def reject(self) -> None:
@@ -105,24 +114,27 @@ class _InstallDialog(QDialog):
         super().reject()
 
 
-def run_install_flow(parent) -> bool:
-    """Run the install dialog end-to-end. Returns True on success."""
-    dialog = _InstallDialog(parent)
+def _run_dialog_flow(parent, dialog: _InstallDialog) -> bool:
+    """Run an install/upgrade dialog end-to-end. Returns True on success."""
     if dialog.exec() != QDialog.Accepted:
         return False
     # Let Qt render the dialog close before we block the main thread on the
-    # model fetch, otherwise the install dialog visually lingers until it
-    # finishes.
+    # model fetch, otherwise the dialog visually lingers until it finishes.
     dialog.deleteLater()
     QApplication.processEvents()
+    _refresh_models(parent)
+    return True
+
+
+def _refresh_models(parent) -> None:
     try:
         models = fetch_models()
         if models:
             OpencodeBackend.model_choices = models
     except Exception:
         pass
-    # Refresh the dock's model dropdown — the bind happened before opencode
-    # was installed, so `model_choices` was still just [("Default", None)].
+    # Refresh the dock's model dropdown — it was bound before the install
+    # or upgrade, so it still shows the old model list.
     try:
         window = parent.window() if hasattr(parent, "window") else None
         if window is not None:
@@ -132,15 +144,56 @@ def run_install_flow(parent) -> bool:
                 reload()
     except Exception:
         pass
-    return True
+
+
+def run_install_flow(parent) -> bool:
+    return _run_dialog_flow(parent, _InstallDialog(
+        parent,
+        title="Install opencode CLI?",
+        message=(
+            "The opencode CLI was not found on this machine.\n"
+            "Install it now with the bundled npm? (~210 MB, no admin rights needed)"
+        ),
+        action="Install",
+        command=lambda: installer.install_command(installer.ensure_managed_prefix()),
+    ))
+
+
+def run_upgrade_flow(parent, exe: str) -> bool:
+    if is_managed(exe):
+        message = (
+            "SciQLop's opencode install is version 1.\n"
+            "Upgrade it to opencode 2? (~210 MB download)"
+        )
+    else:
+        message = (
+            f"The opencode CLI at {exe} is version 1.\n"
+            "Upgrade it to opencode 2? This runs 'opencode upgrade --major',\n"
+            "which also upgrades opencode in your terminal. Your configuration is kept."
+        )
+    return _run_dialog_flow(parent, _InstallDialog(
+        parent,
+        title="Upgrade to opencode 2?",
+        message=message,
+        action="Upgrade",
+        command=lambda: installer.upgrade_command(exe),
+    ))
+
+
+# CLI paths already offered the upgrade this session: "Cancel" must not nag on
+# every dock activation, but a restart asks again.
+_upgrade_offered: set = set()
 
 
 # Attached to OpencodeBackend so the shared chat dock can call it.
 def _backend_on_activated(self) -> None:
-    if resolve_opencode_executable() is not None:
-        return
-    # Defer so the dock finishes binding the session before we pop up a modal.
-    QTimer.singleShot(0, lambda: run_install_flow(self._main_window))
+    exe = resolve_opencode_executable()
+    # Defer the modals so the dock finishes binding the session first.
+    if exe is None:
+        QTimer.singleShot(0, lambda: run_install_flow(self._main_window))
+    elif exe not in _upgrade_offered and opencode_major_version(exe) == 1:
+        _upgrade_offered.add(exe)
+        QTimer.singleShot(0, lambda: run_upgrade_flow(self._main_window, exe))
 
 
 OpencodeBackend.on_activated = _backend_on_activated
