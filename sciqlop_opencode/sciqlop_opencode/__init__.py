@@ -15,7 +15,6 @@ from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
     QLabel,
-    QMessageBox,
     QTextEdit,
     QVBoxLayout,
 )
@@ -106,8 +105,12 @@ class _InstallDialog(QDialog):
         self._log.append(line)
 
     def _on_failure(self, msg: str) -> None:
-        QMessageBox.warning(self, "opencode setup failed", msg)
-        self.reject()
+        # Stay open: the upgrade is required, so the way out of a failure is
+        # a retry, not a dead end.
+        self._log.show()
+        self._log.append(f"Failed: {msg}")
+        self._install_button.setText("Retry")
+        self._install_button.setEnabled(True)
 
     def reject(self) -> None:
         self._cancelled = True
@@ -162,27 +165,23 @@ def run_install_flow(parent) -> bool:
 def run_upgrade_flow(parent, exe: str) -> bool:
     if is_managed(exe):
         message = (
-            "SciQLop's opencode install is version 1.\n"
-            "Upgrade it to opencode 2? (~210 MB download)"
+            "SciQLop's opencode install is version 1, which is no longer supported.\n"
+            "Upgrade it to opencode 2 to use the Opencode backend. (~210 MB download)"
         )
     else:
         message = (
-            f"The opencode CLI at {exe} is version 1.\n"
-            "Upgrade it to opencode 2? This runs 'opencode upgrade --major',\n"
-            "which also upgrades opencode in your terminal. Your configuration is kept."
+            f"The opencode CLI at {exe} is version 1, which is no longer supported.\n"
+            "Upgrade it to opencode 2 to use the Opencode backend. This runs\n"
+            "'opencode upgrade --major', which also upgrades opencode in your terminal.\n"
+            "Your configuration is kept."
         )
     return _run_dialog_flow(parent, _InstallDialog(
         parent,
-        title="Upgrade to opencode 2?",
+        title="opencode 2 required",
         message=message,
         action="Upgrade",
         command=lambda: installer.upgrade_command(exe),
     ))
-
-
-# CLI paths already offered the upgrade this session: "Cancel" must not nag on
-# every dock activation, but a restart asks again.
-_upgrade_offered: set = set()
 
 
 # Attached to OpencodeBackend so the shared chat dock can call it.
@@ -191,8 +190,7 @@ def _backend_on_activated(self) -> None:
     # Defer the modals so the dock finishes binding the session first.
     if exe is None:
         QTimer.singleShot(0, lambda: run_install_flow(self._main_window))
-    elif exe not in _upgrade_offered and opencode_major_version(exe) == 1:
-        _upgrade_offered.add(exe)
+    elif opencode_major_version(exe) == 1:
         QTimer.singleShot(0, lambda: run_upgrade_flow(self._main_window, exe))
 
 

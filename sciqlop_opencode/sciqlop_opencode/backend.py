@@ -188,6 +188,13 @@ class OpencodeBackend(AcpAgentBackend):
         exe = resolve_opencode_executable()
         if exe is None:
             raise RuntimeError(_missing_message())
+        # Checked on every spawn, not cached: `opencode upgrade --major`
+        # replaces the binary at the same path.
+        if opencode_major_version(exe) == 1:
+            raise RuntimeError(
+                "opencode 1 is no longer supported — SciQLop needs opencode 2. "
+                "Reopen the Opencode backend to upgrade, or run `opencode upgrade --major`."
+            )
         return [exe, "acp"]
 
     def check_prerequisites(self) -> None:

@@ -93,7 +93,6 @@ def _activate(monkeypatch, exe, major):
     monkeypatch.setattr(plugin.QTimer, "singleShot", lambda _ms, fn: fn())
     monkeypatch.setattr(plugin, "run_install_flow", lambda _w: offers.append("install"))
     monkeypatch.setattr(plugin, "run_upgrade_flow", lambda _w, e: offers.append(("upgrade", e)))
-    monkeypatch.setattr(plugin, "_upgrade_offered", set())
     backend = plugin.OpencodeBackend.__new__(plugin.OpencodeBackend)
     backend._main_window = None
     return backend, offers
@@ -105,11 +104,13 @@ def test_activation_offers_install_when_missing(monkeypatch):
     assert offers == ["install"]
 
 
-def test_activation_offers_upgrade_once_per_session_for_v1(monkeypatch):
+def test_activation_requires_the_upgrade_every_time_for_v1(monkeypatch):
+    # Not an offer: closing the dialog leaves the backend unusable, so the
+    # next activation asks again.
     backend, offers = _activate(monkeypatch, "/x/opencode", 1)
     backend.on_activated()
     backend.on_activated()
-    assert offers == [("upgrade", "/x/opencode")]
+    assert offers == [("upgrade", "/x/opencode")] * 2
 
 
 def test_activation_is_silent_for_v2_or_unknown_versions(monkeypatch):
@@ -117,3 +118,36 @@ def test_activation_is_silent_for_v2_or_unknown_versions(monkeypatch):
         backend, offers = _activate(monkeypatch, "/x/opencode", major)
         backend.on_activated()
         assert offers == []
+
+
+def test_no_chat_starts_on_opencode_1(monkeypatch):
+    import pytest
+    from sciqlop_opencode import backend as bk
+
+    monkeypatch.setattr(bk, "resolve_opencode_executable", lambda: "/x/opencode")
+    monkeypatch.setattr(bk, "opencode_major_version", lambda _exe: 1)
+    backend = bk.OpencodeBackend.__new__(bk.OpencodeBackend)
+    with pytest.raises(RuntimeError, match="opencode 2"):
+        backend.acp_command()
+
+
+def test_chat_starts_on_opencode_2_or_unknown_versions(monkeypatch):
+    from sciqlop_opencode import backend as bk
+
+    monkeypatch.setattr(bk, "resolve_opencode_executable", lambda: "/x/opencode")
+    backend = bk.OpencodeBackend.__new__(bk.OpencodeBackend)
+    for major in (2, None):
+        monkeypatch.setattr(bk, "opencode_major_version", lambda _exe, m=major: m)
+        assert backend.acp_command() == ["/x/opencode", "acp"]
+
+
+def test_failed_upgrade_keeps_the_dialog_open_for_a_retry():
+    import sciqlop_opencode as plugin
+
+    dialog = plugin._InstallDialog(None, "t", "m", "Upgrade", command=lambda: [])
+    dialog._start_install = lambda: None
+    dialog._on_failure("npm exploded")
+    assert not dialog._cancelled
+    assert dialog._install_button.isEnabled()
+    assert dialog._install_button.text() == "Retry"
+    assert "npm exploded" in dialog._log.toPlainText()
