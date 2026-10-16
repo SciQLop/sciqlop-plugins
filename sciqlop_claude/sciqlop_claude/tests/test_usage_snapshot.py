@@ -81,6 +81,25 @@ def test_canonical_model_is_found_on_a_later_model_usage_entry():
     assert snapshot.model == "Opus 4.5"
 
 
+def test_main_loop_model_wins_over_a_cheap_side_call_listed_first():
+    """The CLI runs side calls (titles, summaries, WebFetch) on Haiku; when one
+    lands first in modelUsage the strip must still show the main-loop model,
+    which is the entry that carried the conversation's prompt."""
+    from sciqlop_claude.backend import result_to_usage
+
+    snapshot = result_to_usage(_result(model_usage={
+        "claude-haiku-4-5-20251001": {
+            "canonicalModel": "claude-haiku-4-5", "inputTokens": 300,
+            "outputTokens": 40, "cacheReadInputTokens": 0,
+            "cacheCreationInputTokens": 0},
+        "claude-opus-4-5-20251101": {
+            "canonicalModel": "claude-opus-4-5", "inputTokens": 12,
+            "outputTokens": 30, "cacheReadInputTokens": 38_000,
+            "cacheCreationInputTokens": 900},
+    }))
+    assert snapshot.model == "claude-opus-4-5"
+
+
 def test_falls_back_to_the_raw_model_key_without_a_canonical_name():
     from sciqlop_claude.backend import result_to_usage
 

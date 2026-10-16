@@ -763,12 +763,30 @@ def _display_model(result) -> Optional[str]:
     """Prefer `model_usage[...].canonicalModel` — a stable resolved name that
     survives provider-specific aliases (claude-agent-sdk >= 0.2.126)."""
     model_usage = getattr(result, "model_usage", None) or {}
-    for entry in model_usage.values():
-        if isinstance(entry, dict) and entry.get("canonicalModel"):
-            return entry["canonicalModel"]
-    # a multi-model turn (a subagent on another model) can carry the canonical
-    # name on any entry, so the raw key is only a last resort.
-    return next(iter(model_usage), None)
+    if not model_usage:
+        return None
+    # The CLI also bills cheap side calls (titles, summaries, WebFetch) on
+    # Haiku, in whatever order they ran. The main loop is the entry that
+    # carried the conversation's prompt, so rank by prompt size rather than
+    # trusting dict order; a canonical name breaks ties over a raw key.
+    key, entry = max(
+        model_usage.items(),
+        key=lambda item: (_prompt_tokens(item[1]), bool(_canonical(item[1]))),
+    )
+    return _canonical(entry) or key
+
+
+def _canonical(entry) -> Optional[str]:
+    return entry.get("canonicalModel") if isinstance(entry, dict) else None
+
+
+def _prompt_tokens(entry) -> int:
+    if not isinstance(entry, dict):
+        return 0
+    return sum(
+        entry.get(field) or 0
+        for field in ("inputTokens", "cacheReadInputTokens", "cacheCreationInputTokens")
+    )
 
 
 _WINDOW_LABELS = {
