@@ -30,28 +30,33 @@ Order inside each section is the suggested build order.
 
 ## Edit
 
-- [ ] **E1 — Document model with dirty state** (M)
-  One editable object per tab wrapping the `pycdfpp.CDF`, emitting "changed".
-  Tab title gets a `•` when modified; closing a modified tab asks Save / Discard / Cancel.
+A `pycdfpp.CDF` is mostly immutable (no rename, no attribute delete, no overwrite).
+So we don't edit it. We load it into our own model, edit the model, and build a fresh CDF on save.
+
+- [ ] **E1 — Document model** (M)
+  Frozen dataclasses: `Document(attributes, variables)`, `Var(name, type, shape, nrv, compression, attributes, values)`.
+  Keep everything a round-trip needs: data types (epoch / tt2000 / char), NRV, per-variable compression, majority.
+  `values` stays lazy: it points at the source `pycdfpp.Variable` until an edit replaces it with an array.
+  Edits are pure functions `Document -> Document`. Unchanged parts are shared, so arrays are never copied.
+  Exposes the same read surface the views use today (`doc[name]`, `in`, `.items()`, `.attributes`, `.values`),
+  so `file_view` / `tree_model` / `AnalysisWorker` switch over with few changes.
+  `to_cdf(doc) -> pycdfpp.CDF` for save. Test: load → `to_cdf` → save → reload gives the same skeleton and values.
+  Tab gets a `•` when modified; closing a modified tab asks Save / Discard / Cancel.
   Prerequisite for every other Edit item.
 - [ ] **E2 — Save / Save As** (S) — depends on E1
-  `pycdfpp.save`. Ctrl+S / Ctrl+Shift+S. URL-opened files only get Save As.
-- [ ] **E3 — Undo / redo** (M) — depends on E1
-  `QUndoStack` per tab; every edit below is one `QUndoCommand`.
+  `pycdfpp.save(to_cdf(doc), path)`. Ctrl+S / Ctrl+Shift+S. URL-opened files only get Save As.
+- [ ] **E3 — Undo / redo** (S) — depends on E1
+  Documents are immutable, so undo is a list of past documents and an index. No per-edit undo commands.
 - [ ] **E4 — Edit attributes** (M) — depends on E3
   Edit, add, delete global and variable attributes in the inspector.
   Typed entries (CDF_CHAR, numeric, epoch) — keep the type unless the user changes it.
-  pycdfpp 0.15.1: editing a value works (`Attribute.set_values`, `VariableAttribute.set_value`).
-  Adding a name that exists raises. Deleting a *variable* attribute has no API at all
-  (global ones can go through `CDF.filter(attributes=...)`). → needs U1.
-- [ ] **E5 — Rename / delete variables** (M) — depends on E3
-  Rename must update `DEPEND_*`, `LABL_PTR_*`, `DELTA_*_VAR` references in other variables (ask first).
-  pycdfpp 0.15.1: delete = `CDF.filter(variables=..., inplace=True)`.
-  Rename has no API (`Variable.name` is read-only). → needs U1.
+- [ ] **E5 — Rename / delete variables** (S) — depends on E3
+  Rename also updates `DEPEND_*`, `LABL_PTR_*`, `DELTA_*_VAR` references in other variables (ask first).
+  Delete warns when other variables reference it.
 - [ ] **E6 — Create variables** (M) — depends on E3
   From the console (`workbench.add_variable(name, array, attrs)`) and from a dialog (type, shape, NRV).
-- [ ] **E7 — Live lint** (S) — depends on E1
-  Re-run AstraLint on the in-memory file after each edit (debounced), update inspector badges.
+- [ ] **E7 — Live lint** (S) — depends on E2
+  Re-run AstraLint on `to_cdf(doc)` after each edit (debounced), update inspector badges.
 - [ ] **E8 — Edit values** (L) — depends on E3
   Table editor for small / NRV variables (labels, support data). Large record variables stay read-only.
 
@@ -78,12 +83,6 @@ Order inside each section is the suggested build order.
   CSV / `.npy` of the plotted (masked, reduced) data, next to "Send to Console".
 - [ ] **X4 — Save subset** (S) — depends on E2
   Pick variables (auto-include their `DEPEND_*` / label vars), save a copy via `pycdfpp.filter_cdf`.
-
-## Upstream (CDFpp)
-
-- [ ] **U1 — Missing edit API in pycdfpp** (S–M) — blocks parts of E4, E5
-  `Variable` rename, `VariableAttributeMap.__delitem__`, `AttributeMap.__delitem__`.
-  Adding them in CDFpp is cleaner than rebuilding a whole CDF in the plugin for each edit.
 
 ## Not planned
 
