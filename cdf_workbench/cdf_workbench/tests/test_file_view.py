@@ -376,3 +376,34 @@ def test_new_variable_with_a_taken_name_is_explained(b_view, monkeypatch):
     monkeypatch.setattr(b_view, "_ask_variable", lambda: ("B", pycdfpp.DataType.CDF_DOUBLE, True, np.ones(2)))
     b_view._new_variable()
     assert "B already exists" in b_view._preview_message.text()
+
+
+def test_an_edit_relints_the_edited_document(b_view, qtbot, monkeypatch):
+    linted = []
+    monkeypatch.setattr(b_view, "_start_lint", linted.append)
+
+    b_view._inspector.delete_attribute.emit("B", "CATDESC")
+    b_view._inspector.delete_attribute.emit("B", "UNITS")
+
+    qtbot.waitUntil(lambda: bool(linted), timeout=3000)
+    qtbot.wait(200)
+    assert len(linted) == 1
+    attributes = pycdfpp.load(linted[0])["B"].attributes
+    assert "CATDESC" not in attributes and "UNITS" not in attributes
+
+
+def test_a_url_file_is_linted_from_memory_not_downloaded_again(qtbot, monkeypatch):
+    import numpy as np
+    from cdf_workbench.document import DocumentSession, from_cdf
+    from cdf_workbench.file_view import CdfFileView
+    linted = []
+    monkeypatch.setattr(CdfFileView, "_start_lint", lambda self, source: linted.append(source))
+    cdf = pycdfpp.CDF()
+    cdf.add_variable("B", values=np.ones(3))
+
+    view = CdfFileView(DocumentSession(from_cdf(cdf), source="https://example.org/f.cdf"),
+                       source="https://example.org/f.cdf")
+    qtbot.addWidget(view)
+
+    assert len(linted) == 1 and isinstance(linted[0], bytes)
+    view.release()

@@ -15,14 +15,16 @@ from PySide6.QtWidgets import (
 import pycdfpp
 
 from .attribute_dialog import AttributeDialog
-from .document import Attribute, Document, DocumentSession, GlobalAttribute, attribute_lists, global_attribute_lists
+from .document import (
+    Attribute, Document, DocumentSession, GlobalAttribute, attribute_lists, global_attribute_lists, to_cdf,
+)
 from .edits import (
     add_variable, delete_variable, format_value, new_variable, references_to, remove_global_attribute,
     remove_variable_attribute, rename_variable, set_global_attribute, set_variable_attribute,
 )
 from .variable_dialog import VariableDialog
 from .axis_bar import Axis, AxisModeBar
-from .memory import available_memory, memory_problem
+from .memory import available_memory, decoded_nbytes, memory_problem
 from .reduce import Mode, axis_attribute, default_modes, needs_reduction, reduce_values, reduced_info
 from .tree_model import CdfTreeModel, CdfItemDelegate, VariableInfo
 from .inspector import CdfInspectorWidget
@@ -252,7 +254,19 @@ def _is_plottable(info: VariableInfo) -> bool:
     return True
 
 
-def _lint_in_subprocess(source: str, conn):
+# simplify: an edited document is serialized on the GUI thread for the lint subprocess; above
+# this size that would freeze the UI, so it is not re-linted. Serialize in a worker to lift it.
+LINT_SIZE_LIMIT = 200 * 1024 * 1024
+LINT_DELAY_MS = 1000
+
+
+def _document_bytes(doc: Document) -> Optional[bytes]:
+    if sum(decoded_nbytes(var) for _, var in doc.items()) > LINT_SIZE_LIMIT:
+        return None
+    return bytes(pycdfpp.save(to_cdf(doc)))
+
+
+def _lint_in_subprocess(source: str | bytes, conn):
     """Entry point for the lint subprocess — runs lint and sends result back."""
     report = run_lint(source)
     conn.send(report)
@@ -273,7 +287,14 @@ class CdfFileView(QWidget):
         self._setup_ui()
         session.changed.connect(self._on_document_changed)
         self._start_quality_analysis()
-        self._start_lint()
+        self._lint_process = None
+        self._lint_timer = QTimer(self)
+        self._lint_timer.timeout.connect(self._poll_lint)
+        self._lint_delay = QTimer(self)
+        self._lint_delay.setSingleShot(True)
+        self._lint_delay.setInterval(LINT_DELAY_MS)
+        self._lint_delay.timeout.connect(self._lint_document)
+        self._lint_on_open()
 
     def _setup_ui(self):
         layout = QVBoxLayout(self)
@@ -376,6 +397,7 @@ class CdfFileView(QWidget):
         self._tree_model = CdfTreeModel(self._doc)
         self._proxy_model.setSourceModel(self._tree_model)
         self._tree_view.expandAll()
+        self._lint_delay.start()
         if current is not None and current in self._doc:
             self.select_variable(current)
         else:
@@ -783,19 +805,33 @@ class CdfFileView(QWidget):
             self._delegate.set_sparkline(var_name, samples)
             self._tree_view.viewport().update()
 
-    def _start_lint(self):
-        if not self._source or self._lint_report is not None:
-            return
+    def _lint_on_open(self):
+        """A local file is linted from disk; a URL from memory, so it isn't downloaded again."""
+        if self._source.startswith(("http://", "https://")):
+            self._lint_document()
+        elif self._source:
+            self._start_lint(self._source)
+
+    def _lint_document(self):
+        if self._doc is not None and (data := _document_bytes(self._doc)) is not None:
+            self._start_lint(data)
+
+    def _start_lint(self, source: str | bytes):
+        self._stop_lint()
         parent_conn, child_conn = multiprocessing.Pipe(duplex=False)
         self._lint_process = multiprocessing.Process(
-            target=_lint_in_subprocess, args=(self._source, child_conn), daemon=True,
+            target=_lint_in_subprocess, args=(source, child_conn), daemon=True,
         )
         self._lint_conn = parent_conn
         self._lint_process.start()
         child_conn.close()
-        self._lint_timer = QTimer(self)
-        self._lint_timer.timeout.connect(self._poll_lint)
         self._lint_timer.start(500)
+
+    def _stop_lint(self):
+        self._lint_timer.stop()
+        if self._lint_process is not None and self._lint_process.is_alive():
+            self._lint_process.kill()
+            self._lint_process.join(timeout=1)
 
     def _poll_lint(self):
         if self._lint_conn.poll():
@@ -815,9 +851,6 @@ class CdfFileView(QWidget):
         if hasattr(self, "_analysis_thread") and self._analysis_thread.isRunning():
             self._analysis_thread.quit()
             self._analysis_thread.wait(1000)
-        if hasattr(self, "_lint_timer"):
-            self._lint_timer.stop()
-        if hasattr(self, "_lint_process") and self._lint_process.is_alive():
-            self._lint_process.kill()
-            self._lint_process.join(timeout=1)
+        self._lint_delay.stop()
+        self._stop_lint()
         self._session = None

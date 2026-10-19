@@ -77,9 +77,11 @@ So we don't edit it. We load it into our own model, edit the model, and build a 
 - [x] **E6 — Create variables** (M) — depends on E3 — `variable_dialog.py`, `edits.new_variable`
   From the console (`plugins.cdf_workbench.add_variable(name, array, attrs)`, SciQLop proxies it to
   the GUI thread) and from a dialog (type, NRV, 1D values; other shapes go through the console).
-- [ ] **E7 — Live lint** (S) — depends on E2
+- [x] **E7 — Live lint** (S) — depends on E2
   Re-run AstraLint on `to_cdf(doc)` after each edit (debounced), update inspector badges.
-  Also stops URL-opened files being downloaded a second time: lint gets the path/URL today.
+  Done: 1 s after the last edit, lint `to_cdf(doc)` bytes; URL files are linted from memory.
+  Not re-linted above 200 MB decoded (serialized on the GUI thread). Not run for real here:
+  astralint is missing from the SciQLop dev venv, so tests stop at the lint process start.
 - [ ] **E8 — Edit values** (L) — depends on E3
   Table editor for small / NRV variables (labels, support data). Large record variables stay read-only.
 
