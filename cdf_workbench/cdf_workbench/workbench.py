@@ -2,7 +2,8 @@ from __future__ import annotations
 from pathlib import Path
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QTabWidget, QLabel, QFileDialog, QMessageBox,
+    QWidget, QVBoxLayout, QTabWidget, QTabBar, QStyle, QLabel, QFileDialog,
+    QMessageBox,
 )
 from PySide6.QtGui import QDragEnterEvent, QDropEvent
 from .loader import load_cdf, CdfLoadError
@@ -31,7 +32,15 @@ class CdfWorkbenchPanel(QWidget):
         placeholder = QLabel("Drop CDF files here or double-click to open")
         placeholder.setAlignment(Qt.AlignCenter)
         placeholder.mouseDoubleClickEvent = lambda _event: self.open_file_dialog()
-        self._tabs.addTab(placeholder, "+")
+        index = self._tabs.addTab(placeholder, "+")
+        self._remove_close_button(index)
+
+    def _remove_close_button(self, index: int):
+        bar = self._tabs.tabBar()
+        side = QTabBar.ButtonPosition(
+            bar.style().styleHint(QStyle.SH_TabBar_CloseButtonPosition, None, bar)
+        )
+        bar.setTabButton(index, side, None)
 
     def _on_tab_double_clicked(self, index: int):
         if self._tabs.tabText(index) == "+":

@@ -61,6 +61,19 @@ def test_open_and_close_tab(panel, cdf_file, qtbot):
     assert panel._tabs.count() == 1
 
 
+def test_open_tab_has_no_close_button(panel, cdf_file, qtbot):
+    """The "+" tab cannot be closed, so it must not show a dead close cross."""
+    from PySide6.QtWidgets import QTabBar
+    panel.open_file(cdf_file)
+    qtbot.wait(50)
+    bar = panel._tabs.tabBar()
+    plus = bar.count() - 1
+    assert bar.tabText(plus) == "+"
+    assert bar.tabButton(plus, QTabBar.LeftSide) is None
+    assert bar.tabButton(plus, QTabBar.RightSide) is None
+    assert bar.tabButton(0, QTabBar.RightSide) or bar.tabButton(0, QTabBar.LeftSide)
+
+
 def test_open_close_multiple_tabs(panel, cdf_file, qtbot):
     """Opening and closing multiple tabs in sequence must not crash."""
     for _ in range(3):
