@@ -142,7 +142,10 @@ class DocumentSession(QObject):
 
     def __init__(self, document: Document, source: str = "", parent=None):
         super().__init__(parent)
-        self._document = document
+        # simplify: unbounded history. Documents share unchanged data, so it only grows with
+        # edited values (E8); cap its length if value edits on big variables make it heavy.
+        self._history = [document]
+        self._index = 0
         self._saved = document
         self._source = source
 
@@ -156,26 +159,45 @@ class DocumentSession(QObject):
 
     @property
     def document(self) -> Document:
-        return self._document
+        return self._history[self._index]
 
     @property
     def is_modified(self) -> bool:
-        return self._document is not self._saved
+        return self.document is not self._saved
+
+    @property
+    def can_undo(self) -> bool:
+        return self._index > 0
+
+    @property
+    def can_redo(self) -> bool:
+        return self._index < len(self._history) - 1
 
     def apply(self, edit: Callable[[Document], Document]) -> None:
-        edited = edit(self._document)
-        if edited is self._document:
+        edited = edit(self.document)
+        if edited is self.document:
             raise ValueError("an edit must return a new Document, not mutate the current one")
-        self._document = edited
+        self._history = self._history[:self._index + 1] + [edited]
+        self._index += 1
         self.changed.emit()
 
+    def undo(self) -> None:
+        if self.can_undo:
+            self._index -= 1
+            self.changed.emit()
+
+    def redo(self) -> None:
+        if self.can_redo:
+            self._index += 1
+            self.changed.emit()
+
     def mark_saved(self) -> None:
-        self._saved = self._document
+        self._saved = self.document
         self.changed.emit()
 
     def save(self, path: Optional[str] = None) -> None:
         """Saving over the source file is safe: `to_cdf` reads every value before writing."""
         path = path or self._source
-        pycdfpp.save(to_cdf(self._document), path)
+        pycdfpp.save(to_cdf(self.document), path)
         self._source = path
         self.mark_saved()

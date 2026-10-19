@@ -72,6 +72,8 @@ class CdfWorkbenchPanel(QWidget):
         layout.addWidget(self._tabs)
         self._add_shortcut(QKeySequence.Save, lambda: self.save_tab(self._tabs.currentIndex()))
         self._add_shortcut(QKeySequence.SaveAs, lambda: self.save_tab_as(self._tabs.currentIndex()))
+        self._add_shortcut(QKeySequence.Undo, self.undo_current)
+        self._add_shortcut(QKeySequence.Redo, self.redo_current)
 
         self._load_signals = _LoadSignals(self)
         self._load_signals.loaded.connect(self._add_tab)
@@ -149,6 +151,14 @@ class CdfWorkbenchPanel(QWidget):
     def _view_at(self, index: int) -> Optional[CdfFileView]:
         widget = self._tabs.widget(index)
         return widget if isinstance(widget, CdfFileView) and widget.session is not None else None
+
+    def undo_current(self):
+        if (view := self._view_at(self._tabs.currentIndex())) is not None:
+            view.session.undo()
+
+    def redo_current(self):
+        if (view := self._view_at(self._tabs.currentIndex())) is not None:
+            view.session.redo()
 
     def _show_tab_menu(self, pos):
         index = self._tabs.tabBar().tabAt(pos)

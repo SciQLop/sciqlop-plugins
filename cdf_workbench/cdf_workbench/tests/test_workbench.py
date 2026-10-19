@@ -177,3 +177,15 @@ def test_saving_a_url_file_asks_where(panel, cdf_file, qtbot, tmp_path, monkeypa
     panel.save_tab(0)
 
     assert asked == ["sample.cdf"]
+
+
+def test_undo_shortcut_reverts_the_current_tab(panel, cdf_file, qtbot):
+    panel.open_file(cdf_file)
+    view = panel._tabs.widget(0)
+    _modify(view)
+
+    panel.undo_current()
+
+    assert panel._tabs.tabText(0) == "sample.cdf"
+    panel.redo_current()
+    assert panel._tabs.tabText(0) == "sample.cdf •"

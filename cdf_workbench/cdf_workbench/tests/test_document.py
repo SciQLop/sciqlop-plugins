@@ -176,3 +176,52 @@ def test_saving_over_the_source_file_keeps_the_document_readable(tmp_path, rich_
 
     np.testing.assert_array_equal(session.document["B"].values, rich_cdf["B"].values)
     assert "Edited" in pycdfpp.load(str(path)).attributes
+
+
+def _without(name):
+    return lambda doc: replace(doc, variables={k: v for k, v in doc.variables.items() if k != name})
+
+
+def test_undo_and_redo_walk_the_history(rich_cdf):
+    original = from_cdf(rich_cdf)
+    session = DocumentSession(original)
+    session.apply(_without("B"))
+    session.apply(_without("Epoch"))
+    assert set(session.document.keys()) == {"Epoch_ms", "label_B"}
+
+    session.undo()
+    assert set(session.document.keys()) == {"Epoch", "Epoch_ms", "label_B"}
+    session.undo()
+    assert session.document is original and not session.is_modified
+    assert not session.can_undo
+
+    session.redo()
+    assert "B" not in session.document and session.is_modified
+
+
+def test_a_new_edit_after_undo_drops_the_redo_branch(rich_cdf):
+    session = DocumentSession(from_cdf(rich_cdf))
+    session.apply(_without("B"))
+    session.undo()
+
+    session.apply(_without("Epoch"))
+
+    assert not session.can_redo
+    assert "B" in session.document and "Epoch" not in session.document
+
+
+def test_undo_past_a_save_is_modified_again(tmp_path, rich_cdf):
+    session = DocumentSession(from_cdf(rich_cdf), source=str(tmp_path / "f.cdf"))
+    session.apply(_without("B"))
+    session.save()
+
+    session.undo()
+
+    assert session.is_modified
+
+
+def test_undo_and_redo_at_the_ends_do_nothing(qtbot, rich_cdf):
+    session = DocumentSession(from_cdf(rich_cdf))
+    with qtbot.assertNotEmitted(session.changed):
+        session.undo()
+        session.redo()
