@@ -301,7 +301,7 @@ class CdfFileView(QWidget):
         right_splitter = QSplitter(Qt.Vertical)
 
         self._inspector = CdfInspectorWidget()
-        self._inspector.dependency_clicked.connect(self._navigate_to_variable)
+        self._inspector.dependency_clicked.connect(self.select_variable)
         self._inspector.plot_new_panel.connect(self._plot_new_panel)
         self._inspector.plot_to_panel.connect(self._plot_to_panel)
         right_splitter.addWidget(self._inspector)
@@ -517,7 +517,7 @@ class CdfFileView(QWidget):
         self._log_y.setChecked(bundle.y_scale == "log")
         self._log_y.show()
 
-    def _navigate_to_variable(self, var_name: str):
+    def select_variable(self, var_name: str):
         for group_row in range(self._tree_model.rowCount()):
             group_idx = self._tree_model.index(group_row, 0)
             for var_row in range(self._tree_model.rowCount(group_idx)):

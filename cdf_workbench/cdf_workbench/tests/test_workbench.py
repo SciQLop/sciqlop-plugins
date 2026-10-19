@@ -98,3 +98,23 @@ def test_modified_tab_title_gets_a_dot(panel, cdf_file, qtbot):
 
     session.mark_saved()
     assert panel._tabs.tabText(0) == "sample.cdf"
+
+
+def test_url_loads_in_the_background_and_opens_on_a_variable(panel, cdf_file, qtbot, monkeypatch):
+    import cdf_workbench.workbench as workbench
+    from cdf_workbench.loader import load_cdf
+    monkeypatch.setattr(workbench, "load_cdf", lambda source: load_cdf(cdf_file))
+
+    panel.open_file("https://example.org/data/sample.cdf", variable="Bt")
+
+    qtbot.waitUntil(lambda: panel._tabs.count() == 2)
+    view = panel._tabs.widget(0)
+    assert panel._tabs.tabText(0) == "sample.cdf"
+    assert view._previewed is not None and view._previewed.name == "Bt"
+
+
+def test_a_failed_load_is_shown_on_the_open_page(panel, qtbot):
+    panel.open_file("/nonexistent/file.cdf")
+
+    assert panel._tabs.count() == 1
+    assert "File not found" in panel._open_page.status()

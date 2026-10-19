@@ -21,9 +21,9 @@ Order inside each section is the suggested build order.
   Toggle above the preview; overrides `SCALETYP`.
   On log, values ≤ 0 are hidden. A spectrogram whose bins include ≤ 0 (e.g. azimuth) stays linear.
   Port of CDFpp `ba289d9`.
-- [ ] **R3 — Open URL** (S)
+- [x] **R3 — Open URL** (S) — URL field on the "+" page, downloads off the GUI thread
   Menu entry / input for an http(s) CDF. `loader._load_url` already exists; only drag-and-drop text reaches it today.
-- [ ] **R4 — Example files** (S)
+- [x] **R4 — Example files** (S) — `open_page.EXAMPLES`, CDFpp's six + an FPI distribution
   A few public SPDF files (ACE MFI, MMS FPI, THEMIS) on the "+" tab to start from.
   Port of CDFpp `4178582`.
 - [ ] **R5 — Clear error on very large files** (S)
@@ -73,6 +73,7 @@ So we don't edit it. We load it into our own model, edit the model, and build a 
   From the console (`workbench.add_variable(name, array, attrs)`) and from a dialog (type, shape, NRV).
 - [ ] **E7 — Live lint** (S) — depends on E2
   Re-run AstraLint on `to_cdf(doc)` after each edit (debounced), update inspector badges.
+  Also stops URL-opened files being downloaded a second time: lint gets the path/URL today.
 - [ ] **E8 — Edit values** (L) — depends on E3
   Table editor for small / NRV variables (labels, support data). Large record variables stay read-only.
 

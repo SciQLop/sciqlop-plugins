@@ -1,14 +1,55 @@
 from __future__ import annotations
-from pathlib import Path
-from PySide6.QtCore import Qt
+from pathlib import PurePosixPath
+from urllib.parse import parse_qs, urlparse
+from PySide6.QtCore import QObject, QRunnable, QThreadPool, Signal
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QTabWidget, QTabBar, QStyle, QLabel, QFileDialog,
-    QMessageBox,
+    QWidget, QVBoxLayout, QTabWidget, QTabBar, QStyle, QFileDialog,
 )
 from PySide6.QtGui import QDragEnterEvent, QDropEvent
 from .loader import load_cdf, CdfLoadError
 from .document import DocumentSession, from_cdf
 from .file_view import CdfFileView
+from .open_page import OpenPage
+
+
+def _is_url(source: str) -> bool:
+    return source.startswith(("http://", "https://"))
+
+
+def _tab_name(source: str) -> str:
+    """File name of a path or URL; MMS SDC URLs carry it in ?file=."""
+    if not _is_url(source):
+        return PurePosixPath(source).name
+    url = urlparse(source)
+    return parse_qs(url.query).get("file", [PurePosixPath(url.path).name])[0]
+
+
+class _LoadSignals(QObject):
+    loaded = Signal(str, str, object)  # source, variable, pycdfpp.CDF
+    failed = Signal(str, str)          # source, message
+
+
+class _LoadTask(QRunnable):
+    """Downloads and parses a URL off the GUI thread."""
+
+    def __init__(self, source: str, variable: str, signals: _LoadSignals):
+        super().__init__()
+        self._source, self._variable, self._signals = source, variable, signals
+
+    def run(self):
+        try:
+            cdf = load_cdf(self._source)
+        except Exception as e:  # httpx.InvalidURL & co. are not CdfLoadError
+            self._emit(self._signals.failed, self._source, str(e))
+            return
+        self._emit(self._signals.loaded, self._source, self._variable, cdf)
+
+    @staticmethod
+    def _emit(signal, *args):
+        try:
+            signal.emit(*args)
+        except RuntimeError:  # the panel was closed during the download
+            pass
 
 
 class CdfWorkbenchPanel(QWidget):
@@ -27,13 +68,16 @@ class CdfWorkbenchPanel(QWidget):
         self._tabs.tabBarDoubleClicked.connect(self._on_tab_double_clicked)
         layout.addWidget(self._tabs)
 
+        self._load_signals = _LoadSignals(self)
+        self._load_signals.loaded.connect(self._add_tab)
+        self._load_signals.failed.connect(self._on_load_failed)
         self._add_open_tab()
 
     def _add_open_tab(self):
-        placeholder = QLabel("Drop CDF files here or double-click to open")
-        placeholder.setAlignment(Qt.AlignCenter)
-        placeholder.mouseDoubleClickEvent = lambda _event: self.open_file_dialog()
-        index = self._tabs.addTab(placeholder, "+")
+        self._open_page = OpenPage()
+        self._open_page.browse_requested.connect(self.open_file_dialog)
+        self._open_page.open_requested.connect(self.open_file)
+        index = self._tabs.addTab(self._open_page, "+")
         self._remove_close_button(index)
 
     def _remove_close_button(self, index: int):
@@ -54,21 +98,35 @@ class CdfWorkbenchPanel(QWidget):
         for path in paths:
             self.open_file(path)
 
-    def open_file(self, source: str):
+    def open_file(self, source: str, variable: str = ""):
+        """Local files load right away (lazily); URLs download in the background."""
+        if _is_url(source):
+            self._open_page.set_status(f"Downloading {_tab_name(source)}…")
+            QThreadPool.globalInstance().start(_LoadTask(source, variable, self._load_signals))
+            return
         try:
             cdf = load_cdf(source)
         except CdfLoadError as e:
-            QMessageBox.warning(self, "Failed to open CDF", str(e))
+            self._on_load_failed(source, str(e))
             return
+        self._add_tab(source, variable, cdf)
 
+    def _on_load_failed(self, source: str, message: str):
+        self._open_page.set_status(message)
+        self._tabs.setCurrentWidget(self._open_page)
+
+    def _add_tab(self, source: str, variable: str, cdf):
+        self._open_page.set_status("")
         file_view = CdfFileView(DocumentSession(from_cdf(cdf)), source=source,
                                 main_window=self._main_window)
-        name = Path(source).name if not source.startswith("http") else source.split("/")[-1]
+        name = _tab_name(source)
 
         insert_idx = max(0, self._tabs.count() - 1)
         self._tabs.insertTab(insert_idx, file_view, name)
         self._tabs.setCurrentIndex(insert_idx)
         file_view.session.changed.connect(lambda: self._refresh_title(file_view, name))
+        if variable:
+            file_view.select_variable(variable)
 
     def _refresh_title(self, file_view: CdfFileView, name: str):
         index = self._tabs.indexOf(file_view)
