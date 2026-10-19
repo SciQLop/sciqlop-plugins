@@ -41,9 +41,13 @@ Order inside each section is the suggested build order.
 - [ ] **E4 — Edit attributes** (M) — depends on E3
   Edit, add, delete global and variable attributes in the inspector.
   Typed entries (CDF_CHAR, numeric, epoch) — keep the type unless the user changes it.
+  pycdfpp 0.15.1: editing a value works (`Attribute.set_values`, `VariableAttribute.set_value`).
+  Adding a name that exists raises. Deleting a *variable* attribute has no API at all
+  (global ones can go through `CDF.filter(attributes=...)`). → needs U1.
 - [ ] **E5 — Rename / delete variables** (M) — depends on E3
   Rename must update `DEPEND_*`, `LABL_PTR_*`, `DELTA_*_VAR` references in other variables (ask first).
-  Check how pycdfpp removes a variable; fall back to `filter` + rebuild if there is no direct API.
+  pycdfpp 0.15.1: delete = `CDF.filter(variables=..., inplace=True)`.
+  Rename has no API (`Variable.name` is read-only). → needs U1.
 - [ ] **E6 — Create variables** (M) — depends on E3
   From the console (`workbench.add_variable(name, array, attrs)`) and from a dialog (type, shape, NRV).
 - [ ] **E7 — Live lint** (S) — depends on E1
@@ -74,6 +78,12 @@ Order inside each section is the suggested build order.
   CSV / `.npy` of the plotted (masked, reduced) data, next to "Send to Console".
 - [ ] **X4 — Save subset** (S) — depends on E2
   Pick variables (auto-include their `DEPEND_*` / label vars), save a copy via `pycdfpp.filter_cdf`.
+
+## Upstream (CDFpp)
+
+- [ ] **U1 — Missing edit API in pycdfpp** (S–M) — blocks parts of E4, E5
+  `Variable` rename, `VariableAttributeMap.__delitem__`, `AttributeMap.__delitem__`.
+  Adding them in CDFpp is cleaner than rebuilding a whole CDF in the plugin for each edit.
 
 ## Not planned
 
