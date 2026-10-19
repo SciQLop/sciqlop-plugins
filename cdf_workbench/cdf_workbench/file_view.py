@@ -54,14 +54,18 @@ def _make_ascending(depend_1: Optional[np.ndarray],
     float64 array passes user_api's `ensure_arrays_of_double` (dtype check
     only) and then segfaults / SystemErrors inside the Shiboken binding.
     """
-    if depend_1 is None or depend_1.size <= 1:
+    if not _is_descending(depend_1):
         return depend_1, values
+    return (np.ascontiguousarray(depend_1[..., ::-1]),
+            np.ascontiguousarray(values[..., ::-1]))
+
+
+def _is_descending(depend_1: Optional[np.ndarray]) -> bool:
+    if depend_1 is None or depend_1.size <= 1:
+        return False
     ref = depend_1.ravel() if depend_1.ndim == 1 else depend_1[0, :]
     finite = ref[np.isfinite(ref)]
-    if len(finite) >= 2 and finite[0] > finite[-1]:
-        return (np.ascontiguousarray(depend_1[..., ::-1]),
-                np.ascontiguousarray(values[..., ::-1]))
-    return depend_1, values
+    return len(finite) >= 2 and finite[0] > finite[-1]
 
 
 def _replace_fill(values: np.ndarray, fill_value) -> np.ndarray:
@@ -362,13 +366,16 @@ class CdfFileView(QWidget):
 
     def _read_bundle(self, info: VariableInfo) -> PlotBundle:
         raw_values = self._doc[info.name].values
-        depend_1, depend_1_meta = self._read_depend_1(info)
-        depend_1, values = _make_ascending(depend_1, raw_values)
+        raw_depend_1, depend_1_meta = self._read_depend_1(info)
+        depend_1, values = _make_ascending(raw_depend_1, raw_values)
         values = _replace_fill(values, info.fill_value)
         epochs, is_time_axis = self._resolve_epochs(info, values)
         x = (epochs if epochs is not None
              else np.arange(values.shape[0], dtype=np.float64))
-        hints = _hints_from(info, depend_1_meta, self._resolve_labels(info))
+        labels = self._resolve_labels(info)
+        if _is_descending(raw_depend_1) and len(labels) > 1:
+            labels = labels[::-1]
+        hints = _hints_from(info, depend_1_meta, labels)
         return PlotBundle(x=x, values=values, depend_1=depend_1,
                           hints=hints, is_time_axis=is_time_axis)
 

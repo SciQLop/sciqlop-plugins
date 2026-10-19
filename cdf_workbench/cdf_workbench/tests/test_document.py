@@ -88,7 +88,7 @@ def test_rename_and_drop_attribute_reach_the_saved_file(rich_cdf):
     attrs["UNITS"] = Attribute("nT", pycdfpp.DataType.CDF_CHAR)
     edited = replace(doc, variables={
         **{k: v for k, v in doc.variables.items() if k != "B"},
-        "B_gse": replace(b, name="B_gse", attributes=attrs),
+        "B_gse": replace(b, attributes=attrs),
     })
 
     out = pycdfpp.load(bytes(pycdfpp.save(to_cdf(edited))))
@@ -111,3 +111,38 @@ def test_session_tracks_modified_state(qtbot, rich_cdf):
 
     session.mark_saved()
     assert not session.is_modified
+
+
+def test_mapping_key_is_the_saved_name(rich_cdf):
+    doc = from_cdf(rich_cdf)
+    renamed = replace(doc, variables={("Bfield" if k == "B" else k): v for k, v in doc.variables.items()})
+
+    out = pycdfpp.load(bytes(pycdfpp.save(to_cdf(renamed))))
+
+    assert "Bfield" in out and "B" not in out
+
+
+def test_edited_value_of_a_read_attribute_is_saved(rich_cdf):
+    doc = from_cdf(rich_cdf)
+    b = doc["B"]
+    fill = replace(b.attributes["FILLVAL"], value=[np.float32(-999.0)])
+    project = replace(doc.attributes["Project"],
+                      entries=doc.attributes["Project"].entries[:1])
+    edited = replace(doc, attributes={**doc.attributes, "Project": project},
+                     variables={**doc.variables, "B": replace(b, attributes={**b.attributes, "FILLVAL": fill})})
+
+    out = pycdfpp.load(bytes(pycdfpp.save(to_cdf(edited))))
+
+    assert out["B"].attributes["FILLVAL"].value == [-999.0]
+    assert list(out.attributes["Project"]) == ["ISTP>Test"]
+
+
+def test_session_rejects_an_edit_that_returns_the_same_document(rich_cdf):
+    session = DocumentSession(from_cdf(rich_cdf))
+
+    def in_place(doc):
+        doc.attributes.clear()
+        return doc
+
+    with pytest.raises(ValueError):
+        session.apply(in_place)

@@ -32,7 +32,6 @@ class GlobalAttribute:
 
 @dataclass(frozen=True)
 class Variable:
-    name: str
     type: pycdfpp.DataType
     shape: tuple
     is_nrv: bool
@@ -84,7 +83,6 @@ def _global_entries(attr) -> GlobalAttribute:
 
 def _variable_from(cdf: pycdfpp.CDF, name: str, var) -> Variable:
     return Variable(
-        name=name,
         type=var.type,
         shape=tuple(var.shape),
         is_nrv=var.is_nrv,
@@ -98,8 +96,8 @@ def to_cdf(doc: Document) -> pycdfpp.CDF:
     cdf = pycdfpp.CDF()
     for name, attr in doc.attributes.items():
         _write_global(cdf, name, attr)
-    for var in doc.variables.values():
-        _write_variable(cdf, var)
+    for name, var in doc.variables.items():
+        _write_variable(cdf, name, var)
     return cdf
 
 
@@ -128,14 +126,14 @@ def _variable_attribute_is_pristine(name: str, attr: Attribute) -> bool:
             and _same(origin.value, attr.value))
 
 
-def _write_variable(cdf: pycdfpp.CDF, var: Variable) -> None:
-    out = cdf.add_variable(var.name, values=var.values, data_type=var.type,
+def _write_variable(cdf: pycdfpp.CDF, name: str, var: Variable) -> None:
+    out = cdf.add_variable(name, values=var.values, data_type=var.type,
                            is_nrv=var.is_nrv, compression=var.compression)
-    for name, attr in var.attributes.items():
-        if _variable_attribute_is_pristine(name, attr):
+    for attr_name, attr in var.attributes.items():
+        if _variable_attribute_is_pristine(attr_name, attr):
             out.add_attribute(attr.origin)
         else:
-            out.add_attribute(name, attr.value, attr.type)
+            out.add_attribute(attr_name, attr.value, attr.type)
 
 
 class DocumentSession(QObject):
@@ -156,7 +154,10 @@ class DocumentSession(QObject):
         return self._document is not self._saved
 
     def apply(self, edit: Callable[[Document], Document]) -> None:
-        self._document = edit(self._document)
+        edited = edit(self._document)
+        if edited is self._document:
+            raise ValueError("an edit must return a new Document, not mutate the current one")
+        self._document = edited
         self.changed.emit()
 
     def mark_saved(self) -> None:

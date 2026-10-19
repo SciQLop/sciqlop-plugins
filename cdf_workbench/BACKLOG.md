@@ -33,6 +33,10 @@ Order inside each section is the suggested build order.
 - [x] **B1 — No preview when DEPEND_1 is a text variable** (S)
   ACE `BGSEc` has `DEPEND_1 = cartesian`, a CDF_CHAR variable. `_read_depend_1` calls `.astype(float64)` on it and raises.
   Treat a text DEPEND_1 as labels, not as a y axis.
+- [x] **B3 — Component labels not reversed with a descending DEPEND_1** (S)
+  `_make_ascending` flipped the columns but not the labels.
+- [ ] **B4 — Is pycdfpp lazy loading thread-safe?** (?)
+  The analysis worker and the GUI can load values from the same CDF at the same time. Check in CDFpp.
 - [x] **B2 — No quality report for CDF_EPOCH16 files** (S)
   `AnalysisWorker` cast epochs with `astype("datetime64[ns]")`: wrong dates for TT2000/EPOCH, a swallowed error for EPOCH16.
 
@@ -47,10 +51,14 @@ So we don't edit it. We load it into our own model, edit the model, and build a 
   Views read the document; `DocumentSession` tracks modified state; tab title gets `•`.
   Known limits, all pycdfpp 0.15 gaps:
   - file-level compression is lost on save (`CDF.compression` is read-only);
-  - CDF_BYTE and empty attributes can't be written from values, so they are copied from the source while unedited.
+  - CDF_BYTE and empty attributes can't be written from values, so they are copied from the source while unedited;
+  - an empty global attribute can't be created at all (`add_attribute(name, [])` breaks on `zip(*[])`);
+  - column-major files are saved row-major (`add_variable` takes no majority). Values are identical.
 - [ ] **E2 — Save / Save As** (S) — depends on E1
   `pycdfpp.save(to_cdf(doc), path)`, then `session.mark_saved()`. Ctrl+S / Ctrl+Shift+S. URL-opened files only get Save As.
   Closing a modified tab asks Save / Discard / Cancel.
+  Cancel / join the `AnalysisWorker` first: it lazily loads values from the same `pycdfpp.CDF` on another thread.
+  `to_cdf` holds a second copy of all values; try `add_variable(..., copy=False)` for numeric variables.
 - [ ] **E3 — Undo / redo** (S) — depends on E1
   Documents are immutable, so undo is a list of past documents and an index. No per-edit undo commands.
 - [ ] **E4 — Edit attributes** (M) — depends on E3

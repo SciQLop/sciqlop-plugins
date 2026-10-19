@@ -97,3 +97,27 @@ def test_quality_analysis_handles_a_numeric_depend_0():
     worker.run()
 
     assert [r.epoch_gaps for r in reports] == [1]
+
+
+
+def test_labels_follow_columns_when_depend_1_is_flipped(qtbot):
+    """_make_ascending reverses a descending DEPEND_1 and the data columns; labels must follow."""
+    import numpy as np
+    from cdf_workbench.document import DocumentSession, from_cdf
+    from cdf_workbench.file_view import CdfFileView
+
+    cdf = pycdfpp.CDF()
+    cdf.add_variable("F", values=np.array([[3.0, 2.0, 1.0]] * 4))
+    cdf.add_variable("E", values=np.array([300.0, 200.0, 100.0]), is_nrv=True)
+    cdf.add_variable("labels", values=np.array([b"high", b"mid", b"low"]), is_nrv=True)
+    cdf["F"].add_attribute("DEPEND_1", "E")
+    cdf["F"].add_attribute("LABL_PTR_1", "labels")
+    view = CdfFileView(DocumentSession(from_cdf(cdf)))
+    qtbot.addWidget(view)
+
+    bundle = view._read_bundle(view._tree_model.variable_info("F"))
+
+    assert list(bundle.depend_1.ravel()) == [100.0, 200.0, 300.0]
+    assert list(bundle.values[0]) == [1.0, 2.0, 3.0]
+    assert bundle.hints.component_labels == ["low", "mid", "high"]
+    view.release()
