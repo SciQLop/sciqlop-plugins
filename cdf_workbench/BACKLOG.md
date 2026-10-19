@@ -30,9 +30,11 @@ Order inside each section is the suggested build order.
 
 ## Bugs
 
-- [ ] **B1 — No preview when DEPEND_1 is a text variable** (S)
+- [x] **B1 — No preview when DEPEND_1 is a text variable** (S)
   ACE `BGSEc` has `DEPEND_1 = cartesian`, a CDF_CHAR variable. `_read_depend_1` calls `.astype(float64)` on it and raises.
   Treat a text DEPEND_1 as labels, not as a y axis.
+- [x] **B2 — No quality report for CDF_EPOCH16 files** (S)
+  `AnalysisWorker` cast epochs with `astype("datetime64[ns]")`: wrong dates for TT2000/EPOCH, a swallowed error for EPOCH16.
 
 ## Edit
 

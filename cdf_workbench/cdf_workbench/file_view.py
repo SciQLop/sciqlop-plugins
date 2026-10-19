@@ -109,6 +109,12 @@ def _send_spectrogram(panel, bundle: PlotBundle):
     return plot
 
 
+def _record_axis(depend_0) -> np.ndarray:
+    if depend_0.type in _TIME_TYPES:
+        return pycdfpp.to_datetime64(depend_0.values)
+    return depend_0.values
+
+
 class AnalysisWorker(QObject):
     """Runs quality analysis and sparkline extraction in a background thread."""
     # Use Signal(str, object) for cross-thread safety with custom types
@@ -136,7 +142,7 @@ class AnalysisWorker(QObject):
                 # Quality analysis
                 epochs = None
                 if info.depend_0 and info.depend_0 in self._doc:
-                    epochs = self._doc[info.depend_0].values.astype("datetime64[ns]")
+                    epochs = _record_axis(self._doc[info.depend_0])
                 report = analyze_quality(
                     values=values,
                     epochs=epochs,
@@ -168,7 +174,17 @@ class AnalysisWorker(QObject):
 
 
 _NON_PLOTTABLE_TYPES = {pycdfpp.DataType.CDF_CHAR, pycdfpp.DataType.CDF_UCHAR, pycdfpp.DataType.CDF_NONE}
+_TEXT_TYPES = {pycdfpp.DataType.CDF_CHAR, pycdfpp.DataType.CDF_UCHAR}
 _TIME_TYPES = {pycdfpp.DataType.CDF_EPOCH, pycdfpp.DataType.CDF_EPOCH16, pycdfpp.DataType.CDF_TIME_TT2000}
+
+
+def _text_labels(raw: np.ndarray) -> list[str]:
+    # pycdfpp returns CDF_CHAR as ndarray of bytes, shape varies:
+    # NRV scalar: (n_components,) or (1, n_components)
+    # time-varying: (n_records, n_components)
+    while raw.ndim > 1:
+        raw = raw[-1]
+    return [s.decode().strip() if isinstance(s, bytes) else str(s).strip() for s in raw.tolist()]
 
 
 def _is_plottable(info: VariableInfo) -> bool:
@@ -299,16 +315,15 @@ class CdfFileView(QWidget):
         self._inspector.update_variable(info, quality)
         self._update_preview(info)
 
+    def _text_variable(self, name: str):
+        var = self._doc[name] if name and name in self._doc else None
+        return var if var is not None and var.type in _TEXT_TYPES else None
+
     def _resolve_labels(self, info: VariableInfo) -> list[str]:
         if info.labl_ptr_1 and info.labl_ptr_1 in self._doc:
-            raw = self._doc[info.labl_ptr_1].values
-            if hasattr(raw, 'tolist'):
-                # pycdfpp returns CDF_CHAR as ndarray of bytes, shape varies:
-                # NRV scalar: (n_components,) or (1, n_components)
-                # time-varying: (n_records, n_components)
-                while raw.ndim > 1:
-                    raw = raw[-1]
-                return [s.decode().strip() if isinstance(s, bytes) else str(s).strip() for s in raw.tolist()]
+            return _text_labels(self._doc[info.labl_ptr_1].values)
+        if (depend_1 := self._text_variable(info.depend_1)) is not None:
+            return _text_labels(depend_1.values)
         if info.lablaxis:
             return [info.lablaxis]
         if info.fieldnam:
@@ -340,7 +355,7 @@ class CdfFileView(QWidget):
         return None, False
 
     def _read_depend_1(self, info: VariableInfo) -> tuple[Optional[np.ndarray], Optional[dict]]:
-        if not (info.depend_1 and info.depend_1 in self._doc):
+        if not (info.depend_1 and info.depend_1 in self._doc) or self._text_variable(info.depend_1):
             return None, None
         d1 = self._doc[info.depend_1]
         return d1.values.astype(np.float64), attribute_lists(d1)
