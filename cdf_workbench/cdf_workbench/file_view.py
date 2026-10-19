@@ -10,14 +10,15 @@ if TYPE_CHECKING:
 from PySide6.QtCore import Qt, QThread, QTimer, Signal, QObject, QSortFilterProxyModel
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QSplitter, QTreeView, QLineEdit, QMenu, QCheckBox, QLabel,
+    QInputDialog, QMessageBox,
 )
 import pycdfpp
 
 from .attribute_dialog import AttributeDialog
 from .document import Attribute, Document, DocumentSession, GlobalAttribute, attribute_lists, global_attribute_lists
 from .edits import (
-    format_value, remove_global_attribute, remove_variable_attribute, set_global_attribute,
-    set_variable_attribute,
+    delete_variable, format_value, references_to, remove_global_attribute, remove_variable_attribute,
+    rename_variable, set_global_attribute, set_variable_attribute,
 )
 from .axis_bar import Axis, AxisModeBar
 from .memory import available_memory, memory_problem
@@ -412,6 +413,44 @@ class CdfFileView(QWidget):
         self._apply(lambda d: remove_variable_attribute(d, var_name, attr_name) if var_name
                     else remove_global_attribute(d, attr_name))
 
+    def _ask_new_name(self, name: str) -> str:
+        new, ok = QInputDialog.getText(self, "Rename variable", "New name:", text=name)
+        return new if ok else ""
+
+    def _ask_update_references(self, name: str, references: list[tuple[str, str]]) -> str:
+        """'yes', 'no' or 'cancel'."""
+        listed = "\n".join(f"{var}.{attr}" for var, attr in references)
+        answer = QMessageBox.question(
+            self, "Update references", f"Also rename {name} in these attributes?\n\n{listed}",
+            QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel, QMessageBox.Yes)
+        return {QMessageBox.Yes: "yes", QMessageBox.No: "no"}.get(answer, "cancel")
+
+    def _confirm_delete(self, name: str, references: list[tuple[str, str]]) -> bool:
+        listed = "".join(f"\n{var}.{attr}" for var, attr in references)
+        warning = f"\n\nThese attributes still point at it:{listed}" if references else ""
+        answer = QMessageBox.question(self, "Delete variable", f"Delete {name}?{warning}")
+        return answer == QMessageBox.Yes
+
+    def _rename_variable(self, name: str):
+        new = self._ask_new_name(name).strip()
+        if not new or new == name:
+            return
+        references = references_to(self._doc, name)
+        answer = self._ask_update_references(name, references) if references else "no"
+        if answer == "cancel":
+            return
+        was_selected = self._inspector.current_variable == name
+        for per_variable in (self._modes, self._y_scales):
+            if name in per_variable:
+                per_variable[new] = per_variable.pop(name)
+        self._apply(lambda d: rename_variable(d, name, new, update_references=answer == "yes"))
+        if was_selected and new in self._doc:
+            self.select_variable(new)
+
+    def _delete_variable(self, name: str):
+        if self._confirm_delete(name, references_to(self._doc, name)):
+            self._apply(lambda d: delete_variable(d, name))
+
     def _apply(self, edit):
         try:
             self._session.apply(edit)
@@ -677,6 +716,8 @@ class CdfFileView(QWidget):
                 menu.addAction("Plot in New Panel", lambda: self._plot_new_panel(node.name))
                 menu.addAction("Send to Console", lambda: self._send_to_console(node.name))
                 menu.addSeparator()
+                menu.addAction("Rename…", lambda: self._rename_variable(node.name))
+                menu.addAction("Delete", lambda: self._delete_variable(node.name))
 
         if menu.isEmpty():
             return

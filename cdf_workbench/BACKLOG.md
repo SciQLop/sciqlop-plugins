@@ -71,7 +71,7 @@ So we don't edit it. We load it into our own model, edit the model, and build a 
   Typed entries (CDF_CHAR, numeric, epoch) — keep the type unless the user changes it.
   Limits: the dialog gives all entries of a global attribute one type; an edited CDF_BYTE
   attribute can't be saved until pycdfpp writes CDF_BYTE from values.
-- [ ] **E5 — Rename / delete variables** (S) — depends on E3
+- [x] **E5 — Rename / delete variables** (S) — depends on E3 — tree right-click menu
   Rename also updates `DEPEND_*`, `LABL_PTR_*`, `DELTA_*_VAR` references in other variables (ask first).
   Delete warns when other variables reference it.
 - [ ] **E6 — Create variables** (M) — depends on E3

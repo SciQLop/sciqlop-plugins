@@ -322,3 +322,39 @@ def test_cancelled_dialog_changes_nothing(b_view, monkeypatch):
     monkeypatch.setattr(b_view, "_ask_attribute", lambda *args: None)
     b_view._inspector.edit_attribute.emit("B", "UNITS")
     assert not b_view.session.is_modified
+
+
+def test_renaming_a_variable_asks_about_references(dist_view, monkeypatch):
+    asked = []
+    monkeypatch.setattr(dist_view, "_ask_new_name", lambda name: "E")
+    monkeypatch.setattr(dist_view, "_ask_update_references", lambda name, refs: asked.append(refs) or "yes")
+
+    dist_view._rename_variable("energy")
+
+    assert asked == [[("dist", "DEPEND_3")]]
+    assert "E" in dist_view.session.document and "energy" not in dist_view.session.document
+    assert dist_view._tree_model.variable_info("dist").all_attributes["DEPEND_3"] == ["E"]
+
+
+def test_cancelling_the_reference_question_renames_nothing(dist_view, monkeypatch):
+    monkeypatch.setattr(dist_view, "_ask_new_name", lambda name: "E")
+    monkeypatch.setattr(dist_view, "_ask_update_references", lambda name, refs: "cancel")
+    dist_view._rename_variable("energy")
+    assert not dist_view.session.is_modified
+
+
+def test_deleting_a_variable_warns_about_references(dist_view, monkeypatch):
+    warned = []
+    monkeypatch.setattr(dist_view, "_confirm_delete", lambda name, refs: warned.append(refs) or True)
+
+    dist_view._delete_variable("phi")
+
+    assert warned == [[("dist", "DEPEND_1")]]
+    assert "phi" not in dist_view.session.document
+    assert dist_view._tree_model.variable_info("phi") is None
+
+
+def test_renaming_the_selected_variable_keeps_it_selected(b_view, monkeypatch):
+    monkeypatch.setattr(b_view, "_ask_new_name", lambda name: "B_gse")
+    b_view._rename_variable("B")
+    assert b_view._inspector.current_variable == "B_gse"

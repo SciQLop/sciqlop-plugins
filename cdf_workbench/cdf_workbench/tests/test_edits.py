@@ -115,3 +115,53 @@ def test_attribute_form_needs_a_name():
 
 def test_format_a_scalar():
     assert format_value(3) == "3"
+
+
+@pytest.fixture
+def linked():
+    cdf = pycdfpp.CDF()
+    cdf.add_variable("Epoch", values=np.array(["2020-01-01"], dtype="datetime64[ns]"))
+    cdf.add_variable("energy", values=np.ones(4), is_nrv=True)
+    cdf.add_variable("flux", values=np.ones((1, 4)))
+    cdf.add_variable("flux_err", values=np.ones((1, 4)))
+    for name, value in (("DEPEND_0", "Epoch"), ("DEPEND_1", "energy"), ("DELTA_PLUS_VAR", "flux_err"),
+                        ("CATDESC", "energy")):
+        cdf["flux"].add_attribute(name, value)
+    cdf["flux_err"].add_attribute("DEPEND_1", "energy")
+    return from_cdf(cdf)
+
+
+def test_references_to_a_variable(linked):
+    from cdf_workbench.edits import references_to
+    assert references_to(linked, "energy") == [("flux", "DEPEND_1"), ("flux_err", "DEPEND_1")]
+    assert references_to(linked, "flux") == []
+
+
+def test_rename_updates_references_but_not_free_text(linked):
+    from cdf_workbench.edits import rename_variable
+    renamed = rename_variable(linked, "energy", "E", update_references=True)
+
+    assert list(renamed.keys()) == ["Epoch", "E", "flux", "flux_err"]
+    assert renamed["flux"].attributes["DEPEND_1"].value == "E"
+    assert renamed["flux_err"].attributes["DEPEND_1"].value == "E"
+    assert renamed["flux"].attributes["CATDESC"].value == "energy"
+    assert list(_saved(renamed).keys()) == ["Epoch", "E", "flux", "flux_err"]
+
+
+def test_rename_can_leave_references_alone(linked):
+    from cdf_workbench.edits import rename_variable
+    renamed = rename_variable(linked, "energy", "E", update_references=False)
+    assert renamed["flux"].attributes["DEPEND_1"].value == "energy"
+
+
+def test_rename_refuses_an_existing_or_empty_name(linked):
+    from cdf_workbench.edits import rename_variable
+    with pytest.raises(ValueError, match="flux already exists"):
+        rename_variable(linked, "energy", "flux", update_references=True)
+    with pytest.raises(ValueError):
+        rename_variable(linked, "energy", "  ", update_references=True)
+
+
+def test_delete_variable(linked):
+    from cdf_workbench.edits import delete_variable
+    assert list(_saved(delete_variable(linked, "flux_err")).keys()) == ["Epoch", "energy", "flux"]

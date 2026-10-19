@@ -1,5 +1,6 @@
 """Attribute edits: typed text <-> values, and pure Document -> Document functions."""
 from __future__ import annotations
+import re
 from dataclasses import replace
 from typing import Any, Optional
 
@@ -93,3 +94,36 @@ def read_attribute_form(name: str, data_type: pycdfpp.DataType, text: str,
         raise ValueError("The attribute needs a name")
     lines = [line for line in text.splitlines() if line.strip()] if multi_entry else [text]
     return name, data_type, [parse_value(line, data_type) for line in lines]
+
+
+# ISTP attributes whose value is the name of another variable.
+_REFERENCE = re.compile(r"DEPEND_\w+|LABL_PTR_\d+|DELTA_(PLUS|MINUS)_VAR|UNIT_PTR|FORM_PTR|COMPONENT_\d+")
+
+
+def _refers_to(attr_name: str, attr: Attribute, var_name: str) -> bool:
+    return attr.type in _TEXT and _REFERENCE.fullmatch(attr_name) is not None and attr.value == var_name
+
+
+def references_to(doc: Document, var_name: str) -> list[tuple[str, str]]:
+    """(variable, attribute) pairs pointing at `var_name`."""
+    return [(name, attr_name) for name, var in doc.items() for attr_name, attr in var.attributes.items()
+            if _refers_to(attr_name, attr, var_name)]
+
+
+def _retargeted(var, old: str, new: str):
+    return replace(var, attributes={k: (replace(a, value=new) if _refers_to(k, a, old) else a)
+                                    for k, a in var.attributes.items()})
+
+
+def rename_variable(doc: Document, old: str, new: str, update_references: bool) -> Document:
+    new = new.strip()
+    if not new:
+        raise ValueError("The variable needs a name")
+    variables = _with_key(doc.variables, old, new, doc[old])
+    if update_references:
+        variables = {k: _retargeted(v, old, new) for k, v in variables.items()}
+    return replace(doc, variables=variables)
+
+
+def delete_variable(doc: Document, var_name: str) -> Document:
+    return replace(doc, variables={k: v for k, v in doc.variables.items() if k != var_name})
