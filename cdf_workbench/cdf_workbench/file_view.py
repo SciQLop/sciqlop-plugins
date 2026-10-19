@@ -14,6 +14,8 @@ from PySide6.QtWidgets import (
 import pycdfpp
 
 from .document import Document, DocumentSession, attribute_lists, global_attribute_lists
+from .axis_bar import Axis, AxisModeBar
+from .reduce import Mode, axis_attribute, default_modes, needs_reduction, reduce_values, reduced_info
 from .tree_model import CdfTreeModel, CdfItemDelegate, VariableInfo
 from .inspector import CdfInspectorWidget
 from .preview import CdfPreviewWidget
@@ -197,7 +199,11 @@ def _is_plottable(info: VariableInfo) -> bool:
     if info.display_type.lower() == "no_plot":
         return False
     ndim = len(info.shape)
-    if ndim == 0 or ndim > 2 or any(s == 0 for s in info.shape):
+    if ndim == 0 or any(s == 0 for s in info.shape):
+        return False
+    if needs_reduction(info):
+        return True
+    if ndim > 2:
         return False
     if ndim == 2 and info.display_type.lower() != "spectrogram" and info.shape[1] > MAX_LINE_COMPONENTS:
         return False
@@ -215,6 +221,8 @@ class CdfFileView(QWidget):
     def __init__(self, session: DocumentSession, source: str = "", main_window=None, parent=None):
         super().__init__(parent)
         self._session = session
+        self._modes: dict[str, tuple[Mode, ...]] = {}
+        self._previewed: Optional[VariableInfo] = None
         self._source = source
         self._main_window = main_window
         self._quality_reports: dict[str, QualityReport] = {}
@@ -274,8 +282,15 @@ class CdfFileView(QWidget):
             self._inspector.set_panel_names(self._main_window.plot_panels())
             self._main_window.panels_list_changed.connect(self._inspector.set_panel_names)
 
+        preview_pane = QWidget()
+        preview_layout = QVBoxLayout(preview_pane)
+        preview_layout.setContentsMargins(0, 0, 0, 0)
+        self._axis_bar = AxisModeBar()
+        self._axis_bar.modes_changed.connect(self._on_modes_changed)
+        preview_layout.addWidget(self._axis_bar)
         self._preview = CdfPreviewWidget()
-        right_splitter.addWidget(self._preview)
+        preview_layout.addWidget(self._preview)
+        right_splitter.addWidget(preview_pane)
 
         self._right_splitter = right_splitter
 
@@ -311,6 +326,7 @@ class CdfFileView(QWidget):
         node = source_index.internalPointer()
         if node is None or node.variable_info is None:
             self._show_global_attributes()
+            self._axis_bar.clear()
             self._preview.clear()
             return
 
@@ -364,8 +380,46 @@ class CdfFileView(QWidget):
         d1 = self._doc[info.depend_1]
         return d1.values.astype(np.float64), attribute_lists(d1)
 
+    def _modes_for(self, info: VariableInfo) -> Optional[tuple[Mode, ...]]:
+        if not needs_reduction(info):
+            return None
+        return self._modes.setdefault(info.name, default_modes(info))
+
+    def _read_values(self, info: VariableInfo) -> tuple[VariableInfo, np.ndarray]:
+        values = self._doc[info.name].values
+        modes = self._modes_for(info)
+        if modes is None:
+            return info, values
+        reduced = reduce_values(values, modes, info.fill_value, info.valid_min, info.valid_max)
+        return reduced_info(info, modes), reduced
+
+    def _slice_labels(self, info: VariableInfo, axis: int) -> tuple[str, ...]:
+        size = info.shape[axis + 1]
+        indices = tuple(str(i) for i in range(size))
+        name = axis_attribute(info, "DEPEND", axis)
+        if not name or name not in self._doc:
+            return indices
+        raw = self._doc[name].values
+        if raw.size == 0:
+            return indices
+        if self._text_variable(name) is not None:
+            labels = _text_labels(raw)
+        else:
+            labels = [f"{v:g}" for v in (raw.ravel() if raw.ndim == 1 else raw[0].ravel())]
+        return tuple(labels) if len(labels) == size else indices
+
+    def _axes_of(self, info: VariableInfo) -> list[Axis]:
+        return [Axis(axis_attribute(info, "DEPEND", k) or f"dim {k + 1}", self._slice_labels(info, k))
+                for k in range(len(info.shape) - 1)]
+
+    def _on_modes_changed(self, modes: tuple[Mode, ...]):
+        if self._previewed is None:
+            return
+        self._modes[self._previewed.name] = modes
+        self._render_preview(self._previewed)
+
     def _read_bundle(self, info: VariableInfo) -> PlotBundle:
-        raw_values = self._doc[info.name].values
+        info, raw_values = self._read_values(info)
         raw_depend_1, depend_1_meta = self._read_depend_1(info)
         depend_1, values = _make_ascending(raw_depend_1, raw_values)
         values = _replace_fill(values, info.fill_value)
@@ -380,9 +434,19 @@ class CdfFileView(QWidget):
                           hints=hints, is_time_axis=is_time_axis)
 
     def _update_preview(self, info: VariableInfo):
-        if not _is_plottable(info):
+        self._previewed = info if _is_plottable(info) else None
+        if self._previewed is None:
+            self._axis_bar.clear()
             self._preview.clear()
             return
+        modes = self._modes_for(info)
+        if modes is None:
+            self._axis_bar.clear()
+        else:
+            self._axis_bar.show_axes(self._axes_of(info), modes)
+        self._render_preview(info)
+
+    def _render_preview(self, info: VariableInfo):
         try:
             bundle = self._read_bundle(info)
             self._preview.plot_variable(

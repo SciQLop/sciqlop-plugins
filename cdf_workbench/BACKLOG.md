@@ -8,13 +8,15 @@ Order inside each section is the suggested build order.
 
 ## Read
 
-- [ ] **R1 — Plot variables of rank > 2** (M)
+- [x] **R1 — Plot variables of rank > 2** (M) — `reduce.py`, `axis_bar.py`
   Today `_is_plottable` rejects ndim > 2, so particle distributions can't be plotted.
   One menu per dimension, named after its `DEPEND_k`: *plot* (becomes y axis, only one), *sum*, *mean*, *= value* (slice).
   Default: energy plotted, other dims summed → omnidirectional energy spectrogram.
   FILLVAL / out-of-range values skipped in sums and means.
   The result is a 2D array, so preview, "Plot in New Panel" and "Send to Console" work unchanged.
   Port of CDFpp `d640f2b`.
+  Done. Per-axis sum / mean (sums run before means). "Send to Console" still sends the full variable.
+  Not checked on screen: the offscreen test run has no QRhi, so only the preview's plot type and data were verified.
 - [ ] **R2 — Y axis log/linear override** (S)
   Toggle above the preview; overrides `SCALETYP`.
   On log, values ≤ 0 are hidden. A spectrogram whose bins include ≤ 0 (e.g. azimuth) stays linear.

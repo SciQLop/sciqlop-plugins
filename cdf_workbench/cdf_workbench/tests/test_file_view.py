@@ -30,8 +30,15 @@ def test_2d_huge_component_axis_not_plottable():
     assert not _is_plottable(_info((24, 16384)))
 
 
-def test_3d_not_plottable():
-    assert not _is_plottable(_info((24, 3, 16384)))
+def test_3d_is_plotted_reduced_to_a_spectrogram_never_as_lines():
+    from cdf_workbench.reduce import default_modes, reduced_info
+    info = _info((24, 3, 16384))
+    assert _is_plottable(info)
+    assert reduced_info(info, default_modes(info)).display_type == "spectrogram"
+
+
+def test_3d_with_an_empty_dimension_is_not_plottable():
+    assert not _is_plottable(_info((24, 0, 16)))
 
 
 def test_text_depend_1_gives_labels_not_a_y_axis(qtbot):
@@ -121,3 +128,57 @@ def test_labels_follow_columns_when_depend_1_is_flipped(qtbot):
     assert list(bundle.values[0]) == [1.0, 2.0, 3.0]
     assert bundle.hints.component_labels == ["low", "mid", "high"]
     view.release()
+
+
+@pytest.fixture
+def dist_view(qtbot):
+    import numpy as np
+    from cdf_workbench.document import DocumentSession, from_cdf
+    from cdf_workbench.file_view import CdfFileView
+
+    cdf = pycdfpp.CDF()
+    epochs = np.datetime64("2020-01-01", "ns") + np.arange(3).astype("timedelta64[s]")
+    cdf.add_variable("Epoch", values=epochs, data_type=pycdfpp.DataType.CDF_TIME_TT2000)
+    cdf.add_variable("phi", values=np.array([0.0, 180.0], dtype=np.float32), is_nrv=True)
+    cdf.add_variable("theta", values=np.array([30.0, 90.0, 150.0], dtype=np.float32), is_nrv=True)
+    cdf.add_variable("energy", values=np.array([10.0, 100.0, 1000.0, 10000.0], dtype=np.float32), is_nrv=True)
+    cdf["energy"].add_attribute("SCALETYP", "log")
+    cdf["energy"].add_attribute("UNITS", "eV")
+    cdf.add_variable("dist", values=np.ones((3, 2, 3, 4), dtype=np.float32))
+    for name, value in (("VAR_TYPE", "data"), ("DEPEND_0", "Epoch"), ("DEPEND_1", "phi"),
+                        ("DEPEND_2", "theta"), ("DEPEND_3", "energy"), ("DISPLAY_TYPE", "spectrogram"),
+                        ("SCALETYP", "log")):
+        cdf["dist"].add_attribute(name, value)
+    view = CdfFileView(DocumentSession(from_cdf(cdf)))
+    qtbot.addWidget(view)
+    yield view
+    view.release()
+
+
+def test_distribution_defaults_to_the_omnidirectional_energy_spectrogram(dist_view):
+    info = dist_view._tree_model.variable_info("dist")
+    assert _is_plottable(info)
+
+    bundle = dist_view._read_bundle(info)
+
+    assert bundle.is_time_axis and bundle.is_spectrogram
+    assert bundle.values.shape == (3, 4)
+    assert bundle.values[0, 0] == 6.0
+    assert list(bundle.depend_1.ravel()) == [10.0, 100.0, 1000.0, 10000.0]
+    assert bundle.hints.y2.scale == "log"
+
+
+def test_axis_bar_offers_one_menu_per_dimension(dist_view):
+    from cdf_workbench.reduce import PLOT
+    info = dist_view._tree_model.variable_info("dist")
+
+    dist_view._update_preview(info)
+    assert dist_view._axis_bar.titles() == ["phi", "theta", "energy"]
+    assert dist_view._axis_bar.choices(0) == ["plot", "sum", "mean", "= 0", "= 180"]
+
+    dist_view._axis_bar.select(0, PLOT)
+
+    bundle = dist_view._read_bundle(info)
+    assert bundle.values.shape == (3, 2)
+    assert list(bundle.depend_1.ravel()) == [0.0, 180.0]
+    assert bundle.values[0, 0] == 12.0
