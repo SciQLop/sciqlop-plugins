@@ -35,8 +35,8 @@ Order inside each section is the suggested build order.
   Treat a text DEPEND_1 as labels, not as a y axis.
 - [x] **B3 — Component labels not reversed with a descending DEPEND_1** (S)
   `_make_ascending` flipped the columns but not the labels.
-- [ ] **B4 — Is pycdfpp lazy loading thread-safe?** (?)
-  The analysis worker and the GUI can load values from the same CDF at the same time. Check in CDFpp.
+- [x] **B4 — Is pycdfpp lazy loading thread-safe?**
+  Yes, per CDFpp's author: the worker and the GUI may load values from the same CDF concurrently.
 - [x] **B2 — No quality report for CDF_EPOCH16 files** (S)
   `AnalysisWorker` cast epochs with `astype("datetime64[ns]")`: wrong dates for TT2000/EPOCH, a swallowed error for EPOCH16.
 
