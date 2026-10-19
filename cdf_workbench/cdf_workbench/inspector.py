@@ -6,9 +6,31 @@ from PySide6.QtWidgets import (
     QProgressBar, QPushButton, QFrame, QScrollArea, QMenu,
     QTreeWidget, QTreeWidgetItem, QSizePolicy,
 )
+from .edits import format_value
 from .tree_model import VariableInfo
 from .quality import QualityReport
 from .lint import LintReport, LintIssue
+
+
+class _AttributeLabel(QLabel):
+    """An attribute's name or value: double-click to edit, right-click to edit or delete."""
+    edit_requested = Signal()
+    delete_requested = Signal()
+
+    def __init__(self, text: str, parent=None):
+        super().__init__(text, parent)
+        self.setToolTip("Double-click to edit, right-click for more")
+        self.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.customContextMenuRequested.connect(self._show_menu)
+
+    def mouseDoubleClickEvent(self, event):
+        self.edit_requested.emit()
+
+    def _show_menu(self, pos):
+        menu = QMenu(self)
+        menu.addAction("Edit…", self.edit_requested.emit)
+        menu.addAction("Delete", self.delete_requested.emit)
+        menu.exec(self.mapToGlobal(pos))
 
 
 class CdfInspectorWidget(QWidget):
@@ -16,6 +38,10 @@ class CdfInspectorWidget(QWidget):
     plot_new_panel = Signal(str)      # variable name
     plot_to_panel = Signal(str, str)  # variable name, panel name
     send_to_console = Signal(str)     # variable name
+    # variable name ("" for global attributes), attribute name
+    edit_attribute = Signal(str, str)
+    delete_attribute = Signal(str, str)
+    add_attribute = Signal(str)       # variable name ("" for global attributes)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -49,6 +75,12 @@ class CdfInspectorWidget(QWidget):
         self._attrs_grid = QGridLayout(self._attrs_container)
         scroll.setWidget(self._attrs_container)
         layout.addWidget(scroll, stretch=1)
+        add_row = QHBoxLayout()
+        self._btn_add_attribute = QPushButton("Add attribute…")
+        self._btn_add_attribute.clicked.connect(lambda: self.add_attribute.emit(self._current_var or ""))
+        add_row.addWidget(self._btn_add_attribute)
+        add_row.addStretch()
+        layout.addLayout(add_row)
 
         # Quality bar
         self._quality_frame = QFrame()
@@ -89,6 +121,10 @@ class CdfInspectorWidget(QWidget):
         self._btn_add_panel.setEnabled(enabled)
         self._quality_frame.setVisible(enabled)
 
+    @property
+    def current_variable(self) -> str | None:
+        return self._current_var
+
     def update_variable(self, info: VariableInfo, quality: QualityReport | None = None):
         self._current_var = info.name
         self._header.setText(info.name)
@@ -116,13 +152,19 @@ class CdfInspectorWidget(QWidget):
             row += 1
 
         for key, values in info.all_attributes.items():
-            display_val = ", ".join(str(v) for v in values) if values else ""
+            display_val = ", ".join(format_value(v) for v in values)
             is_dep = key.startswith("DEPEND_") or key == "LABL_PTR_1"
-            self._add_attr_row(row, key, display_val, clickable=is_dep)
+            self._add_attr_row(row, key, display_val, clickable=is_dep, editable=True)
             row += 1
 
-    def _add_attr_row(self, row: int, key: str, value: str, clickable: bool = False):
-        key_label = QLabel(f"{key}:")
+    def _editable(self, label: _AttributeLabel, key: str) -> _AttributeLabel:
+        owner = self._current_var or ""
+        label.edit_requested.connect(lambda: self.edit_attribute.emit(owner, key))
+        label.delete_requested.connect(lambda: self.delete_attribute.emit(owner, key))
+        return label
+
+    def _add_attr_row(self, row: int, key: str, value: str, clickable: bool = False, editable: bool = False):
+        key_label = self._editable(_AttributeLabel(f"{key}:"), key) if editable else QLabel(f"{key}:")
         key_label.setStyleSheet("color: gray;")
         self._attrs_grid.addWidget(key_label, row, 0)
 
@@ -133,7 +175,7 @@ class CdfInspectorWidget(QWidget):
             link.clicked.connect(lambda _, v=value: self.dependency_clicked.emit(v))
             self._attrs_grid.addWidget(link, row, 1)
         else:
-            val_label = QLabel(value)
+            val_label = self._editable(_AttributeLabel(value), key) if editable else QLabel(value)
             self._attrs_grid.addWidget(val_label, row, 1)
 
     def _update_quality(self, report: QualityReport):
@@ -221,5 +263,5 @@ class CdfInspectorWidget(QWidget):
                 item.widget().deleteLater()
 
         for row, (key, values) in enumerate(attrs.items()):
-            display_val = ", ".join(str(v) for v in values)
-            self._add_attr_row(row, key, display_val)
+            display_val = ", ".join(format_value(v) for v in values)
+            self._add_attr_row(row, key, display_val, editable=True)

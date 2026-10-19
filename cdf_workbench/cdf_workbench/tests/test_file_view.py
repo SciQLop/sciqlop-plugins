@@ -261,3 +261,64 @@ def test_preview_message_is_hidden_after_a_good_preview(dist_view):
     info = dist_view._tree_model.variable_info("dist")
     dist_view._update_preview(info)
     assert dist_view._preview_message.isHidden()
+
+
+@pytest.fixture
+def b_view(qtbot):
+    import numpy as np
+    from cdf_workbench.document import DocumentSession, from_cdf
+    from cdf_workbench.file_view import CdfFileView
+    cdf = pycdfpp.CDF()
+    cdf.add_attribute("Project", ["ISTP"])
+    cdf.add_variable("B", values=np.ones(3))
+    cdf["B"].add_attribute("VAR_TYPE", "data")
+    cdf["B"].add_attribute("UNITS", "nT")
+    cdf["B"].add_attribute("CATDESC", "field")
+    view = CdfFileView(DocumentSession(from_cdf(cdf)))
+    qtbot.addWidget(view)
+    view.select_variable("B")
+    yield view
+    view.release()
+
+
+def test_editing_a_variable_attribute_updates_document_and_inspector(b_view, monkeypatch):
+    monkeypatch.setattr(b_view, "_ask_attribute", lambda *args: ("UNITS", pycdfpp.DataType.CDF_CHAR, ["pT"]))
+
+    b_view._inspector.edit_attribute.emit("B", "UNITS")
+
+    assert b_view.session.document["B"].attributes["UNITS"].value == "pT"
+    assert b_view._tree_model.variable_info("B").units == "pT"
+    assert b_view._inspector.current_variable == "B"
+
+
+def test_deleting_and_undoing_a_variable_attribute(b_view):
+    b_view._inspector.delete_attribute.emit("B", "CATDESC")
+    assert "CATDESC" not in b_view._tree_model.variable_info("B").all_attributes
+
+    b_view.session.undo()
+
+    assert b_view._tree_model.variable_info("B").catdesc == "field"
+
+
+def test_adding_a_global_attribute(b_view, monkeypatch):
+    monkeypatch.setattr(b_view, "_ask_attribute",
+                        lambda *args: ("Mission", pycdfpp.DataType.CDF_CHAR, ["MMS", "Cluster"]))
+
+    b_view._inspector.add_attribute.emit("")
+
+    assert [e.value for e in b_view.session.document.attributes["Mission"].entries] == ["MMS", "Cluster"]
+
+
+def test_renaming_onto_an_existing_attribute_is_refused(b_view, monkeypatch):
+    monkeypatch.setattr(b_view, "_ask_attribute", lambda *args: ("CATDESC", pycdfpp.DataType.CDF_CHAR, ["x"]))
+
+    b_view._inspector.edit_attribute.emit("B", "UNITS")
+
+    assert not b_view.session.is_modified
+    assert "CATDESC already exists" in b_view._preview_message.text()
+
+
+def test_cancelled_dialog_changes_nothing(b_view, monkeypatch):
+    monkeypatch.setattr(b_view, "_ask_attribute", lambda *args: None)
+    b_view._inspector.edit_attribute.emit("B", "UNITS")
+    assert not b_view.session.is_modified

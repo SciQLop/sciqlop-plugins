@@ -13,7 +13,12 @@ from PySide6.QtWidgets import (
 )
 import pycdfpp
 
-from .document import Document, DocumentSession, attribute_lists, global_attribute_lists
+from .attribute_dialog import AttributeDialog
+from .document import Attribute, Document, DocumentSession, GlobalAttribute, attribute_lists, global_attribute_lists
+from .edits import (
+    format_value, remove_global_attribute, remove_variable_attribute, set_global_attribute,
+    set_variable_attribute,
+)
 from .axis_bar import Axis, AxisModeBar
 from .memory import available_memory, memory_problem
 from .reduce import Mode, axis_attribute, default_modes, needs_reduction, reduce_values, reduced_info
@@ -264,6 +269,7 @@ class CdfFileView(QWidget):
         self._quality_reports: dict[str, QualityReport] = {}
         self._lint_report: LintReport | None = None
         self._setup_ui()
+        session.changed.connect(self._on_document_changed)
         self._start_quality_analysis()
         self._start_lint()
 
@@ -312,6 +318,9 @@ class CdfFileView(QWidget):
         self._inspector.dependency_clicked.connect(self.select_variable)
         self._inspector.plot_new_panel.connect(self._plot_new_panel)
         self._inspector.plot_to_panel.connect(self._plot_to_panel)
+        self._inspector.edit_attribute.connect(self._edit_attribute)
+        self._inspector.delete_attribute.connect(self._delete_attribute)
+        self._inspector.add_attribute.connect(self._add_attribute)
         right_splitter.addWidget(self._inspector)
 
         if self._main_window is not None:
@@ -356,6 +365,58 @@ class CdfFileView(QWidget):
     @property
     def _doc(self) -> Optional[Document]:
         return self._session.document if self._session is not None else None
+
+    def _on_document_changed(self):
+        """Rebuild what was derived from the document, keeping the selected variable."""
+        if self._doc is None:
+            return
+        current = self._inspector.current_variable
+        self._tree_model = CdfTreeModel(self._doc)
+        self._proxy_model.setSourceModel(self._tree_model)
+        self._tree_view.expandAll()
+        if current is not None and current in self._doc:
+            self.select_variable(current)
+        else:
+            self._show_global_attributes()
+
+    def _ask_attribute(self, title: str, name: str, data_type, entries: list[str], multi_entry: bool):
+        dialog = AttributeDialog(title, name, data_type, entries, multi_entry, self)
+        return dialog.result_attribute() if dialog.exec() else None
+
+    def _edit_attribute(self, var_name: str, attr_name: str):
+        if var_name:
+            attr = self._doc[var_name].attributes[attr_name]
+            data_type, entries = attr.type, [format_value(attr.value)]
+        else:
+            attr = self._doc.attributes[attr_name]
+            data_type = attr.entries[0].type if attr.entries else pycdfpp.DataType.CDF_CHAR
+            entries = [format_value(e.value) for e in attr.entries]
+        answer = self._ask_attribute(f"Edit {attr_name}", attr_name, data_type, entries, not var_name)
+        if answer is not None:
+            self._set_attribute(var_name, attr_name, *answer)
+
+    def _add_attribute(self, var_name: str):
+        answer = self._ask_attribute("Add attribute", "", pycdfpp.DataType.CDF_CHAR, [], not var_name)
+        if answer is not None:
+            self._set_attribute(var_name, None, *answer)
+
+    def _set_attribute(self, var_name: str, old_name: Optional[str], name: str, data_type, values: list):
+        if var_name:
+            edit = lambda d: set_variable_attribute(d, var_name, old_name, name, Attribute(values[0], data_type))
+        else:
+            entries = GlobalAttribute(tuple(Attribute(v, data_type) for v in values))
+            edit = lambda d: set_global_attribute(d, old_name, name, entries)
+        self._apply(edit)
+
+    def _delete_attribute(self, var_name: str, attr_name: str):
+        self._apply(lambda d: remove_variable_attribute(d, var_name, attr_name) if var_name
+                    else remove_global_attribute(d, attr_name))
+
+    def _apply(self, edit):
+        try:
+            self._session.apply(edit)
+        except ValueError as e:
+            self.show_problem(str(e))
 
     def showEvent(self, event):
         super().showEvent(event)

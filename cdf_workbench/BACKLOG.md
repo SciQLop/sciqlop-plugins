@@ -66,9 +66,11 @@ So we don't edit it. We load it into our own model, edit the model, and build a 
   Not done: quitting SciQLop with unsaved tabs doesn't ask (needs the plugin's close() hook).
 - [x] **E3 — Undo / redo** (S) — depends on E1 — `DocumentSession.undo/redo`, Ctrl+Z / Ctrl+Shift+Z
   Documents are immutable, so undo is a list of past documents and an index. No per-edit undo commands.
-- [ ] **E4 — Edit attributes** (M) — depends on E3
+- [x] **E4 — Edit attributes** (M) — depends on E3 — `edits.py`, `attribute_dialog.py`
   Edit, add, delete global and variable attributes in the inspector.
   Typed entries (CDF_CHAR, numeric, epoch) — keep the type unless the user changes it.
+  Limits: the dialog gives all entries of a global attribute one type; an edited CDF_BYTE
+  attribute can't be saved until pycdfpp writes CDF_BYTE from values.
 - [ ] **E5 — Rename / delete variables** (S) — depends on E3
   Rename also updates `DEPEND_*`, `LABL_PTR_*`, `DELTA_*_VAR` references in other variables (ask first).
   Delete warns when other variables reference it.
