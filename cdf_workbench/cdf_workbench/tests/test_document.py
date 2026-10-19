@@ -146,3 +146,33 @@ def test_session_rejects_an_edit_that_returns_the_same_document(rich_cdf):
 
     with pytest.raises(ValueError):
         session.apply(in_place)
+
+
+def _edited(doc):
+    return replace(doc, attributes={**doc.attributes, "Edited": replace(
+        doc.attributes["Project"], entries=(Attribute("yes", pycdfpp.DataType.CDF_CHAR),))})
+
+
+def test_save_writes_the_document_and_marks_it_saved(tmp_path, rich_cdf):
+    path = tmp_path / "out.cdf"
+    session = DocumentSession(from_cdf(rich_cdf), source="https://example.org/f.cdf")
+    assert not session.can_save_in_place
+    session.apply(_edited)
+
+    session.save(str(path))
+
+    assert not session.is_modified
+    assert session.source == str(path) and session.can_save_in_place
+    assert list(pycdfpp.load(str(path)).attributes["Edited"]) == ["yes"]
+
+
+def test_saving_over_the_source_file_keeps_the_document_readable(tmp_path, rich_cdf):
+    path = tmp_path / "f.cdf"
+    pycdfpp.save(rich_cdf, str(path))
+    session = DocumentSession(from_cdf(pycdfpp.load(str(path))), source=str(path))
+    session.apply(_edited)
+
+    session.save()
+
+    np.testing.assert_array_equal(session.document["B"].values, rich_cdf["B"].values)
+    assert "Edited" in pycdfpp.load(str(path)).attributes

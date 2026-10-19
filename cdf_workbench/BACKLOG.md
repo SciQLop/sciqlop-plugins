@@ -58,11 +58,12 @@ So we don't edit it. We load it into our own model, edit the model, and build a 
   - CDF_BYTE and empty attributes can't be written from values, so they are copied from the source while unedited;
   - an empty global attribute can't be created at all (`add_attribute(name, [])` breaks on `zip(*[])`);
   - column-major files are saved row-major (`add_variable` takes no majority). Values are identical.
-- [ ] **E2 — Save / Save As** (S) — depends on E1
+- [x] **E2 — Save / Save As** (S) — depends on E1 — `DocumentSession.save`, tab right-click menu
   `pycdfpp.save(to_cdf(doc), path)`, then `session.mark_saved()`. Ctrl+S / Ctrl+Shift+S. URL-opened files only get Save As.
   Closing a modified tab asks Save / Discard / Cancel.
   Cancel / join the `AnalysisWorker` first: it lazily loads values from the same `pycdfpp.CDF` on another thread.
   `to_cdf` holds a second copy of all values; try `add_variable(..., copy=False)` for numeric variables.
+  Not done: quitting SciQLop with unsaved tabs doesn't ask (needs the plugin's close() hook).
 - [ ] **E3 — Undo / redo** (S) — depends on E1
   Documents are immutable, so undo is a list of past documents and an index. No per-edit undo commands.
 - [ ] **E4 — Edit attributes** (M) — depends on E3

@@ -118,3 +118,62 @@ def test_a_failed_load_is_shown_on_the_open_page(panel, qtbot):
 
     assert panel._tabs.count() == 1
     assert "File not found" in panel._open_page.status()
+
+
+def _modify(view):
+    from dataclasses import replace
+    from cdf_workbench.document import Attribute, GlobalAttribute
+    edited = GlobalAttribute((Attribute("yes", pycdfpp.DataType.CDF_CHAR),))
+    view.session.apply(lambda d: replace(d, attributes={**d.attributes, "Edited": edited}))
+
+
+def _was_saved(path):
+    return "Edited" in pycdfpp.load(path).attributes
+
+
+def test_save_writes_the_file_and_clears_the_dot(panel, cdf_file, qtbot):
+    panel.open_file(cdf_file)
+    _modify(panel._tabs.widget(0))
+
+    panel.save_tab(0)
+
+    assert panel._tabs.tabText(0) == "sample.cdf"
+    assert _was_saved(cdf_file)
+
+
+def test_save_as_renames_the_tab(panel, cdf_file, qtbot, tmp_path, monkeypatch):
+    target = str(tmp_path / "copy.cdf")
+    monkeypatch.setattr(panel, "_ask_save_path", lambda name: target)
+    panel.open_file(cdf_file)
+
+    panel.save_tab_as(0)
+
+    assert panel._tabs.tabText(0) == "copy.cdf"
+    assert pycdfpp.load(target) is not None
+
+
+@pytest.mark.parametrize("answer, closed, saved", [("cancel", False, False), ("discard", True, False),
+                                                    ("save", True, True)])
+def test_closing_a_modified_tab_asks_first(panel, cdf_file, qtbot, monkeypatch, answer, closed, saved):
+    monkeypatch.setattr(panel, "_ask_unsaved", lambda name: answer)
+    panel.open_file(cdf_file)
+    _modify(panel._tabs.widget(0))
+
+    panel._close_tab(0)
+
+    assert (panel._tabs.count() == 1) == closed
+    assert _was_saved(cdf_file) == saved
+
+
+def test_saving_a_url_file_asks_where(panel, cdf_file, qtbot, tmp_path, monkeypatch):
+    import cdf_workbench.workbench as workbench
+    from cdf_workbench.loader import load_cdf
+    monkeypatch.setattr(workbench, "load_cdf", lambda source: load_cdf(cdf_file))
+    asked = []
+    monkeypatch.setattr(panel, "_ask_save_path", lambda name: asked.append(name) or "")
+    panel.open_file("https://example.org/sample.cdf")
+    qtbot.waitUntil(lambda: panel._tabs.count() == 2)
+
+    panel.save_tab(0)
+
+    assert asked == ["sample.cdf"]

@@ -1,11 +1,12 @@
 from __future__ import annotations
 from pathlib import PurePosixPath
 from urllib.parse import parse_qs, urlparse
-from PySide6.QtCore import QObject, QRunnable, QThreadPool, Signal
+from typing import Optional
+from PySide6.QtCore import QObject, QRunnable, QThreadPool, Qt, Signal
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QTabWidget, QTabBar, QStyle, QFileDialog,
+    QWidget, QVBoxLayout, QTabWidget, QTabBar, QStyle, QFileDialog, QMenu, QMessageBox,
 )
-from PySide6.QtGui import QDragEnterEvent, QDropEvent
+from PySide6.QtGui import QAction, QDragEnterEvent, QDropEvent, QKeySequence
 from .loader import load_cdf, CdfLoadError
 from .document import DocumentSession, from_cdf
 from .file_view import CdfFileView
@@ -66,12 +67,23 @@ class CdfWorkbenchPanel(QWidget):
         self._tabs.setTabsClosable(True)
         self._tabs.tabCloseRequested.connect(self._close_tab)
         self._tabs.tabBarDoubleClicked.connect(self._on_tab_double_clicked)
+        self._tabs.tabBar().setContextMenuPolicy(Qt.CustomContextMenu)
+        self._tabs.tabBar().customContextMenuRequested.connect(self._show_tab_menu)
         layout.addWidget(self._tabs)
+        self._add_shortcut(QKeySequence.Save, lambda: self.save_tab(self._tabs.currentIndex()))
+        self._add_shortcut(QKeySequence.SaveAs, lambda: self.save_tab_as(self._tabs.currentIndex()))
 
         self._load_signals = _LoadSignals(self)
         self._load_signals.loaded.connect(self._add_tab)
         self._load_signals.failed.connect(self._on_load_failed)
         self._add_open_tab()
+
+    def _add_shortcut(self, keys, slot):
+        action = QAction(self)
+        action.setShortcut(keys)
+        action.setShortcutContext(Qt.WidgetWithChildrenShortcut)
+        action.triggered.connect(slot)
+        self.addAction(action)
 
     def _add_open_tab(self):
         self._open_page = OpenPage()
@@ -117,26 +129,81 @@ class CdfWorkbenchPanel(QWidget):
 
     def _add_tab(self, source: str, variable: str, cdf):
         self._open_page.set_status("")
-        file_view = CdfFileView(DocumentSession(from_cdf(cdf)), source=source,
+        file_view = CdfFileView(DocumentSession(from_cdf(cdf), source=source), source=source,
                                 main_window=self._main_window)
-        name = _tab_name(source)
 
         insert_idx = max(0, self._tabs.count() - 1)
-        self._tabs.insertTab(insert_idx, file_view, name)
+        self._tabs.insertTab(insert_idx, file_view, _tab_name(source))
         self._tabs.setCurrentIndex(insert_idx)
-        file_view.session.changed.connect(lambda: self._refresh_title(file_view, name))
+        file_view.session.changed.connect(lambda: self._refresh_title(file_view))
         if variable:
             file_view.select_variable(variable)
 
-    def _refresh_title(self, file_view: CdfFileView, name: str):
+    def _refresh_title(self, file_view: CdfFileView):
         index = self._tabs.indexOf(file_view)
-        if index >= 0:
-            modified = file_view.session is not None and file_view.session.is_modified
-            self._tabs.setTabText(index, f"{name} •" if modified else name)
+        session = file_view.session
+        if index >= 0 and session is not None:
+            name = _tab_name(session.source)
+            self._tabs.setTabText(index, f"{name} •" if session.is_modified else name)
+
+    def _view_at(self, index: int) -> Optional[CdfFileView]:
+        widget = self._tabs.widget(index)
+        return widget if isinstance(widget, CdfFileView) and widget.session is not None else None
+
+    def _show_tab_menu(self, pos):
+        index = self._tabs.tabBar().tabAt(pos)
+        if self._view_at(index) is None:
+            return
+        menu = QMenu(self)
+        menu.addAction("Save", lambda: self.save_tab(index))
+        menu.addAction("Save As…", lambda: self.save_tab_as(index))
+        menu.addSeparator()
+        menu.addAction("Close", lambda: self._close_tab(index))
+        menu.exec(self._tabs.tabBar().mapToGlobal(pos))
+
+    def save_tab(self, index: int) -> bool:
+        """URL-opened files have no file to save to: they go through Save As."""
+        view = self._view_at(index)
+        if view is None:
+            return False
+        if not view.session.can_save_in_place:
+            return self.save_tab_as(index)
+        return self._save(view, None)
+
+    def save_tab_as(self, index: int) -> bool:
+        view = self._view_at(index)
+        if view is None:
+            return False
+        path = self._ask_save_path(_tab_name(view.session.source))
+        return bool(path) and self._save(view, path)
+
+    def _save(self, view: CdfFileView, path: Optional[str]) -> bool:
+        try:
+            view.session.save(path)
+        except Exception as e:  # pycdfpp raises OSError, ValueError for unwritable values
+            view.show_problem(f"Can't save: {e}")
+            return False
+        return True
+
+    def _ask_save_path(self, name: str) -> str:
+        path, _ = QFileDialog.getSaveFileName(self, "Save CDF As", name, "CDF Files (*.cdf)")
+        return path
+
+    def _ask_unsaved(self, name: str) -> str:
+        """'save', 'discard' or 'cancel'."""
+        answer = QMessageBox.question(
+            self, "Unsaved changes", f"Save the changes to {name}?",
+            QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel, QMessageBox.Save)
+        return {QMessageBox.Save: "save", QMessageBox.Discard: "discard"}.get(answer, "cancel")
 
     def _close_tab(self, index: int):
         if self._tabs.tabText(index) == "+":
             return
+        view = self._view_at(index)
+        if view is not None and view.session.is_modified:
+            answer = self._ask_unsaved(_tab_name(view.session.source))
+            if answer == "cancel" or (answer == "save" and not self.save_tab(index)):
+                return
         widget = self._tabs.widget(index)
         self._tabs.removeTab(index)
         if isinstance(widget, CdfFileView):

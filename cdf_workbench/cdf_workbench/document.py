@@ -137,13 +137,22 @@ def _write_variable(cdf: pycdfpp.CDF, name: str, var: Variable) -> None:
 
 
 class DocumentSession(QObject):
-    """The current document of one tab, and whether it differs from the saved one."""
+    """The current document of one tab, where it is saved, and whether it differs from that."""
     changed = Signal()
 
-    def __init__(self, document: Document, parent=None):
+    def __init__(self, document: Document, source: str = "", parent=None):
         super().__init__(parent)
         self._document = document
         self._saved = document
+        self._source = source
+
+    @property
+    def source(self) -> str:
+        return self._source
+
+    @property
+    def can_save_in_place(self) -> bool:
+        return bool(self._source) and not self._source.startswith(("http://", "https://"))
 
     @property
     def document(self) -> Document:
@@ -163,3 +172,10 @@ class DocumentSession(QObject):
     def mark_saved(self) -> None:
         self._saved = self._document
         self.changed.emit()
+
+    def save(self, path: Optional[str] = None) -> None:
+        """Saving over the source file is safe: `to_cdf` reads every value before writing."""
+        path = path or self._source
+        pycdfpp.save(to_cdf(self._document), path)
+        self._source = path
+        self.mark_saved()

@@ -532,9 +532,9 @@ class CdfFileView(QWidget):
         except Exception as e:
             logger.debug("Preview failed for %s", info.name, exc_info=True)
             self._preview.clear()
-            self._show_problem(_problem_text(e, "preview", info.name))
+            self.show_problem(_problem_text(e, "preview", info.name))
 
-    def _show_problem(self, message: str):
+    def show_problem(self, message: str):
         self._preview_message.setText(message)
         self._preview_message.show()
 
@@ -581,7 +581,7 @@ class CdfFileView(QWidget):
             self._render(create_plot_panel(), info, frame_to_data=True)
         except Exception as e:
             logger.warning("Failed to plot %s", var_name, exc_info=True)
-            self._show_problem(_problem_text(e, "plot", var_name))
+            self.show_problem(_problem_text(e, "plot", var_name))
 
     def _plot_to_panel(self, var_name: str, panel_name: str):
         info = self._lookup_plottable(var_name)
@@ -595,7 +595,7 @@ class CdfFileView(QWidget):
             self._render(panel, info, frame_to_data=False)
         except Exception as e:
             logger.warning("Failed to plot %s to panel %s", var_name, panel_name, exc_info=True)
-            self._show_problem(_problem_text(e, "plot", var_name))
+            self.show_problem(_problem_text(e, "plot", var_name))
 
     def _lookup_plottable(self, var_name: str) -> Optional[VariableInfo]:
         if self._main_window is None:
@@ -629,7 +629,7 @@ class CdfFileView(QWidget):
             self._main_window.push_variables_to_console({var_name: data})
         except Exception as e:
             logger.warning("Failed to send %s to console", var_name, exc_info=True)
-            self._show_problem(_problem_text(e, "send", var_name))
+            self.show_problem(_problem_text(e, "send", var_name))
 
     def _start_quality_analysis(self):
         infos = {
