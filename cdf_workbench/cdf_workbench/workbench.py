@@ -152,6 +152,15 @@ class CdfWorkbenchPanel(QWidget):
         widget = self._tabs.widget(index)
         return widget if isinstance(widget, CdfFileView) and widget.session is not None else None
 
+    def add_variable(self, name: str, values, attributes: Optional[dict] = None, is_nrv: bool = False,
+                     data_type=None):
+        """Add a variable to the current tab, e.g. from the console:
+        plugins.cdf_workbench.add_variable("Bmag", np.linalg.norm(b, axis=1), {"DEPEND_0": "Epoch"})"""
+        view = self._view_at(self._tabs.currentIndex())
+        if view is None:
+            raise ValueError("Open a CDF file in the CDF Workbench first")
+        view.add_variable(name, values, attributes, is_nrv, data_type)
+
     def undo_current(self):
         if (view := self._view_at(self._tabs.currentIndex())) is not None:
             view.session.undo()

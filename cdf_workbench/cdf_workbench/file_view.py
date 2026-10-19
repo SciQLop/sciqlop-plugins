@@ -17,9 +17,10 @@ import pycdfpp
 from .attribute_dialog import AttributeDialog
 from .document import Attribute, Document, DocumentSession, GlobalAttribute, attribute_lists, global_attribute_lists
 from .edits import (
-    delete_variable, format_value, references_to, remove_global_attribute, remove_variable_attribute,
-    rename_variable, set_global_attribute, set_variable_attribute,
+    add_variable, delete_variable, format_value, new_variable, references_to, remove_global_attribute,
+    remove_variable_attribute, rename_variable, set_global_attribute, set_variable_attribute,
 )
+from .variable_dialog import VariableDialog
 from .axis_bar import Axis, AxisModeBar
 from .memory import available_memory, memory_problem
 from .reduce import Mode, axis_attribute, default_modes, needs_reduction, reduce_values, reduced_info
@@ -447,6 +448,26 @@ class CdfFileView(QWidget):
         if was_selected and new in self._doc:
             self.select_variable(new)
 
+    def _ask_variable(self):
+        dialog = VariableDialog(self)
+        return dialog.result_variable() if dialog.exec() else None
+
+    def _new_variable(self):
+        answer = self._ask_variable()
+        if answer is not None:
+            name, data_type, is_nrv, values = answer
+            try:
+                self.add_variable(name, values, data_type=data_type, is_nrv=is_nrv)
+            except ValueError as e:
+                self.show_problem(str(e))
+
+    def add_variable(self, name: str, values, attributes: Optional[dict] = None, is_nrv: bool = False,
+                     data_type=None):
+        """Raises ValueError on a bad name or values; the new variable gets selected."""
+        var = new_variable(values, data_type, is_nrv, attributes)
+        self._session.apply(lambda d: add_variable(d, name, var))
+        self.select_variable(name.strip())
+
     def _delete_variable(self, name: str):
         if self._confirm_delete(name, references_to(self._doc, name)):
             self._apply(lambda d: delete_variable(d, name))
@@ -718,9 +739,9 @@ class CdfFileView(QWidget):
                 menu.addSeparator()
                 menu.addAction("Rename…", lambda: self._rename_variable(node.name))
                 menu.addAction("Delete", lambda: self._delete_variable(node.name))
+                menu.addSeparator()
 
-        if menu.isEmpty():
-            return
+        menu.addAction("New variable…", self._new_variable)
         menu.exec(self._tree_view.viewport().mapToGlobal(pos))
 
     def _send_to_console(self, var_name: str):

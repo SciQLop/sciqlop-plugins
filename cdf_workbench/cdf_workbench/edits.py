@@ -7,7 +7,7 @@ from typing import Any, Optional
 import numpy as np
 import pycdfpp
 
-from .document import Attribute, Document, GlobalAttribute
+from .document import Attribute, Document, GlobalAttribute, Variable
 
 T = pycdfpp.DataType
 _TEXT = {T.CDF_CHAR, T.CDF_UCHAR}
@@ -127,3 +127,67 @@ def rename_variable(doc: Document, old: str, new: str, update_references: bool) 
 
 def delete_variable(doc: Document, var_name: str) -> Document:
     return replace(doc, variables={k: v for k, v in doc.variables.items() if k != var_name})
+
+
+_FROM_DTYPE = {np.dtype(dtype): data_type for data_type, dtype in (*_REAL.items(), *_INTEGER.items())
+               if data_type not in (T.CDF_REAL4, T.CDF_REAL8, T.CDF_BYTE)}
+
+
+def _as_cdf_array(values) -> tuple[np.ndarray, pycdfpp.DataType]:
+    array = np.asarray(values)
+    if array.dtype.kind in "SU":
+        return np.char.encode(array, "utf-8") if array.dtype.kind == "U" else array, T.CDF_CHAR
+    if array.dtype.kind == "M":
+        return array.astype("datetime64[ns]"), T.CDF_TIME_TT2000
+    if array.dtype not in _FROM_DTYPE:
+        raise ValueError(f"No CDF type for {array.dtype} values")
+    return array, _FROM_DTYPE[array.dtype]
+
+
+def _attribute_for(value, var_type: pycdfpp.DataType) -> Attribute:
+    """Text stays text; numbers take the variable's type (ISTP wants FILLVAL, VALIDMIN... typed
+    like the data), or DOUBLE for a text or time variable."""
+    if isinstance(value, str):
+        return Attribute(value, T.CDF_CHAR)
+    numeric_type = var_type if var_type in _INTEGER or var_type in _REAL else T.CDF_DOUBLE
+    dtype = _INTEGER.get(numeric_type) or _REAL[numeric_type]
+    return Attribute(np.atleast_1d(np.asarray(value, dtype=dtype)), numeric_type)
+
+
+def new_variable(values, data_type: Optional[pycdfpp.DataType] = None, is_nrv: bool = False,
+                 attributes: Optional[dict] = None) -> Variable:
+    array, inferred = _as_cdf_array(values)
+    data_type = data_type or inferred
+    # pycdfpp counts the string length as the last dimension of a CDF_CHAR variable
+    shape = array.shape + ((array.dtype.itemsize,) if data_type in _TEXT else ())
+    return Variable(type=data_type, shape=shape, is_nrv=is_nrv,
+                    compression=pycdfpp.CompressionType.no_compression,
+                    attributes={k: _attribute_for(v, data_type) for k, v in (attributes or {}).items()},
+                    load_values=lambda: array)
+
+
+def add_variable(doc: Document, name: str, var: Variable) -> Document:
+    name = name.strip()
+    if not name:
+        raise ValueError("The variable needs a name")
+    return replace(doc, variables=_with_key(doc.variables, None, name, var))
+
+
+def parse_values(text: str, data_type: pycdfpp.DataType) -> np.ndarray:
+    """Values typed in the new variable dialog: labels one per line, numbers and times comma separated."""
+    if data_type in _TEXT:
+        return np.array([line.strip().encode() for line in text.splitlines() if line.strip()])
+    values = parse_value(text, data_type)
+    dtype = _INTEGER.get(data_type) or _REAL.get(data_type) or "datetime64[ns]"
+    return np.array(values, dtype=dtype)
+
+
+def read_variable_form(name: str, data_type: pycdfpp.DataType, is_nrv: bool,
+                       text: str) -> tuple[str, pycdfpp.DataType, bool, np.ndarray]:
+    name = name.strip()
+    if not name:
+        raise ValueError("The variable needs a name")
+    values = parse_values(text, data_type)
+    if values.size == 0:
+        raise ValueError("Enter at least one value")
+    return name, data_type, is_nrv, values

@@ -189,3 +189,16 @@ def test_undo_shortcut_reverts_the_current_tab(panel, cdf_file, qtbot):
     assert panel._tabs.tabText(0) == "sample.cdf"
     panel.redo_current()
     assert panel._tabs.tabText(0) == "sample.cdf •"
+
+
+def test_console_add_variable_acts_on_the_current_tab(panel, cdf_file, qtbot):
+    """In SciQLop's console: plugins.cdf_workbench.add_variable(...)."""
+    with pytest.raises(ValueError, match="Open a CDF"):
+        panel.add_variable("x", [1.0])
+    panel.open_file(cdf_file)
+
+    panel.add_variable("Bmag", np.ones(10), {"UNITS": "nT", "DEPEND_0": "Epoch"})
+
+    doc = panel._tabs.widget(0).session.document
+    assert doc["Bmag"].attributes["DEPEND_0"].value == "Epoch"
+    assert panel._tabs.tabText(0) == "sample.cdf •"

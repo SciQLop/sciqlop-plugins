@@ -74,8 +74,9 @@ So we don't edit it. We load it into our own model, edit the model, and build a 
 - [x] **E5 — Rename / delete variables** (S) — depends on E3 — tree right-click menu
   Rename also updates `DEPEND_*`, `LABL_PTR_*`, `DELTA_*_VAR` references in other variables (ask first).
   Delete warns when other variables reference it.
-- [ ] **E6 — Create variables** (M) — depends on E3
-  From the console (`workbench.add_variable(name, array, attrs)`) and from a dialog (type, shape, NRV).
+- [x] **E6 — Create variables** (M) — depends on E3 — `variable_dialog.py`, `edits.new_variable`
+  From the console (`plugins.cdf_workbench.add_variable(name, array, attrs)`, SciQLop proxies it to
+  the GUI thread) and from a dialog (type, NRV, 1D values; other shapes go through the console).
 - [ ] **E7 — Live lint** (S) — depends on E2
   Re-run AstraLint on `to_cdf(doc)` after each edit (debounced), update inspector badges.
   Also stops URL-opened files being downloaded a second time: lint gets the path/URL today.

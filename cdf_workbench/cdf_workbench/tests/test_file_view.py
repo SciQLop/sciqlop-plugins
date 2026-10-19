@@ -358,3 +358,21 @@ def test_renaming_the_selected_variable_keeps_it_selected(b_view, monkeypatch):
     monkeypatch.setattr(b_view, "_ask_new_name", lambda name: "B_gse")
     b_view._rename_variable("B")
     assert b_view._inspector.current_variable == "B_gse"
+
+
+def test_new_variable_from_the_dialog_is_added_and_selected(b_view, monkeypatch):
+    import numpy as np
+    monkeypatch.setattr(b_view, "_ask_variable",
+                        lambda: ("labels", pycdfpp.DataType.CDF_CHAR, True, np.array([b"x", b"y"])))
+
+    b_view._new_variable()
+
+    assert b_view.session.document["labels"].is_nrv
+    assert b_view._inspector.current_variable == "labels"
+
+
+def test_new_variable_with_a_taken_name_is_explained(b_view, monkeypatch):
+    import numpy as np
+    monkeypatch.setattr(b_view, "_ask_variable", lambda: ("B", pycdfpp.DataType.CDF_DOUBLE, True, np.ones(2)))
+    b_view._new_variable()
+    assert "B already exists" in b_view._preview_message.text()

@@ -165,3 +165,59 @@ def test_rename_refuses_an_existing_or_empty_name(linked):
 def test_delete_variable(linked):
     from cdf_workbench.edits import delete_variable
     assert list(_saved(delete_variable(linked, "flux_err")).keys()) == ["Epoch", "energy", "flux"]
+
+
+def test_new_variable_infers_the_type_and_types_numeric_attributes_like_the_data(linked):
+    from cdf_workbench.edits import add_variable, new_variable
+    var = new_variable(np.arange(5, dtype=np.float32), attributes={"UNITS": "nT", "FILLVAL": -1e31})
+
+    out = _saved(add_variable(linked, "Bt", var))["Bt"]
+
+    assert out.type == T.CDF_FLOAT and tuple(out.shape) == (5,)
+    assert out.attributes["UNITS"].value == "nT"
+    assert out.attributes["FILLVAL"].type() == T.CDF_FLOAT
+
+
+def test_new_text_and_time_variables(linked):
+    from cdf_workbench.edits import add_variable, new_variable
+    labels = new_variable(["Bx", "By", "Bz"], is_nrv=True)
+    times = new_variable(np.array(["2020-01-01"], dtype="datetime64[s]"))
+    assert labels.type == T.CDF_CHAR and labels.shape == (3, 2)
+    assert times.type == T.CDF_TIME_TT2000
+
+    out = _saved(add_variable(add_variable(linked, "labels", labels), "t", times))
+
+    assert out["labels"].is_nrv and list(out["labels"].values.ravel()) == [b"Bx", b"By", b"Bz"]
+    assert pycdfpp.to_datetime64(out["t"].values)[0] == np.datetime64("2020-01-01", "ns")
+
+
+def test_add_variable_refuses_an_existing_name(linked):
+    from cdf_workbench.edits import add_variable, new_variable
+    with pytest.raises(ValueError, match="flux already exists"):
+        add_variable(linked, "flux", new_variable([1.0]))
+
+
+def test_new_variable_refuses_unsupported_values():
+    from cdf_workbench.edits import new_variable
+    with pytest.raises(ValueError):
+        new_variable(np.array([1 + 2j]))
+
+
+@pytest.mark.parametrize("text, data_type, expected", [
+    ("1, 2, 3", T.CDF_INT4, np.array([1, 2, 3], dtype=np.int32)),
+    ("Bx\nBy\n", T.CDF_CHAR, np.array([b"Bx", b"By"])),
+])
+def test_parse_values_for_a_new_variable(text, data_type, expected):
+    from cdf_workbench.edits import parse_values
+    values = parse_values(text, data_type)
+    assert values.dtype == expected.dtype and list(values) == list(expected)
+
+
+def test_variable_form_needs_a_name_and_values():
+    from cdf_workbench.edits import read_variable_form
+    with pytest.raises(ValueError, match="name"):
+        read_variable_form(" ", T.CDF_CHAR, True, "x")
+    with pytest.raises(ValueError, match="at least one"):
+        read_variable_form("labels", T.CDF_CHAR, True, "\n")
+    name, data_type, nrv, values = read_variable_form(" labels ", T.CDF_CHAR, True, "Bx\nBy")
+    assert (name, nrv, list(values)) == ("labels", True, [b"Bx", b"By"])
