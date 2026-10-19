@@ -101,12 +101,12 @@ So we don't edit it. We load it into our own model, edit the model, and build a 
   Re-encode with each pycdfpp `CompressionType`, show resulting sizes, save the chosen one.
   Run in a worker thread; big files take a while.
   Port of CDFpp `bcd6b00`, `4a7b232`.
-- [ ] **X2 — Export structure as YAML** (S)
+- [x] **X2 — Export structure as YAML** (S) — tab right-click, built from the document (no values read)
   Variables + attributes, no data. Start from `pycdfpp.to_dict_skeleton`.
   Port of CDFpp `6f17d37`.
-- [ ] **X3 — Export variable data** (S)
+- [x] **X3 — Export variable data** (S) — variable right-click "Export data…": CSV, or .npz with the axes
   CSV / `.npy` of the plotted (masked, reduced) data, next to "Send to Console".
-- [ ] **X4 — Save subset** (S) — depends on E2
+- [x] **X4 — Save subset** (S) — depends on E2 — tab right-click
   Pick variables (auto-include their `DEPEND_*` / label vars), save a copy via `pycdfpp.filter_cdf`.
 
 ## Not planned

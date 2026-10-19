@@ -202,3 +202,26 @@ def test_console_add_variable_acts_on_the_current_tab(panel, cdf_file, qtbot):
     doc = panel._tabs.widget(0).session.document
     assert doc["Bmag"].attributes["DEPEND_0"].value == "Epoch"
     assert panel._tabs.tabText(0) == "sample.cdf •"
+
+
+def test_export_structure_as_yaml(panel, cdf_file, qtbot, tmp_path, monkeypatch):
+    import yaml
+    target = tmp_path / "s.yaml"
+    monkeypatch.setattr(panel, "_ask_export_path", lambda name, filters: str(target))
+    panel.open_file(cdf_file)
+
+    panel.export_structure(0)
+
+    assert set(yaml.safe_load(target.read_text())["variables"]) == {"Epoch", "Bt"}
+
+
+def test_save_subset_keeps_what_the_variables_need(panel, cdf_file, qtbot, tmp_path, monkeypatch):
+    target = str(tmp_path / "sub.cdf")
+    monkeypatch.setattr(panel, "_ask_variables", lambda names: ["Bt"])
+    monkeypatch.setattr(panel, "_ask_save_path", lambda name: target)
+    panel.open_file(cdf_file)
+
+    panel.save_subset(0)
+
+    assert list(pycdfpp.load(target).keys()) == ["Epoch", "Bt"]
+    assert panel._tabs.tabText(0) == "sample.cdf"

@@ -1,14 +1,17 @@
 from __future__ import annotations
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 from urllib.parse import parse_qs, urlparse
 from typing import Optional
 from PySide6.QtCore import QObject, QRunnable, QThreadPool, Qt, Signal
+import pycdfpp
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QTabWidget, QTabBar, QStyle, QFileDialog, QMenu, QMessageBox,
+    QDialog, QDialogButtonBox, QListWidget, QListWidgetItem,
 )
 from PySide6.QtGui import QAction, QDragEnterEvent, QDropEvent, QKeySequence
 from .loader import load_cdf, CdfLoadError
-from .document import DocumentSession, from_cdf
+from .document import DocumentSession, from_cdf, to_cdf
+from .export import skeleton_yaml, subset
 from .file_view import CdfFileView
 from .open_page import OpenPage
 
@@ -176,6 +179,8 @@ class CdfWorkbenchPanel(QWidget):
         menu = QMenu(self)
         menu.addAction("Save", lambda: self.save_tab(index))
         menu.addAction("Save As…", lambda: self.save_tab_as(index))
+        menu.addAction("Save subset…", lambda: self.save_subset(index))
+        menu.addAction("Export structure as YAML…", lambda: self.export_structure(index))
         menu.addSeparator()
         menu.addAction("Close", lambda: self._close_tab(index))
         menu.exec(self._tabs.tabBar().mapToGlobal(pos))
@@ -203,6 +208,58 @@ class CdfWorkbenchPanel(QWidget):
             view.show_problem(f"Can't save: {e}")
             return False
         return True
+
+    def save_subset(self, index: int):
+        """Chosen variables plus everything they point at, in a new file; the tab is unchanged."""
+        view = self._view_at(index)
+        if view is None:
+            return
+        names = self._ask_variables(list(view.session.document.keys()))
+        if not names:
+            return
+        path = self._ask_save_path(f"{PurePosixPath(_tab_name(view.session.source)).stem}_subset.cdf")
+        if path:
+            self._write(view, lambda: pycdfpp.save(to_cdf(subset(view.session.document, names)), path))
+
+    def export_structure(self, index: int):
+        view = self._view_at(index)
+        if view is None:
+            return
+        name = f"{PurePosixPath(_tab_name(view.session.source)).stem}.yaml"
+        path = self._ask_export_path(name, "YAML (*.yaml *.yml)")
+        if path:
+            text = skeleton_yaml(view.session.document)
+            self._write(view, lambda: Path(path).write_text(text))
+
+    @staticmethod
+    def _write(view: CdfFileView, write):
+        try:
+            write()
+        except Exception as e:  # OSError, or values pycdfpp can't write
+            view.show_problem(f"Can't write: {e}")
+
+    def _ask_variables(self, names: list[str]) -> list[str]:
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Save subset: variables to keep")
+        variables = QListWidget()
+        for name in names:
+            item = QListWidgetItem(name)
+            item.setCheckState(Qt.Unchecked)
+            variables.addItem(item)
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout = QVBoxLayout(dialog)
+        layout.addWidget(variables)
+        layout.addWidget(buttons)
+        if not dialog.exec():
+            return []
+        return [variables.item(i).text() for i in range(variables.count())
+                if variables.item(i).checkState() == Qt.Checked]
+
+    def _ask_export_path(self, name: str, filters: str) -> str:
+        path, _ = QFileDialog.getSaveFileName(self, "Export", name, filters)
+        return path
 
     def _ask_save_path(self, name: str) -> str:
         path, _ = QFileDialog.getSaveFileName(self, "Save CDF As", name, "CDF Files (*.cdf)")

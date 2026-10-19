@@ -10,11 +10,12 @@ if TYPE_CHECKING:
 from PySide6.QtCore import Qt, QThread, QTimer, Signal, QObject, QSortFilterProxyModel
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QSplitter, QTreeView, QLineEdit, QMenu, QCheckBox, QLabel,
-    QInputDialog, QMessageBox,
+    QInputDialog, QMessageBox, QFileDialog,
 )
 import pycdfpp
 
 from .attribute_dialog import AttributeDialog
+from .export import write_csv, write_npz
 from .document import (
     Attribute, Document, DocumentSession, GlobalAttribute, attribute_lists, global_attribute_lists, to_cdf,
 )
@@ -758,6 +759,7 @@ class CdfFileView(QWidget):
             if node is not None and node.variable_info is not None:
                 menu.addAction("Plot in New Panel", lambda: self._plot_new_panel(node.name))
                 menu.addAction("Send to Console", lambda: self._send_to_console(node.name))
+                menu.addAction("Export data…", lambda: self._export_data(node.name))
                 menu.addSeparator()
                 menu.addAction("Rename…", lambda: self._rename_variable(node.name))
                 menu.addAction("Delete", lambda: self._delete_variable(node.name))
@@ -765,6 +767,25 @@ class CdfFileView(QWidget):
 
         menu.addAction("New variable…", self._new_variable)
         menu.exec(self._tree_view.viewport().mapToGlobal(pos))
+
+    def _ask_export_path(self, name: str, filters: str) -> str:
+        path, _ = QFileDialog.getSaveFileName(self, "Export data", name, filters)
+        return path
+
+    def _export_data(self, var_name: str):
+        """What the plot shows (masked, reduced, flipped): CSV, or .npz with the axes."""
+        info = self._tree_model.variable_info(var_name)
+        if info is None or not _is_plottable(info):
+            self.show_problem(f"Can't export {var_name}: it isn't plottable")
+            return
+        path = self._ask_export_path(f"{var_name}.csv", "CSV (*.csv);;NumPy (*.npz)")
+        if not path:
+            return
+        try:
+            (write_npz if path.endswith(".npz") else write_csv)(path, self._read_bundle(info))
+        except Exception as e:
+            logger.warning("Failed to export %s", var_name, exc_info=True)
+            self.show_problem(_problem_text(e, "export", var_name))
 
     def _send_to_console(self, var_name: str):
         if self._main_window is None or self._doc is None:

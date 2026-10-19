@@ -407,3 +407,13 @@ def test_a_url_file_is_linted_from_memory_not_downloaded_again(qtbot, monkeypatc
 
     assert len(linted) == 1 and isinstance(linted[0], bytes)
     view.release()
+
+
+def test_export_plotted_data_as_csv(dist_view, tmp_path, monkeypatch):
+    target = tmp_path / "dist.csv"
+    monkeypatch.setattr(dist_view, "_ask_export_path", lambda name, filters: str(target))
+
+    dist_view._export_data("dist")
+
+    lines = target.read_text().splitlines()
+    assert lines[0] == "time,10,100,1000,10000" and len(lines) == 4

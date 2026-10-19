@@ -10,7 +10,7 @@
     }
   ],
   "license": "MIT",
-  "python_dependencies": ["pycdfpp>=0.15.0", "httpx", "psutil", "astralint", "SciQLop>=0.12.0,<0.15.0"],
+  "python_dependencies": ["pycdfpp>=0.15.0", "httpx", "psutil", "pyyaml", "astralint", "SciQLop>=0.12.0,<0.15.0"],
   "dependencies": [],
   "disabled": false
 }

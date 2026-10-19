@@ -104,6 +104,12 @@ def _refers_to(attr_name: str, attr: Attribute, var_name: str) -> bool:
     return attr.type in _TEXT and _REFERENCE.fullmatch(attr_name) is not None and attr.value == var_name
 
 
+def referenced_by(var: Variable) -> list[str]:
+    """Names of the variables `var` points at (DEPEND_*, LABL_PTR_*, DELTA_*_VAR...)."""
+    return [a.value for k, a in var.attributes.items()
+            if a.type in _TEXT and _REFERENCE.fullmatch(k) and isinstance(a.value, str)]
+
+
 def references_to(doc: Document, var_name: str) -> list[tuple[str, str]]:
     """(variable, attribute) pairs pointing at `var_name`."""
     return [(name, attr_name) for name, var in doc.items() for attr_name, attr in var.attributes.items()
