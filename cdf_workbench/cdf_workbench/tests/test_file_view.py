@@ -244,3 +244,20 @@ def test_log_y_checkbox_is_disabled_for_azimuth_bins(dist_view):
 
     assert not dist_view._log_y.isEnabled()
     assert not dist_view._log_y.isChecked()
+
+
+def test_preview_explains_a_variable_too_big_for_memory(dist_view, monkeypatch):
+    import cdf_workbench.file_view as file_view
+    monkeypatch.setattr(file_view, "available_memory", lambda: 10)
+    info = dist_view._tree_model.variable_info("dist")
+
+    dist_view._update_preview(info)
+
+    assert "needs" in dist_view._preview_message.text()
+    assert not dist_view._preview_message.isHidden()
+
+
+def test_preview_message_is_hidden_after_a_good_preview(dist_view):
+    info = dist_view._tree_model.variable_info("dist")
+    dist_view._update_preview(info)
+    assert dist_view._preview_message.isHidden()

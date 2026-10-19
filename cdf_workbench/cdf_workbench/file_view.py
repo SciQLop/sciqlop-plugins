@@ -9,12 +9,13 @@ if TYPE_CHECKING:
     from SciQLop.core.plot_hints import PlotHints
 from PySide6.QtCore import Qt, QThread, QTimer, Signal, QObject, QSortFilterProxyModel
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QSplitter, QTreeView, QLineEdit, QMenu, QCheckBox,
+    QWidget, QVBoxLayout, QHBoxLayout, QSplitter, QTreeView, QLineEdit, QMenu, QCheckBox, QLabel,
 )
 import pycdfpp
 
 from .document import Document, DocumentSession, attribute_lists, global_attribute_lists
 from .axis_bar import Axis, AxisModeBar
+from .memory import available_memory, memory_problem
 from .reduce import Mode, axis_attribute, default_modes, needs_reduction, reduce_values, reduced_info
 from .tree_model import CdfTreeModel, CdfItemDelegate, VariableInfo
 from .inspector import CdfInspectorWidget
@@ -169,6 +170,8 @@ class AnalysisWorker(QObject):
                 return
             try:
                 var = self._doc[name]
+                if memory_problem(name, var, available_memory()):
+                    continue
                 estimated_size = np.prod(var.shape) * 8
                 values = var.values
 
@@ -209,6 +212,11 @@ class AnalysisWorker(QObject):
 _NON_PLOTTABLE_TYPES = {pycdfpp.DataType.CDF_CHAR, pycdfpp.DataType.CDF_UCHAR, pycdfpp.DataType.CDF_NONE}
 _TEXT_TYPES = {pycdfpp.DataType.CDF_CHAR, pycdfpp.DataType.CDF_UCHAR}
 _TIME_TYPES = {pycdfpp.DataType.CDF_EPOCH, pycdfpp.DataType.CDF_EPOCH16, pycdfpp.DataType.CDF_TIME_TT2000}
+
+
+def _problem_text(error: Exception, action: str, name: str) -> str:
+    """A MemoryError already says what is needed; other errors get some context."""
+    return str(error) if isinstance(error, MemoryError) else f"Can't {action} {name}: {error}"
 
 
 def _text_labels(raw: np.ndarray) -> list[str]:
@@ -326,6 +334,10 @@ class CdfFileView(QWidget):
         preview_layout.addLayout(controls)
         self._preview = CdfPreviewWidget()
         preview_layout.addWidget(self._preview)
+        self._preview_message = QLabel()
+        self._preview_message.setWordWrap(True)
+        self._preview_message.hide()
+        preview_layout.addWidget(self._preview_message)
         right_splitter.addWidget(preview_pane)
 
         self._right_splitter = right_splitter
@@ -422,8 +434,15 @@ class CdfFileView(QWidget):
             return None
         return self._modes.setdefault(info.name, default_modes(info))
 
+    def _read_raw_values(self, name: str) -> np.ndarray:
+        var = self._doc[name]
+        problem = memory_problem(name, var, available_memory())
+        if problem:
+            raise MemoryError(problem)
+        return var.values
+
     def _read_values(self, info: VariableInfo) -> tuple[VariableInfo, np.ndarray]:
-        values = self._doc[info.name].values
+        values = self._read_raw_values(info.name)
         modes = self._modes_for(info)
         if modes is None:
             return info, values
@@ -488,6 +507,7 @@ class CdfFileView(QWidget):
         if self._previewed is None:
             self._axis_bar.clear()
             self._log_y.hide()
+            self._preview_message.hide()
             self._preview.clear()
             return
         modes = self._modes_for(info)
@@ -508,9 +528,15 @@ class CdfFileView(QWidget):
                 hints=bundle.hints,
                 is_time_axis=bundle.is_time_axis,
             )
-        except Exception:
+            self._preview_message.hide()
+        except Exception as e:
             logger.debug("Preview failed for %s", info.name, exc_info=True)
             self._preview.clear()
+            self._show_problem(_problem_text(e, "preview", info.name))
+
+    def _show_problem(self, message: str):
+        self._preview_message.setText(message)
+        self._preview_message.show()
 
     def _show_log_y(self, bundle: PlotBundle):
         self._log_y.setEnabled(bundle.log_y_allowed)
@@ -553,8 +579,9 @@ class CdfFileView(QWidget):
         try:
             from SciQLop.user_api.plot import create_plot_panel
             self._render(create_plot_panel(), info, frame_to_data=True)
-        except Exception:
+        except Exception as e:
             logger.warning("Failed to plot %s", var_name, exc_info=True)
+            self._show_problem(_problem_text(e, "plot", var_name))
 
     def _plot_to_panel(self, var_name: str, panel_name: str):
         info = self._lookup_plottable(var_name)
@@ -566,8 +593,9 @@ class CdfFileView(QWidget):
             if panel is None:
                 return
             self._render(panel, info, frame_to_data=False)
-        except Exception:
+        except Exception as e:
             logger.warning("Failed to plot %s to panel %s", var_name, panel_name, exc_info=True)
+            self._show_problem(_problem_text(e, "plot", var_name))
 
     def _lookup_plottable(self, var_name: str) -> Optional[VariableInfo]:
         if self._main_window is None:
@@ -597,11 +625,11 @@ class CdfFileView(QWidget):
         if self._main_window is None or self._doc is None:
             return
         try:
-            var = self._doc[var_name]
-            data = var.values
+            data = self._read_raw_values(var_name)
             self._main_window.push_variables_to_console({var_name: data})
-        except Exception:
+        except Exception as e:
             logger.warning("Failed to send %s to console", var_name, exc_info=True)
+            self._show_problem(_problem_text(e, "send", var_name))
 
     def _start_quality_analysis(self):
         infos = {

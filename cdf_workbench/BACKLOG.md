@@ -26,9 +26,11 @@ Order inside each section is the suggested build order.
 - [x] **R4 — Example files** (S) — `open_page.EXAMPLES`, CDFpp's six + an FPI distribution
   A few public SPDF files (ACE MFI, MMS FPI, THEMIS) on the "+" tab to start from.
   Port of CDFpp `4178582`.
-- [ ] **R5 — Clear error on very large files** (S)
+- [x] **R5 — Clear error on very large files** (S) — `memory.py`, per variable read
   Estimate memory before loading; refuse with a message saying how much is needed.
   Port of CDFpp `faaf795`.
+  Done per variable, not per file: files load lazily, the memory goes when values are read
+  (preview, plot, console, quality analysis). The message shows under the preview.
 
 ## Bugs
 
