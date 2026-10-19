@@ -16,10 +16,11 @@ def real_cdf():
 
 
 def test_full_pipeline(real_cdf):
+    from cdf_workbench.document import from_cdf
     from cdf_workbench.tree_model import CdfTreeModel
     from cdf_workbench.quality import analyze_quality
 
-    model = CdfTreeModel(real_cdf)
+    model = CdfTreeModel(from_cdf(real_cdf))
     assert model.rowCount() > 0
 
     # Find a data variable with actual records and analyze quality

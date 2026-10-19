@@ -1,9 +1,7 @@
 """DEPEND_1 SCALETYP must reach hints.y2.scale through the CDF attribute conversion.
 
-Reproducer: pycdfpp's VariableAttribute is non-iterable and ``str(v)`` returns
-the dump format (``'SCALETYP: "log"\\n'``) — not the value. The old idiom
-``list(v) if hasattr(v, "__iter__") ...`` dropped the value silently and the
-spectrogram Y axis ended up linear regardless of DEPEND_1.SCALETYP.
+Reproducer: the spectrogram Y axis ended up linear regardless of DEPEND_1.SCALETYP
+when attribute values were not unwrapped into plain {name: [value]} lists.
 """
 import numpy as np
 import pycdfpp
@@ -13,7 +11,7 @@ pytest.importorskip("SciQLop.core.istp_hints")
 
 from SciQLop.core.istp_hints import istp_metadata_to_hints
 
-from cdf_workbench.file_view import _cdf_attrs_to_dict
+from cdf_workbench.document import attribute_lists, from_cdf
 
 
 def _spectrogram_cdf():
@@ -35,7 +33,7 @@ def _spectrogram_cdf():
 
 def test_cdf_attrs_dict_unwraps_string_attribute():
     cdf = _spectrogram_cdf()
-    meta = _cdf_attrs_to_dict(cdf["Energy"])
+    meta = attribute_lists(from_cdf(cdf)["Energy"])
     assert meta["SCALETYP"] == ["log"]
     assert meta["UNITS"] == ["eV"]
     assert meta["LABLAXIS"] == ["Energy"]
@@ -47,7 +45,7 @@ def test_depend_1_scaletyp_reaches_y2_scale():
         "DISPLAY_TYPE": ["spectrogram"],
         "SCALETYP": ["log"],
         "UNITS": ["counts/s"],
-        "_depend_1": _cdf_attrs_to_dict(cdf["Energy"]),
+        "_depend_1": attribute_lists(from_cdf(cdf)["Energy"]),
     }
     hints = istp_metadata_to_hints(meta)
     assert hints.display_type == "spectrogram"

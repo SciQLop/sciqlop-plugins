@@ -7,6 +7,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtGui import QDragEnterEvent, QDropEvent
 from .loader import load_cdf, CdfLoadError
+from .document import DocumentSession, from_cdf
 from .file_view import CdfFileView
 
 
@@ -60,12 +61,20 @@ class CdfWorkbenchPanel(QWidget):
             QMessageBox.warning(self, "Failed to open CDF", str(e))
             return
 
-        file_view = CdfFileView(cdf, source=source, main_window=self._main_window)
+        file_view = CdfFileView(DocumentSession(from_cdf(cdf)), source=source,
+                                main_window=self._main_window)
         name = Path(source).name if not source.startswith("http") else source.split("/")[-1]
 
         insert_idx = max(0, self._tabs.count() - 1)
         self._tabs.insertTab(insert_idx, file_view, name)
         self._tabs.setCurrentIndex(insert_idx)
+        file_view.session.changed.connect(lambda: self._refresh_title(file_view, name))
+
+    def _refresh_title(self, file_view: CdfFileView, name: str):
+        index = self._tabs.indexOf(file_view)
+        if index >= 0:
+            modified = file_view.session is not None and file_view.session.is_modified
+            self._tabs.setTabText(index, f"{name} •" if modified else name)
 
     def _close_tab(self, index: int):
         if self._tabs.tabText(index) == "+":

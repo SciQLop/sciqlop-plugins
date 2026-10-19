@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
 )
 import pycdfpp
 
+from .document import Document, DocumentSession, attribute_lists, global_attribute_lists
 from .tree_model import CdfTreeModel, CdfItemDelegate, VariableInfo
 from .inspector import CdfInspectorWidget
 from .preview import CdfPreviewWidget
@@ -108,33 +109,15 @@ def _send_spectrogram(panel, bundle: PlotBundle):
     return plot
 
 
-def _cdf_attrs_to_dict(var) -> dict:
-    """Extract a CDF variable's attributes as a plain {name: list} dict.
-
-    pycdfpp's `VariableAttribute` is indexable (``__getitem__`` / ``__len__``)
-    but not iterable (``hasattr(v, "__iter__")`` is False), and ``str(v)``
-    returns the dump format ``'SCALETYP: "log"\\n'`` — not the value. Always
-    materialize via index iteration so downstream (`istp_metadata_to_hints`)
-    sees a flat list of scalars.
-    """
-    out: dict = {}
-    for name, attr in var.attributes.items():
-        try:
-            out[name] = [attr[i] for i in range(len(attr))]
-        except Exception:
-            out[name] = []
-    return out
-
-
 class AnalysisWorker(QObject):
     """Runs quality analysis and sparkline extraction in a background thread."""
     # Use Signal(str, object) for cross-thread safety with custom types
     quality_ready = Signal(str, object)   # var_name, QualityReport
     sparkline_ready = Signal(str, object) # var_name, list[float]
 
-    def __init__(self, cdf: pycdfpp.CDF, variable_infos: dict[str, VariableInfo]):
+    def __init__(self, doc: Document, variable_infos: dict[str, VariableInfo]):
         super().__init__()
-        self._cdf = cdf
+        self._doc = doc
         self._infos = variable_infos
         self._cancelled = False
 
@@ -146,14 +129,14 @@ class AnalysisWorker(QObject):
             if self._cancelled:
                 return
             try:
-                var = self._cdf[name]
+                var = self._doc[name]
                 estimated_size = np.prod(var.shape) * 8
                 values = var.values
 
                 # Quality analysis
                 epochs = None
-                if info.depend_0 and info.depend_0 in self._cdf:
-                    epochs = self._cdf[info.depend_0].values.astype("datetime64[ns]")
+                if info.depend_0 and info.depend_0 in self._doc:
+                    epochs = self._doc[info.depend_0].values.astype("datetime64[ns]")
                 report = analyze_quality(
                     values=values,
                     epochs=epochs,
@@ -209,9 +192,9 @@ def _lint_in_subprocess(source: str, conn):
 
 
 class CdfFileView(QWidget):
-    def __init__(self, cdf: pycdfpp.CDF, source: str = "", main_window=None, parent=None):
+    def __init__(self, session: DocumentSession, source: str = "", main_window=None, parent=None):
         super().__init__(parent)
-        self._cdf = cdf
+        self._session = session
         self._source = source
         self._main_window = main_window
         self._quality_reports: dict[str, QualityReport] = {}
@@ -236,7 +219,7 @@ class CdfFileView(QWidget):
         self._search.textChanged.connect(self._on_filter_changed)
         left_layout.addWidget(self._search)
 
-        self._tree_model = CdfTreeModel(self._cdf)
+        self._tree_model = CdfTreeModel(self._doc)
         self._proxy_model = QSortFilterProxyModel()
         self._proxy_model.setSourceModel(self._tree_model)
         self._proxy_model.setRecursiveFilteringEnabled(True)
@@ -283,6 +266,14 @@ class CdfFileView(QWidget):
         layout.addWidget(splitter)
         self._show_global_attributes()
 
+    @property
+    def session(self) -> Optional[DocumentSession]:
+        return self._session
+
+    @property
+    def _doc(self) -> Optional[Document]:
+        return self._session.document if self._session is not None else None
+
     def showEvent(self, event):
         super().showEvent(event)
         h = self._right_splitter.height()
@@ -290,13 +281,7 @@ class CdfFileView(QWidget):
             self._right_splitter.setSizes([h * 3 // 4, h // 4])
 
     def _show_global_attributes(self):
-        attrs = {}
-        for name, attr in self._cdf.attributes.items():
-            try:
-                attrs[name] = [v for v in attr]
-            except Exception:
-                attrs[name] = []
-        self._inspector.show_global_attributes(attrs)
+        self._inspector.show_global_attributes(global_attribute_lists(self._doc))
 
     def _on_filter_changed(self, text: str):
         self._proxy_model.setFilterFixedString(text)
@@ -315,8 +300,8 @@ class CdfFileView(QWidget):
         self._update_preview(info)
 
     def _resolve_labels(self, info: VariableInfo) -> list[str]:
-        if info.labl_ptr_1 and info.labl_ptr_1 in self._cdf:
-            raw = self._cdf[info.labl_ptr_1].values
+        if info.labl_ptr_1 and info.labl_ptr_1 in self._doc:
+            raw = self._doc[info.labl_ptr_1].values
             if hasattr(raw, 'tolist'):
                 # pycdfpp returns CDF_CHAR as ndarray of bytes, shape varies:
                 # NRV scalar: (n_components,) or (1, n_components)
@@ -338,30 +323,30 @@ class CdfFileView(QWidget):
         n_records = values.shape[0]
 
         # Try DEPEND_0 first
-        if info.depend_0 and info.depend_0 in self._cdf:
-            dep0_var = self._cdf[info.depend_0]
+        if info.depend_0 and info.depend_0 in self._doc:
+            dep0_var = self._doc[info.depend_0]
             if dep0_var.shape[0] == n_records:
                 if dep0_var.type in _TIME_TYPES:
-                    return pycdfpp.to_datetime64(dep0_var).astype(np.int64).astype(np.float64) / 1e9, True
+                    return pycdfpp.to_datetime64(dep0_var.values).astype(np.int64).astype(np.float64) / 1e9, True
                 return dep0_var.values.astype(np.float64), False
 
         # Fallback: DEPEND_TIME attribute (THEMIS-style non-ISTP files)
         depend_time_name = info.all_attributes.get("DEPEND_TIME", [""])[0] if "DEPEND_TIME" in info.all_attributes else ""
-        if depend_time_name and depend_time_name in self._cdf:
-            dt_var = self._cdf[depend_time_name]
+        if depend_time_name and depend_time_name in self._doc:
+            dt_var = self._doc[depend_time_name]
             if dt_var.shape[0] == n_records:
                 return dt_var.values.astype(np.float64), True
 
         return None, False
 
     def _read_depend_1(self, info: VariableInfo) -> tuple[Optional[np.ndarray], Optional[dict]]:
-        if not (info.depend_1 and info.depend_1 in self._cdf):
+        if not (info.depend_1 and info.depend_1 in self._doc):
             return None, None
-        d1 = self._cdf[info.depend_1]
-        return d1.values.astype(np.float64), _cdf_attrs_to_dict(d1)
+        d1 = self._doc[info.depend_1]
+        return d1.values.astype(np.float64), attribute_lists(d1)
 
     def _read_bundle(self, info: VariableInfo) -> PlotBundle:
-        raw_values = self._cdf[info.name].values
+        raw_values = self._doc[info.name].values
         depend_1, depend_1_meta = self._read_depend_1(info)
         depend_1, values = _make_ascending(depend_1, raw_values)
         values = _replace_fill(values, info.fill_value)
@@ -466,10 +451,10 @@ class CdfFileView(QWidget):
         menu.exec(self._tree_view.viewport().mapToGlobal(pos))
 
     def _send_to_console(self, var_name: str):
-        if self._main_window is None or self._cdf is None:
+        if self._main_window is None or self._doc is None:
             return
         try:
-            var = self._cdf[var_name]
+            var = self._doc[var_name]
             data = var.values
             self._main_window.push_variables_to_console({var_name: data})
         except Exception:
@@ -485,7 +470,7 @@ class CdfFileView(QWidget):
             return
 
         self._analysis_thread = QThread()
-        self._analysis_worker = AnalysisWorker(self._cdf, infos)
+        self._analysis_worker = AnalysisWorker(self._doc, infos)
         self._analysis_worker.moveToThread(self._analysis_thread)
         self._analysis_thread.started.connect(self._analysis_worker.run)
         self._analysis_worker.quality_ready.connect(self._on_quality_result)
@@ -541,4 +526,4 @@ class CdfFileView(QWidget):
         if hasattr(self, "_lint_process") and self._lint_process.is_alive():
             self._lint_process.kill()
             self._lint_process.join(timeout=1)
-        self._cdf = None
+        self._session = None

@@ -3,6 +3,8 @@ from dataclasses import dataclass, field
 from typing import Optional
 import pycdfpp
 
+from .document import Document, attribute_lists
+
 # ---------------------------------------------------------------------------
 # Conditional Qt base class: works whether PySide6 is real or mocked.
 # When running under the test stub (root conftest.py replaces PySide6 with
@@ -119,15 +121,14 @@ class TreeNode:
 # ---------------------------------------------------------------------------
 def _get_attr(var, name: str, default: str = "") -> str:
     try:
-        return str(var.attributes[name][0])
-    except (KeyError, IndexError, RuntimeError):
+        return str(var.attributes[name].value)
+    except KeyError:
         return default
 
 
 def _get_numeric_attr(var, name: str) -> Optional[float]:
     try:
-        val = var.attributes[name][0]
-        # pycdfpp may return a list for single-element attributes
+        val = var.attributes[name].value
         while isinstance(val, (list, tuple)):
             val = val[0]
         return float(val)
@@ -136,13 +137,6 @@ def _get_numeric_attr(var, name: str) -> Optional[float]:
 
 
 def _build_variable_info(name: str, var) -> VariableInfo:
-    all_attrs: dict = {}
-    for attr_name, attr in var.attributes.items():
-        try:
-            all_attrs[attr_name] = [attr[i] for i in range(len(attr))]
-        except Exception:
-            all_attrs[attr_name] = []
-
     return VariableInfo(
         name=name,
         shape=var.shape,
@@ -160,8 +154,8 @@ def _build_variable_info(name: str, var) -> VariableInfo:
         labl_ptr_1=_get_attr(var, "LABL_PTR_1"),
         fieldnam=_get_attr(var, "FIELDNAM"),
         catdesc=_get_attr(var, "CATDESC"),
-        compression=str(var.compression) if hasattr(var, "compression") else "",
-        all_attributes=all_attrs,
+        compression=str(var.compression),
+        all_attributes=attribute_lists(var),
     )
 
 
@@ -169,17 +163,17 @@ def _build_variable_info(name: str, var) -> VariableInfo:
 # Tree model
 # ---------------------------------------------------------------------------
 class CdfTreeModel(_Base):  # type: ignore[misc]
-    def __init__(self, cdf: pycdfpp.CDF, parent=None):
+    def __init__(self, doc: Document, parent=None):
         if _REAL_QT:
             super().__init__(parent)
         self._root = TreeNode(name="root")
         self._variable_map: dict[str, VariableInfo] = {}
-        self._build_tree(cdf)
+        self._build_tree(doc)
 
-    def _build_tree(self, cdf: pycdfpp.CDF) -> None:
+    def _build_tree(self, doc: Document) -> None:
         groups: dict[str, TreeNode] = {}
 
-        for var_name, var in cdf.items():
+        for var_name, var in doc.items():
             info = _build_variable_info(var_name, var)
             self._variable_map[var_name] = info
 

@@ -85,3 +85,16 @@ def test_open_close_multiple_tabs(panel, cdf_file, qtbot):
         qtbot.wait(20)
         force_gc()
     assert panel._tabs.count() == 1
+
+
+def test_modified_tab_title_gets_a_dot(panel, cdf_file, qtbot):
+    from dataclasses import replace
+    panel.open_file(cdf_file)
+    session = panel._tabs.widget(0).session
+    assert panel._tabs.tabText(0) == "sample.cdf"
+
+    session.apply(lambda d: replace(d, attributes={}))
+    assert panel._tabs.tabText(0) == "sample.cdf •"
+
+    session.mark_saved()
+    assert panel._tabs.tabText(0) == "sample.cdf"

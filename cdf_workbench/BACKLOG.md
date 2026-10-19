@@ -28,23 +28,27 @@ Order inside each section is the suggested build order.
   Estimate memory before loading; refuse with a message saying how much is needed.
   Port of CDFpp `faaf795`.
 
+## Bugs
+
+- [ ] **B1 — No preview when DEPEND_1 is a text variable** (S)
+  ACE `BGSEc` has `DEPEND_1 = cartesian`, a CDF_CHAR variable. `_read_depend_1` calls `.astype(float64)` on it and raises.
+  Treat a text DEPEND_1 as labels, not as a y axis.
+
 ## Edit
 
 A `pycdfpp.CDF` is mostly immutable (no rename, no attribute delete, no overwrite).
 So we don't edit it. We load it into our own model, edit the model, and build a fresh CDF on save.
 
-- [ ] **E1 — Document model** (M)
-  Frozen dataclasses: `Document(attributes, variables)`, `Var(name, type, shape, nrv, compression, attributes, values)`.
-  Keep everything a round-trip needs: data types (epoch / tt2000 / char), NRV, per-variable compression, majority.
-  `values` stays lazy: it points at the source `pycdfpp.Variable` until an edit replaces it with an array.
-  Edits are pure functions `Document -> Document`. Unchanged parts are shared, so arrays are never copied.
-  Exposes the same read surface the views use today (`doc[name]`, `in`, `.items()`, `.attributes`, `.values`),
-  so `file_view` / `tree_model` / `AnalysisWorker` switch over with few changes.
-  `to_cdf(doc) -> pycdfpp.CDF` for save. Test: load → `to_cdf` → save → reload gives the same skeleton and values.
-  Tab gets a `•` when modified; closing a modified tab asks Save / Discard / Cancel.
-  Prerequisite for every other Edit item.
+- [x] **E1 — Document model** (M) — `document.py`
+  Frozen `Document` / `Variable` / `Attribute`; values stay lazy; `to_cdf` rebuilds a CDF.
+  Every CDFpp test file round-trips (types, shapes, NRV, per-variable compression, attributes, values).
+  Views read the document; `DocumentSession` tracks modified state; tab title gets `•`.
+  Known limits, all pycdfpp 0.15 gaps:
+  - file-level compression is lost on save (`CDF.compression` is read-only);
+  - CDF_BYTE and empty attributes can't be written from values, so they are copied from the source while unedited.
 - [ ] **E2 — Save / Save As** (S) — depends on E1
-  `pycdfpp.save(to_cdf(doc), path)`. Ctrl+S / Ctrl+Shift+S. URL-opened files only get Save As.
+  `pycdfpp.save(to_cdf(doc), path)`, then `session.mark_saved()`. Ctrl+S / Ctrl+Shift+S. URL-opened files only get Save As.
+  Closing a modified tab asks Save / Discard / Cancel.
 - [ ] **E3 — Undo / redo** (S) — depends on E1
   Documents are immutable, so undo is a list of past documents and an index. No per-edit undo commands.
 - [ ] **E4 — Edit attributes** (M) — depends on E3

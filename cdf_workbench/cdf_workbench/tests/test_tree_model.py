@@ -1,5 +1,6 @@
 import pytest
 from PySide6.QtCore import Qt
+from cdf_workbench.document import from_cdf
 from cdf_workbench.tree_model import CdfTreeModel, VariableInfo
 
 
@@ -7,7 +8,7 @@ def test_model_groups_by_var_type(sample_cdf_bytes):
     """Variables are grouped under Data/Support/Metadata/Uncategorized."""
     import pycdfpp
     cdf = pycdfpp.load(sample_cdf_bytes)
-    model = CdfTreeModel(cdf)
+    model = CdfTreeModel(from_cdf(cdf))
 
     root_count = model.rowCount()
     assert root_count >= 2  # at least Data and Support
@@ -24,7 +25,7 @@ def test_model_variable_info(sample_cdf_bytes):
     """VariableInfo extracts shape, type, and key attributes."""
     import pycdfpp
     cdf = pycdfpp.load(sample_cdf_bytes)
-    model = CdfTreeModel(cdf)
+    model = CdfTreeModel(from_cdf(cdf))
 
     info = model.variable_info("Bt")
     assert info is not None
@@ -37,5 +38,5 @@ def test_model_uncategorized_group(sample_cdf_bytes):
     """Variables without VAR_TYPE go to Uncategorized."""
     import pycdfpp
     cdf = pycdfpp.load(sample_cdf_bytes)
-    model = CdfTreeModel(cdf)
+    model = CdfTreeModel(from_cdf(cdf))
     assert model.rowCount() >= 1
