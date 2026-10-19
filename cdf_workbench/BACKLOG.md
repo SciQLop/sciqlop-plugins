@@ -1,0 +1,81 @@
+# CDF Workbench backlog
+
+Goal: a full CDF IDE inside SciQLop — read, edit, compare, convert.
+Several items port features from the CDFpp Explorer (WASM demo, `CDFpp/docs/explorer.rst`).
+
+Size: S = under a day, M = a few days, L = a week or more.
+Order inside each section is the suggested build order.
+
+## Read
+
+- [ ] **R1 — Plot variables of rank > 2** (M)
+  Today `_is_plottable` rejects ndim > 2, so particle distributions can't be plotted.
+  One menu per dimension, named after its `DEPEND_k`: *plot* (becomes y axis, only one), *sum*, *mean*, *= value* (slice).
+  Default: energy plotted, other dims summed → omnidirectional energy spectrogram.
+  FILLVAL / out-of-range values skipped in sums and means.
+  The result is a 2D array, so preview, "Plot in New Panel" and "Send to Console" work unchanged.
+  Port of CDFpp `d640f2b`.
+- [ ] **R2 — Y axis log/linear override** (S)
+  Toggle above the preview; overrides `SCALETYP`.
+  On log, values ≤ 0 are hidden. A spectrogram whose bins include ≤ 0 (e.g. azimuth) stays linear.
+  Port of CDFpp `ba289d9`.
+- [ ] **R3 — Open URL** (S)
+  Menu entry / input for an http(s) CDF. `loader._load_url` already exists; only drag-and-drop text reaches it today.
+- [ ] **R4 — Example files** (S)
+  A few public SPDF files (ACE MFI, MMS FPI, THEMIS) on the "+" tab to start from.
+  Port of CDFpp `4178582`.
+- [ ] **R5 — Clear error on very large files** (S)
+  Estimate memory before loading; refuse with a message saying how much is needed.
+  Port of CDFpp `faaf795`.
+
+## Edit
+
+- [ ] **E1 — Document model with dirty state** (M)
+  One editable object per tab wrapping the `pycdfpp.CDF`, emitting "changed".
+  Tab title gets a `•` when modified; closing a modified tab asks Save / Discard / Cancel.
+  Prerequisite for every other Edit item.
+- [ ] **E2 — Save / Save As** (S) — depends on E1
+  `pycdfpp.save`. Ctrl+S / Ctrl+Shift+S. URL-opened files only get Save As.
+- [ ] **E3 — Undo / redo** (M) — depends on E1
+  `QUndoStack` per tab; every edit below is one `QUndoCommand`.
+- [ ] **E4 — Edit attributes** (M) — depends on E3
+  Edit, add, delete global and variable attributes in the inspector.
+  Typed entries (CDF_CHAR, numeric, epoch) — keep the type unless the user changes it.
+- [ ] **E5 — Rename / delete variables** (M) — depends on E3
+  Rename must update `DEPEND_*`, `LABL_PTR_*`, `DELTA_*_VAR` references in other variables (ask first).
+  Check how pycdfpp removes a variable; fall back to `filter` + rebuild if there is no direct API.
+- [ ] **E6 — Create variables** (M) — depends on E3
+  From the console (`workbench.add_variable(name, array, attrs)`) and from a dialog (type, shape, NRV).
+- [ ] **E7 — Live lint** (S) — depends on E1
+  Re-run AstraLint on the in-memory file after each edit (debounced), update inspector badges.
+- [ ] **E8 — Edit values** (L) — depends on E3
+  Table editor for small / NRV variables (labels, support data). Large record variables stay read-only.
+
+## Compare
+
+- [ ] **C1 — Compare two files** (L)
+  Variables added / removed / renamed, attributes changed, word-level highlight of changed text.
+  Inline and side-by-side views; "hide identical" filter on by default.
+  Entry: "Compare with…" in the tab context menu, picking another open tab or a file.
+  Port of CDFpp `411e53b`…`9955bf4`, `f3f9a4d`, `d7bf3b3`. Use stdlib `difflib`.
+- [ ] **C2 — Copy across** (M) — depends on C1, E4
+  From the diff, copy an attribute / attribute set from the reference file into the edited one.
+
+## Convert & export
+
+- [ ] **X1 — Codec comparison** (M) — depends on E2
+  Re-encode with each pycdfpp `CompressionType`, show resulting sizes, save the chosen one.
+  Run in a worker thread; big files take a while.
+  Port of CDFpp `bcd6b00`, `4a7b232`.
+- [ ] **X2 — Export structure as YAML** (S)
+  Variables + attributes, no data. Start from `pycdfpp.to_dict_skeleton`.
+  Port of CDFpp `6f17d37`.
+- [ ] **X3 — Export variable data** (S)
+  CSV / `.npy` of the plotted (masked, reduced) data, next to "Send to Console".
+- [ ] **X4 — Save subset** (S) — depends on E2
+  Pick variables (auto-include their `DEPEND_*` / label vars), save a copy via `pycdfpp.filter_cdf`.
+
+## Not planned
+
+- Explorer's spectrogram/line-plot performance work: SciQLopPlots already does it natively.
+- Shareable `?url=` links: no equivalent in a desktop app.
