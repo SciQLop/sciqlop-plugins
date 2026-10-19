@@ -1,7 +1,7 @@
 from __future__ import annotations
 import logging
 import multiprocessing
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Optional
 import numpy as np
 
@@ -9,7 +9,7 @@ if TYPE_CHECKING:
     from SciQLop.core.plot_hints import PlotHints
 from PySide6.QtCore import Qt, QThread, QTimer, Signal, QObject, QSortFilterProxyModel
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QSplitter, QTreeView, QLineEdit, QMenu,
+    QWidget, QVBoxLayout, QHBoxLayout, QSplitter, QTreeView, QLineEdit, QMenu, QCheckBox,
 )
 import pycdfpp
 
@@ -45,6 +45,33 @@ class PlotBundle:
     @property
     def is_spectrogram(self) -> bool:
         return self.hints.display_type == "spectrogram" and self.values.ndim == 2
+
+    @property
+    def _y_hints_name(self) -> str:
+        return "y2" if self.is_spectrogram else "y"
+
+    @property
+    def y_scale(self) -> str:
+        return getattr(self.hints, self._y_hints_name).scale or "linear"
+
+    @property
+    def log_y_allowed(self) -> bool:
+        """A spectrogram's y axis is its bins: log needs them all positive (not azimuths)."""
+        if not self.is_spectrogram:
+            return True
+        if self.depend_1 is None:
+            return False
+        bins = self.depend_1[np.isfinite(self.depend_1)]
+        return bins.size > 0 and bool(np.all(bins > 0))
+
+    def with_y_scale(self, scale: str) -> "PlotBundle":
+        """On a log line plot, values <= 0 are hidden."""
+        name = self._y_hints_name
+        axis = getattr(self.hints, name).model_copy(update={"scale": scale})
+        values = self.values
+        if scale == "log" and not self.is_spectrogram:
+            values = np.where(values > 0, values, np.nan)
+        return replace(self, values=values, hints=self.hints.model_copy(update={name: axis}))
 
 
 def _make_ascending(depend_1: Optional[np.ndarray],
@@ -222,6 +249,7 @@ class CdfFileView(QWidget):
         super().__init__(parent)
         self._session = session
         self._modes: dict[str, tuple[Mode, ...]] = {}
+        self._y_scales: dict[str, str] = {}
         self._previewed: Optional[VariableInfo] = None
         self._source = source
         self._main_window = main_window
@@ -287,7 +315,15 @@ class CdfFileView(QWidget):
         preview_layout.setContentsMargins(0, 0, 0, 0)
         self._axis_bar = AxisModeBar()
         self._axis_bar.modes_changed.connect(self._on_modes_changed)
-        preview_layout.addWidget(self._axis_bar)
+        self._log_y = QCheckBox("log y")
+        self._log_y.setToolTip("Override SCALETYP. On a log axis, values <= 0 are hidden.")
+        self._log_y.clicked.connect(self._on_log_y_clicked)
+        self._log_y.hide()
+        controls = QHBoxLayout()
+        controls.setContentsMargins(0, 0, 4, 0)
+        controls.addWidget(self._axis_bar, 1)
+        controls.addWidget(self._log_y)
+        preview_layout.addLayout(controls)
         self._preview = CdfPreviewWidget()
         preview_layout.addWidget(self._preview)
         right_splitter.addWidget(preview_pane)
@@ -327,6 +363,7 @@ class CdfFileView(QWidget):
         if node is None or node.variable_info is None:
             self._show_global_attributes()
             self._axis_bar.clear()
+            self._log_y.hide()
             self._preview.clear()
             return
 
@@ -412,6 +449,16 @@ class CdfFileView(QWidget):
         return [Axis(axis_attribute(info, "DEPEND", k) or f"dim {k + 1}", self._slice_labels(info, k))
                 for k in range(len(info.shape) - 1)]
 
+    def _on_log_y_clicked(self, checked: bool):
+        if self._previewed is None:
+            return
+        self._y_scales[self._previewed.name] = "log" if checked else "linear"
+        self._render_preview(self._previewed)
+
+    def _with_chosen_y_scale(self, name: str, bundle: PlotBundle) -> PlotBundle:
+        scale = self._y_scales.get(name, bundle.y_scale)
+        return bundle.with_y_scale(scale if bundle.log_y_allowed else "linear")
+
     def _on_modes_changed(self, modes: tuple[Mode, ...]):
         if self._previewed is None:
             return
@@ -419,6 +466,9 @@ class CdfFileView(QWidget):
         self._render_preview(self._previewed)
 
     def _read_bundle(self, info: VariableInfo) -> PlotBundle:
+        return self._with_chosen_y_scale(info.name, self._read_unscaled_bundle(info))
+
+    def _read_unscaled_bundle(self, info: VariableInfo) -> PlotBundle:
         info, raw_values = self._read_values(info)
         raw_depend_1, depend_1_meta = self._read_depend_1(info)
         depend_1, values = _make_ascending(raw_depend_1, raw_values)
@@ -437,6 +487,7 @@ class CdfFileView(QWidget):
         self._previewed = info if _is_plottable(info) else None
         if self._previewed is None:
             self._axis_bar.clear()
+            self._log_y.hide()
             self._preview.clear()
             return
         modes = self._modes_for(info)
@@ -449,6 +500,7 @@ class CdfFileView(QWidget):
     def _render_preview(self, info: VariableInfo):
         try:
             bundle = self._read_bundle(info)
+            self._show_log_y(bundle)
             self._preview.plot_variable(
                 values=bundle.values,
                 epochs=bundle.x if bundle.is_time_axis else None,
@@ -459,6 +511,11 @@ class CdfFileView(QWidget):
         except Exception:
             logger.debug("Preview failed for %s", info.name, exc_info=True)
             self._preview.clear()
+
+    def _show_log_y(self, bundle: PlotBundle):
+        self._log_y.setEnabled(bundle.log_y_allowed)
+        self._log_y.setChecked(bundle.y_scale == "log")
+        self._log_y.show()
 
     def _navigate_to_variable(self, var_name: str):
         for group_row in range(self._tree_model.rowCount()):

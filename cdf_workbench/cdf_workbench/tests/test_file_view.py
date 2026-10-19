@@ -182,3 +182,65 @@ def test_axis_bar_offers_one_menu_per_dimension(dist_view):
     assert bundle.values.shape == (3, 2)
     assert list(bundle.depend_1.ravel()) == [0.0, 180.0]
     assert bundle.values[0, 0] == 12.0
+
+
+def _bundle(values, depend_1=None, display_type="line", y_scale=None, y2_scale=None):
+    import numpy as np
+    from SciQLop.core.plot_hints import AxisHints, PlotHints
+    from cdf_workbench.file_view import PlotBundle
+    hints = PlotHints(display_type=display_type, y=AxisHints(scale=y_scale), y2=AxisHints(scale=y2_scale))
+    values = np.asarray(values, dtype=np.float64)
+    return PlotBundle(x=np.arange(len(values), dtype=np.float64), values=values,
+                      depend_1=None if depend_1 is None else np.asarray(depend_1, dtype=np.float64),
+                      hints=hints, is_time_axis=False)
+
+
+def test_y_scale_comes_from_the_line_hints_or_defaults_to_linear():
+    assert _bundle([1.0, 2.0], y_scale="log").y_scale == "log"
+    assert _bundle([1.0, 2.0]).y_scale == "linear"
+
+
+def test_spectrogram_y_scale_comes_from_depend_1():
+    spectro = _bundle([[1.0, 2.0]], depend_1=[10.0, 100.0], display_type="spectrogram", y2_scale="log")
+    assert spectro.y_scale == "log"
+
+
+def test_log_line_hides_values_that_are_not_positive():
+    import numpy as np
+    logged = _bundle([-1.0, 0.0, 5.0]).with_y_scale("log")
+
+    assert logged.hints.y.scale == "log"
+    assert np.isnan(logged.values[:2]).all() and logged.values[2] == 5.0
+
+
+def test_spectrogram_with_non_positive_bins_cannot_use_log():
+    azimuth = _bundle([[1.0, 2.0, 3.0]], depend_1=[0.0, 120.0, 240.0], display_type="spectrogram")
+    energy = _bundle([[1.0, 2.0, 3.0]], depend_1=[10.0, 100.0, 1000.0], display_type="spectrogram")
+    assert not azimuth.log_y_allowed
+    assert energy.log_y_allowed
+    assert energy.with_y_scale("log").hints.y2.scale == "log"
+
+
+def test_log_y_checkbox_overrides_the_scale_and_survives_axis_mode_changes(dist_view):
+    from cdf_workbench.reduce import SUM
+    info = dist_view._tree_model.variable_info("dist")
+    dist_view._update_preview(info)
+    assert dist_view._log_y.isChecked()
+
+    dist_view._log_y.click()
+    assert dist_view._read_bundle(info).y_scale == "linear"
+
+    dist_view._axis_bar.select(0, SUM)
+    assert not dist_view._log_y.isChecked()
+    assert dist_view._read_bundle(info).y_scale == "linear"
+
+
+def test_log_y_checkbox_is_disabled_for_azimuth_bins(dist_view):
+    from cdf_workbench.reduce import PLOT
+    info = dist_view._tree_model.variable_info("dist")
+    dist_view._update_preview(info)
+
+    dist_view._axis_bar.select(0, PLOT)
+
+    assert not dist_view._log_y.isEnabled()
+    assert not dist_view._log_y.isChecked()

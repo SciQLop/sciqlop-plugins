@@ -210,3 +210,14 @@ def test_destroy_with_graphs(preview, qtbot):
     preview.plot_variable(values=z2, epochs=x2, depend_1=y2, hints=_spec(["spec"]))
     del preview
     force_gc()
+
+
+def test_scale_does_not_leak_from_the_previous_variable(preview):
+    from SciQLop.core.plot_hints import AxisHints, PlotHints
+    x, y = _make_line_data()
+    preview.plot_variable(y + 1, depend_1=None, hints=PlotHints(y=AxisHints(scale="log")))
+    assert preview._line_plot.y_axis().log()
+
+    preview.plot_variable(y, hints=PlotHints())
+
+    assert not preview._line_plot.y_axis().log()

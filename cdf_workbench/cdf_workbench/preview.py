@@ -51,6 +51,13 @@ def _make_theme():
         return SciQLopTheme.dark() if SciQLopTheme else None
 
 
+def _with_explicit_y_scales(hints: PlotHints) -> PlotHints:
+    """The preview reuses its plots: an unset scale would keep the previous variable's."""
+    return hints.model_copy(update={
+        name: axis.model_copy(update={"scale": axis.scale or "linear"})
+        for name in ("y", "y2") if (axis := getattr(hints, name))})
+
+
 class CdfPreviewWidget(QWidget):
     """Preview widget using four SciQLopPlot instances.
 
@@ -103,7 +110,7 @@ class CdfPreviewWidget(QWidget):
         hints: PlotHints | None = None,
         is_time_axis: bool = False,
     ):
-        hints = hints or PlotHints()
+        hints = _with_explicit_y_scales(hints or PlotHints())
         x = _to_f64(epochs) if epochs is not None else np.arange(len(values), dtype=np.float64)
         v = _to_f64(values)
         is_spectrogram = hints.display_type == "spectrogram" and v.ndim == 2

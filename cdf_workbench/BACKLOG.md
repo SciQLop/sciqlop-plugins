@@ -17,7 +17,7 @@ Order inside each section is the suggested build order.
   Port of CDFpp `d640f2b`.
   Done. Per-axis sum / mean (sums run before means). "Send to Console" still sends the full variable.
   Not checked on screen: the offscreen test run has no QRhi, so only the preview's plot type and data were verified.
-- [ ] **R2 — Y axis log/linear override** (S)
+- [x] **R2 — Y axis log/linear override** (S) — "log y" checkbox, `PlotBundle.with_y_scale`
   Toggle above the preview; overrides `SCALETYP`.
   On log, values ≤ 0 are hidden. A spectrogram whose bins include ≤ 0 (e.g. azimuth) stays linear.
   Port of CDFpp `ba289d9`.
