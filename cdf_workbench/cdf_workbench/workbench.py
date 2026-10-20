@@ -10,7 +10,7 @@ from PySide6.QtWidgets import (
     QDialog, QDialogButtonBox, QListWidget, QListWidgetItem,
 )
 from PySide6.QtGui import QAction, QDragEnterEvent, QDropEvent, QKeySequence
-from .loader import load_cdf, CdfLoadError
+from .loader import load_cdf, CdfLoadError, DownloadCancelled
 from .codec_dialog import CodecDialog
 from .compare_view import CompareView
 from .document import DocumentSession, from_cdf, to_cdf
@@ -47,10 +47,13 @@ class _LoadTask(QRunnable):
     def __init__(self, source: str, variable: str, signals: _LoadSignals):
         super().__init__()
         self._source, self._variable, self._signals = source, variable, signals
+        self.cancelled = False
 
     def run(self):
         try:
-            cdf = load_cdf(self._source)
+            cdf = load_cdf(self._source, cancelled=lambda: self.cancelled)
+        except DownloadCancelled:
+            return
         except Exception as e:  # httpx.InvalidURL & co. are not CdfLoadError
             self._emit(self._signals.failed, self._source, str(e))
             return
@@ -113,6 +116,7 @@ class CdfWorkbenchPanel(QWidget):
         self._add_shortcut(QKeySequence.Redo, self.redo_current)
 
         self._downloading: dict[str, str] = {}  # URL -> variable to select once open
+        self._download_tasks: dict[str, _LoadTask] = {}
         self._load_signals = _LoadSignals(self)
         self._load_signals.loaded.connect(self._add_tab)
         self._load_signals.failed.connect(self._on_load_failed)
@@ -129,6 +133,7 @@ class CdfWorkbenchPanel(QWidget):
         self._open_page = OpenPage()
         self._open_page.browse_requested.connect(self.open_file_dialog)
         self._open_page.open_requested.connect(self.open_file)
+        self._open_page.cancel_requested.connect(self.cancel_downloads)
         index = self._tabs.addTab(self._open_page, "+")
         self._remove_close_button(index)
 
@@ -163,8 +168,9 @@ class CdfWorkbenchPanel(QWidget):
                 self._downloading[source] = self._downloading[source] or variable
                 return
             self._downloading[source] = variable
+            self._download_tasks[source] = _LoadTask(source, variable, self._load_signals)
             self._show_downloads()
-            QThreadPool.globalInstance().start(_LoadTask(source, variable, self._load_signals))
+            QThreadPool.globalInstance().start(self._download_tasks[source])
             return
         try:
             cdf = load_cdf(source)
@@ -177,10 +183,20 @@ class CdfWorkbenchPanel(QWidget):
         names = ", ".join(_tab_name(url) for url in self._downloading)
         downloading = f"Downloading {names}…" if names else ""
         self._open_page.set_status(" ".join(part for part in (message, downloading) if part))
+        self._open_page.set_cancellable(bool(self._downloading))
 
     def _download_done(self, source: str, message: str = ""):
         self._downloading.pop(source, None)
+        self._download_tasks.pop(source, None)
         self._show_downloads(message)
+
+    def cancel_downloads(self):
+        """Stops at the next 1 MiB chunk; a result arriving anyway is ignored."""
+        for task in self._download_tasks.values():
+            task.cancelled = True
+        self._download_tasks.clear()
+        self._downloading.clear()
+        self._show_downloads("Download cancelled.")
 
     def _view_of(self, source: str) -> Optional[CdfFileView]:
         key = _source_key(source)
@@ -188,10 +204,14 @@ class CdfWorkbenchPanel(QWidget):
         return next((v for v in views if v is not None and _source_key(v.session.source) == key), None)
 
     def _on_load_failed(self, source: str, message: str):
+        if _is_url(source) and source not in self._downloading:  # cancelled meanwhile
+            return
         self._download_done(source, message)
         self._tabs.setCurrentWidget(self._open_page)
 
     def _add_tab(self, source: str, variable: str, cdf):
+        if _is_url(source) and source not in self._downloading:  # cancelled meanwhile
+            return
         variable = self._downloading.get(source) or variable
         self._download_done(source)
         file_view = CdfFileView(DocumentSession(from_cdf(cdf), source=source), source=source,

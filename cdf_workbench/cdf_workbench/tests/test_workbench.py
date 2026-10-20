@@ -105,7 +105,7 @@ def test_modified_tab_title_gets_a_dot(panel, cdf_file, qtbot):
 def test_url_loads_in_the_background_and_opens_on_a_variable(panel, cdf_file, qtbot, monkeypatch):
     import cdf_workbench.workbench as workbench
     from cdf_workbench.loader import load_cdf
-    monkeypatch.setattr(workbench, "load_cdf", lambda source: load_cdf(cdf_file))
+    monkeypatch.setattr(workbench, "load_cdf", lambda source, **kw: load_cdf(cdf_file))
 
     panel.open_file("https://example.org/data/sample.cdf", variable="Bt")
 
@@ -170,7 +170,7 @@ def test_closing_a_modified_tab_asks_first(panel, cdf_file, qtbot, monkeypatch, 
 def test_saving_a_url_file_asks_where(panel, cdf_file, qtbot, tmp_path, monkeypatch):
     import cdf_workbench.workbench as workbench
     from cdf_workbench.loader import load_cdf
-    monkeypatch.setattr(workbench, "load_cdf", lambda source: load_cdf(cdf_file))
+    monkeypatch.setattr(workbench, "load_cdf", lambda source, **kw: load_cdf(cdf_file))
     asked = []
     monkeypatch.setattr(panel, "_ask_save_path", lambda name: asked.append(name) or "")
     panel.open_file("https://example.org/sample.cdf")
@@ -261,7 +261,7 @@ def test_a_url_is_downloaded_once_and_status_lists_every_download(panel, cdf_fil
     release = {u: threading.Event() for u in ("https://h/a.cdf", "https://h/b.cdf")}
     calls = []
 
-    def slow_load(source):
+    def slow_load(source, **kw):
         calls.append(source)
         release[source].wait(10)
         return load_cdf(cdf_file)
@@ -319,7 +319,7 @@ def test_a_second_request_while_downloading_keeps_its_variable(panel, cdf_file, 
     import cdf_workbench.workbench as workbench
     from cdf_workbench.loader import load_cdf
     release = threading.Event()
-    monkeypatch.setattr(workbench, "load_cdf", lambda source: release.wait(10) and load_cdf(cdf_file))
+    monkeypatch.setattr(workbench, "load_cdf", lambda source, **kw: release.wait(10) and load_cdf(cdf_file))
 
     panel.open_file("https://h/a.cdf")
     panel.open_file("https://h/a.cdf", variable="Bt")
@@ -335,7 +335,7 @@ def test_a_failed_load_keeps_the_other_downloads_in_the_status(panel, qtbot, mon
     from cdf_workbench.loader import CdfLoadError
     release = threading.Event()
 
-    def load(source):
+    def load(source, **kw):
         if source.endswith("bad.cdf"):
             raise CdfLoadError("404 for bad.cdf")
         release.wait(10)
@@ -387,3 +387,27 @@ def test_the_quit_guard_blocks_the_main_window_close(panel, cdf_file, qtbot, mon
     window._closing = True  # SciQLop's own second close, or --batch: no prompt
     window.close()
     assert not window.isVisible()
+
+
+def test_cancel_downloads(panel, cdf_file, qtbot, monkeypatch):
+    import threading
+    import cdf_workbench.workbench as workbench
+    from cdf_workbench.loader import DownloadCancelled, load_cdf
+    started = threading.Event()
+
+    def load(source, cancelled=None):
+        started.set()
+        while not cancelled():
+            threading.Event().wait(0.01)
+        raise DownloadCancelled(source)
+    monkeypatch.setattr(workbench, "load_cdf", load)
+    panel.open_file("https://h/a.cdf")
+    started.wait(5)
+    assert not panel._open_page._cancel.isHidden()
+
+    panel.cancel_downloads()
+
+    assert panel._open_page.status() == "Download cancelled."
+    assert panel._open_page._cancel.isHidden()
+    qtbot.wait(200)
+    assert panel._tabs.count() == 1 and panel._open_page.status() == "Download cancelled."

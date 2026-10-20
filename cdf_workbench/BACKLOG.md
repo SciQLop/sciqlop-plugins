@@ -49,7 +49,8 @@ Order inside each section is the suggested build order.
   Done: an open source just shows its tab (real path, so symlinks match); Save As onto another tab's file is refused.
 - [x] **B6 — URL downloads can't be cancelled or deduplicated** (S)
   Clicking an example twice downloads it twice into memory; one finishing clears the other's status.
-  Done: one download per URL, the status lists all in flight. Not done: cancelling a download.
+  Done: one download per URL, the status lists all in flight, "Cancel downloads" stops them at the
+  next 1 MiB chunk.
 - [x] **R6 — What a summed distribution means** — decided: keep the sum and the variable's UNITS.
   Summing angle bins is how omni spectrograms are built, and real distributions rarely have fill per bin.
   The reduction is generic (not only particle distributions), so it can't know how a sum changes units.

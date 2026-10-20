@@ -1,21 +1,28 @@
 from pathlib import Path
+from typing import Callable, Optional
 import pycdfpp
+
+DOWNLOAD_CHUNK = 1024 * 1024
 
 
 class CdfLoadError(Exception):
     pass
 
 
-def load_cdf(source: str | bytes) -> pycdfpp.CDF:
+class DownloadCancelled(CdfLoadError):
+    pass
+
+
+def load_cdf(source: str | bytes, cancelled: Optional[Callable[[], bool]] = None) -> pycdfpp.CDF:
     """Load a CDF from a local path, URL, or raw bytes.
 
-    Raises CdfLoadError on any failure.
+    Raises CdfLoadError on any failure. A URL download checks `cancelled` between chunks.
     """
     if isinstance(source, bytes):
         return _load_bytes(source)
 
     if source.startswith(("http://", "https://")):
-        return _load_url(source)
+        return _load_url(source, cancelled or (lambda: False))
 
     return _load_file(source)
 
@@ -40,12 +47,17 @@ def _load_file(path: str) -> pycdfpp.CDF:
     return _parse(path, f"CDF file {path}")
 
 
-def _load_url(url: str) -> pycdfpp.CDF:
+def _load_url(url: str, cancelled: Callable[[], bool]) -> pycdfpp.CDF:
     import httpx
 
+    data = bytearray()
     try:
-        response = httpx.get(url, timeout=30.0, follow_redirects=True)
-        response.raise_for_status()
+        with httpx.stream("GET", url, timeout=30.0, follow_redirects=True) as response:
+            response.raise_for_status()
+            for chunk in response.iter_bytes(DOWNLOAD_CHUNK):
+                if cancelled():
+                    raise DownloadCancelled(f"Download of {url} cancelled")
+                data += chunk
     except httpx.HTTPError as e:
         raise CdfLoadError(f"Failed to download {url}: {e}") from e
-    return _load_bytes(response.content)
+    return _load_bytes(bytes(data))

@@ -65,6 +65,7 @@ def _example_button(example: Example) -> QToolButton:
 class OpenPage(QWidget):
     open_requested = Signal(str, str)  # source, variable to select ("" for none)
     browse_requested = Signal()
+    cancel_requested = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -91,7 +92,15 @@ class OpenPage(QWidget):
 
         self._status = QLabel()
         self._status.setWordWrap(True)
-        layout.addWidget(self._status, alignment=Qt.AlignHCenter)
+        self._cancel = QPushButton("Cancel downloads")
+        self._cancel.clicked.connect(self.cancel_requested)
+        self._cancel.hide()
+        status_row = QHBoxLayout()
+        status_row.addStretch()
+        status_row.addWidget(self._status)
+        status_row.addWidget(self._cancel)
+        status_row.addStretch()
+        layout.addLayout(status_row)
 
         layout.addWidget(QLabel("Or try one of these files:"), alignment=Qt.AlignHCenter)
         grid = QGridLayout()
@@ -113,6 +122,9 @@ class OpenPage(QWidget):
 
     def status(self) -> str:
         return self._status.text()
+
+    def set_cancellable(self, cancellable: bool):
+        self._cancel.setVisible(cancellable)
 
     def _request_url(self):
         url = self._url.text().strip()
