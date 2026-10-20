@@ -109,7 +109,8 @@ So we don't edit it. We load it into our own model, edit the model, and build a 
 - [x] **C2 — Copy across** (M) — depends on C1, E4
   From the diff, copy an attribute / attribute set from the reference file into the edited one.
   Done: "← copy" links per attribute, "← copy all" per variable, "← copy variable" for variables only in
-  the reference. Each is an undoable edit of the tab the comparison started from. Not done: adopting a rename.
+  the reference, "← rename to …" on renamed variables (references updated). Each is an undoable edit
+  of the tab the comparison started from.
 
 ## Convert & export
 

@@ -116,3 +116,15 @@ def test_copy_a_global_attribute(qtbot):
     view.copy(_link(view, "copy-attr"))
 
     assert [e.value for e in session.document.attributes["Mission"].entries] == ["MMS"]
+
+
+def test_adopt_the_reference_name_of_a_renamed_variable(qtbot):
+    from cdf_workbench.document import DocumentSession
+    session = DocumentSession(_doc("nT"))
+    view = CompareView(session, _doc("nT", renamed=True), ("a", "b"))
+    qtbot.addWidget(view)
+
+    view.copy(_link(view, "copy-rename"))
+
+    assert "B_GSE" in session.document and "B_gse" not in session.document
+    assert "No differences" in view.html()

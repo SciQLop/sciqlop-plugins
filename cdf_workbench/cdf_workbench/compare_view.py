@@ -9,7 +9,7 @@ from PySide6.QtWidgets import QCheckBox, QHBoxLayout, QLabel, QTextBrowser, QVBo
 
 from .diff import AttributeDiff, DocumentDiff, VariableDiff, diff_documents, word_diff
 from .document import Document, DocumentSession
-from .edits import copy_attribute, copy_variable
+from .edits import copy_attribute, copy_variable, rename_variable
 
 # Semi-transparent tints read in light and dark themes alike. Qt's rich text has no <del>/<ins>
 # styling, so the marks become spans.
@@ -93,6 +93,8 @@ def _variable(var: VariableDiff, hide_same: bool, side_by_side: bool, titles: tu
         header_link = _copy_link(_href("copy-var", n=var.name), "← copy variable")
     elif can_copy_attributes and any(_copyable(a) for a in var.attributes):
         header_link = _copy_link(_href("copy-all", t=target, s=source), "← copy all")
+    if copyable and var.status == "renamed":
+        header_link += _copy_link(_href("copy-rename", t=target, s=source), f"← rename to {escape(source)}")
     rows = [_rows(p, old, new, "changed", side_by_side) for p, old, new in var.properties]
     rows += _attribute_rows(var.attributes, hide_same and var.status not in ("added", "removed"),
                             side_by_side, href)
@@ -128,6 +130,8 @@ def _copy_edit(link: str, reference: Document, diff: DocumentDiff) -> Callable[[
         return lambda d: copy_variable(d, reference, p["n"])
     if kind == "copy-attr":
         return lambda d: copy_attribute(d, reference, p["a"], p["t"], p["s"])
+    if kind == "copy-rename":
+        return lambda d: rename_variable(d, p["t"], p["s"], update_references=True)
     var = next(v for v in diff.variables if (v.old_name or v.name) == p["t"])
     names = [a.name for a in var.attributes if _copyable(a)]
     return lambda d: reduce(lambda acc, name: copy_attribute(acc, reference, name, p["t"], p["s"]), names, d)
