@@ -44,10 +44,12 @@ Order inside each section is the suggested build order.
 - [x] **B2 — No quality report for CDF_EPOCH16 files** (S)
   `AnalysisWorker` cast epochs with `astype("datetime64[ns]")`: wrong dates for TT2000/EPOCH, a swallowed error for EPOCH16.
 
-- [ ] **B5 — Same file in two tabs** (S)
-  Opening a path twice, or Save As onto a path another tab owns: the last save silently wins. Warn or switch to the open tab.
-- [ ] **B6 — URL downloads can't be cancelled or deduplicated** (S)
+- [x] **B5 — Same file in two tabs** (S)
+  Opening a path twice, or Save As onto a path another tab owns: the last save silently wins.
+  Done: an open source just shows its tab (real path, so symlinks match); Save As onto another tab's file is refused.
+- [x] **B6 — URL downloads can't be cancelled or deduplicated** (S)
   Clicking an example twice downloads it twice into memory; one finishing clears the other's status.
+  Done: one download per URL, the status lists all in flight. Not done: cancelling a download.
 - [x] **R6 — What a summed distribution means** — decided: keep the sum and the variable's UNITS.
   Summing angle bins is how omni spectrograms are built, and real distributions rarely have fill per bin.
   The reduction is generic (not only particle distributions), so it can't know how a sum changes units.

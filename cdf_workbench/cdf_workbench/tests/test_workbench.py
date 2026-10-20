@@ -74,10 +74,12 @@ def test_open_tab_has_no_close_button(panel, cdf_file, qtbot):
     assert bar.tabButton(0, QTabBar.RightSide) or bar.tabButton(0, QTabBar.LeftSide)
 
 
-def test_open_close_multiple_tabs(panel, cdf_file, qtbot):
+def test_open_close_multiple_tabs(panel, cdf_file, qtbot, tmp_path):
     """Opening and closing multiple tabs in sequence must not crash."""
-    for _ in range(3):
-        panel.open_file(cdf_file)
+    for i in range(3):
+        copy = str(tmp_path / f"copy{i}.cdf")
+        pycdfpp.save(pycdfpp.load(cdf_file), copy)
+        panel.open_file(copy)
         qtbot.wait(20)
     assert panel._tabs.count() == 4
     while panel._tabs.count() > 1:
@@ -225,3 +227,56 @@ def test_save_subset_keeps_what_the_variables_need(panel, cdf_file, qtbot, tmp_p
 
     assert list(pycdfpp.load(target).keys()) == ["Epoch", "Bt"]
     assert panel._tabs.tabText(0) == "sample.cdf"
+
+
+def test_opening_an_open_file_switches_to_its_tab(panel, cdf_file, qtbot, tmp_path):
+    import os
+    link = tmp_path / "link.cdf"
+    os.symlink(cdf_file, link)
+    panel.open_file(cdf_file)
+    panel._tabs.setCurrentIndex(1)
+
+    panel.open_file(str(link))
+
+    assert panel._tabs.count() == 2 and panel._tabs.currentIndex() == 0
+
+
+def test_save_as_onto_a_file_open_in_another_tab_is_refused(panel, cdf_file, qtbot, tmp_path, monkeypatch):
+    other = str(tmp_path / "other.cdf")
+    pycdfpp.save(pycdfpp.load(cdf_file), other)
+    panel.open_file(cdf_file)
+    panel.open_file(other)
+    monkeypatch.setattr(panel, "_ask_save_path", lambda name: other)
+
+    assert not panel.save_tab_as(0)
+
+    assert "already open" in panel._tabs.widget(0)._preview_message.text()
+    assert panel._tabs.widget(0).session.source == cdf_file
+
+
+def test_a_url_is_downloaded_once_and_status_lists_every_download(panel, cdf_file, qtbot, monkeypatch):
+    import threading
+    import cdf_workbench.workbench as workbench
+    from cdf_workbench.loader import load_cdf
+    release = {u: threading.Event() for u in ("https://h/a.cdf", "https://h/b.cdf")}
+    calls = []
+
+    def slow_load(source):
+        calls.append(source)
+        release[source].wait(10)
+        return load_cdf(cdf_file)
+    monkeypatch.setattr(workbench, "load_cdf", slow_load)
+
+    panel.open_file("https://h/a.cdf")
+    panel.open_file("https://h/a.cdf")
+    panel.open_file("https://h/b.cdf")
+    qtbot.waitUntil(lambda: len(calls) == 2)
+    assert "a.cdf" in panel._open_page.status() and "b.cdf" in panel._open_page.status()
+
+    release["https://h/a.cdf"].set()
+    qtbot.waitUntil(lambda: panel._tabs.count() == 2)
+    assert "b.cdf" in panel._open_page.status() and "a.cdf" not in panel._open_page.status()
+    release["https://h/b.cdf"].set()
+    qtbot.waitUntil(lambda: panel._tabs.count() == 3)
+    assert sorted(calls) == ["https://h/a.cdf", "https://h/b.cdf"]
+    assert panel._open_page.status() == ""

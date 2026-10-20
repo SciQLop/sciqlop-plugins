@@ -1,4 +1,5 @@
 from __future__ import annotations
+import os
 from pathlib import Path, PurePosixPath
 from urllib.parse import parse_qs, urlparse
 from typing import Optional
@@ -18,6 +19,11 @@ from .open_page import OpenPage
 
 def _is_url(source: str) -> bool:
     return source.startswith(("http://", "https://"))
+
+
+def _source_key(source: str) -> str:
+    """Two spellings of one local file (relative, symlink) are the same source."""
+    return source if not source or _is_url(source) else os.path.realpath(source)
 
 
 def _tab_name(source: str) -> str:
@@ -78,6 +84,7 @@ class CdfWorkbenchPanel(QWidget):
         self._add_shortcut(QKeySequence.Undo, self.undo_current)
         self._add_shortcut(QKeySequence.Redo, self.redo_current)
 
+        self._downloading: list[str] = []
         self._load_signals = _LoadSignals(self)
         self._load_signals.loaded.connect(self._add_tab)
         self._load_signals.failed.connect(self._on_load_failed)
@@ -116,10 +123,18 @@ class CdfWorkbenchPanel(QWidget):
             self.open_file(path)
 
     def open_file(self, source: str, variable: str = ""):
-        """Local files load right away (lazily); URLs download in the background."""
+        """Local files load right away (lazily); URLs download in the background, once.
+        A source that is already open just gets its tab shown."""
+        if (view := self._view_of(source)) is not None:
+            self._tabs.setCurrentWidget(view)
+            if variable:
+                view.select_variable(variable)
+            return
         if _is_url(source):
-            self._open_page.set_status(f"Downloading {_tab_name(source)}…")
-            QThreadPool.globalInstance().start(_LoadTask(source, variable, self._load_signals))
+            if source not in self._downloading:
+                self._downloading.append(source)
+                self._show_downloads()
+                QThreadPool.globalInstance().start(_LoadTask(source, variable, self._load_signals))
             return
         try:
             cdf = load_cdf(source)
@@ -128,12 +143,27 @@ class CdfWorkbenchPanel(QWidget):
             return
         self._add_tab(source, variable, cdf)
 
+    def _show_downloads(self):
+        names = ", ".join(_tab_name(url) for url in self._downloading)
+        self._open_page.set_status(f"Downloading {names}…" if names else "")
+
+    def _download_done(self, source: str):
+        if source in self._downloading:
+            self._downloading.remove(source)
+            self._show_downloads()
+
+    def _view_of(self, source: str) -> Optional[CdfFileView]:
+        key = _source_key(source)
+        views = (self._view_at(i) for i in range(self._tabs.count()))
+        return next((v for v in views if v is not None and _source_key(v.session.source) == key), None)
+
     def _on_load_failed(self, source: str, message: str):
+        self._download_done(source)
         self._open_page.set_status(message)
         self._tabs.setCurrentWidget(self._open_page)
 
     def _add_tab(self, source: str, variable: str, cdf):
-        self._open_page.set_status("")
+        self._download_done(source)
         file_view = CdfFileView(DocumentSession(from_cdf(cdf), source=source), source=source,
                                 main_window=self._main_window)
 
@@ -199,7 +229,13 @@ class CdfWorkbenchPanel(QWidget):
         if view is None:
             return False
         path = self._ask_save_path(_tab_name(view.session.source))
-        return bool(path) and self._save(view, path)
+        if not path:
+            return False
+        owner = self._view_of(path)
+        if owner is not None and owner is not view:
+            view.show_problem(f"{_tab_name(path)} is already open in another tab: close it first.")
+            return False
+        return self._save(view, path)
 
     def _save(self, view: CdfFileView, path: Optional[str]) -> bool:
         try:
