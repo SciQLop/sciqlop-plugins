@@ -86,7 +86,7 @@ class CdfWorkbenchPanel(QWidget):
         self._add_shortcut(QKeySequence.Undo, self.undo_current)
         self._add_shortcut(QKeySequence.Redo, self.redo_current)
 
-        self._downloading: list[str] = []
+        self._downloading: dict[str, str] = {}  # URL -> variable to select once open
         self._load_signals = _LoadSignals(self)
         self._load_signals.loaded.connect(self._add_tab)
         self._load_signals.failed.connect(self._on_load_failed)
@@ -133,10 +133,12 @@ class CdfWorkbenchPanel(QWidget):
                 view.select_variable(variable)
             return
         if _is_url(source):
-            if source not in self._downloading:
-                self._downloading.append(source)
-                self._show_downloads()
-                QThreadPool.globalInstance().start(_LoadTask(source, variable, self._load_signals))
+            if source in self._downloading:
+                self._downloading[source] = self._downloading[source] or variable
+                return
+            self._downloading[source] = variable
+            self._show_downloads()
+            QThreadPool.globalInstance().start(_LoadTask(source, variable, self._load_signals))
             return
         try:
             cdf = load_cdf(source)
@@ -145,14 +147,14 @@ class CdfWorkbenchPanel(QWidget):
             return
         self._add_tab(source, variable, cdf)
 
-    def _show_downloads(self):
+    def _show_downloads(self, message: str = ""):
         names = ", ".join(_tab_name(url) for url in self._downloading)
-        self._open_page.set_status(f"Downloading {names}…" if names else "")
+        downloading = f"Downloading {names}…" if names else ""
+        self._open_page.set_status(" ".join(part for part in (message, downloading) if part))
 
-    def _download_done(self, source: str):
-        if source in self._downloading:
-            self._downloading.remove(source)
-            self._show_downloads()
+    def _download_done(self, source: str, message: str = ""):
+        self._downloading.pop(source, None)
+        self._show_downloads(message)
 
     def _view_of(self, source: str) -> Optional[CdfFileView]:
         key = _source_key(source)
@@ -160,11 +162,11 @@ class CdfWorkbenchPanel(QWidget):
         return next((v for v in views if v is not None and _source_key(v.session.source) == key), None)
 
     def _on_load_failed(self, source: str, message: str):
-        self._download_done(source)
-        self._open_page.set_status(message)
+        self._download_done(source, message)
         self._tabs.setCurrentWidget(self._open_page)
 
     def _add_tab(self, source: str, variable: str, cdf):
+        variable = self._downloading.get(source) or variable
         self._download_done(source)
         file_view = CdfFileView(DocumentSession(from_cdf(cdf), source=source), source=source,
                                 main_window=self._main_window)
@@ -351,6 +353,14 @@ class CdfWorkbenchPanel(QWidget):
             QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel, QMessageBox.Save)
         return {QMessageBox.Save: "save", QMessageBox.Discard: "discard"}.get(answer, "cancel")
 
+    def _close_comparisons_of(self, session: DocumentSession):
+        """A comparison edits its target tab: it can't outlive it."""
+        for i in reversed(range(self._tabs.count())):
+            widget = self._tabs.widget(i)
+            if isinstance(widget, CompareView) and widget.target is session:
+                self._tabs.removeTab(i)
+                widget.deleteLater()
+
     def _close_tab(self, index: int):
         if self._tabs.tabText(index) == "+":
             return
@@ -362,6 +372,8 @@ class CdfWorkbenchPanel(QWidget):
         widget = self._tabs.widget(index)
         self._tabs.removeTab(index)
         if isinstance(widget, CdfFileView):
+            if widget.session is not None:
+                self._close_comparisons_of(widget.session)
             widget.release()
         widget.deleteLater()
 

@@ -81,3 +81,9 @@ def test_word_diff_escapes_html_and_keeps_unchanged_lines_plain():
     old, new = word_diff("a <b>\nsame line", "a <c>\nsame line")
     assert "&lt;" in old and "<del>&lt;b&gt;</del>" in old and "<ins>&lt;c&gt;</ins>" in new
     assert old.endswith("\nsame line") and new.endswith("\nsame line")
+
+
+def test_a_rename_needs_the_same_type_shape_and_nrv():
+    a = _doc({"B": (np.ones(3), ATTRS)})
+    b = _doc({"B_GSM": (np.ones((3, 3)), ATTRS)})
+    assert sorted(v.status for v in diff_documents(a, b).variables) == ["added", "removed"]

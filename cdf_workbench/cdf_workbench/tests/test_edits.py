@@ -339,3 +339,21 @@ def test_time_values_round_trip_for_every_time_type(time_type):
 
     assert out.type == time_type
     assert pycdfpp.to_datetime64(out.values)[0] == np.datetime64("2021-02-03T04:05:06.25", "ns")
+
+
+def test_copy_variable_brings_the_variables_it_points_at():
+    from cdf_workbench.edits import copy_variable
+    cdf = pycdfpp.CDF()
+    cdf.add_variable("Epoch", values=np.array(["2020-01-01"], dtype="datetime64[ns]"))
+    cdf.add_variable("E", values=np.ones(2), is_nrv=True)
+    cdf.add_variable("E_delta", values=np.ones(2), is_nrv=True)
+    cdf["E"].add_attribute("DELTA_PLUS_VAR", "E_delta")
+    cdf.add_variable("flux", values=np.ones((1, 2)))
+    cdf["flux"].add_attribute("DEPEND_0", "Epoch")
+    cdf["flux"].add_attribute("DEPEND_1", "E")
+    reference = from_cdf(cdf)
+    target = from_cdf(pycdfpp.load(bytes(pycdfpp.save(pycdfpp.filter_cdf(cdf, variables=["Epoch"])))))
+
+    out = _saved(copy_variable(target, reference, "flux"))
+
+    assert set(out.keys()) == {"Epoch", "E", "E_delta", "flux"}

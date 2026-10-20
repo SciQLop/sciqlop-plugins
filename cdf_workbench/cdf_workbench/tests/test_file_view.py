@@ -663,3 +663,17 @@ def test_a_late_lint_input_from_an_older_edit_is_dropped(b_view, qtbot, monkeypa
 
     assert len(linted) == 1
     assert "CATDESC" not in pycdfpp.load(linted[0])["B"].attributes
+
+
+def test_quality_follows_value_edits(b_view, qtbot):
+    import numpy as np
+    from cdf_workbench.document import Attribute
+    from cdf_workbench.edits import set_variable_attribute, set_variable_values
+    qtbot.waitUntil(lambda: "B" in b_view._quality_reports, timeout=5000)
+    assert b_view._quality_reports["B"].fill_percentage == 0.0
+
+    b_view.session.apply(lambda d: set_variable_values(
+        set_variable_attribute(d, "B", None, "FILLVAL", Attribute([-1e31], pycdfpp.DataType.CDF_DOUBLE)),
+        "B", np.array([1.0, -1e31, 3.0])))
+
+    qtbot.waitUntil(lambda: b_view._quality_reports["B"].fill_percentage > 0, timeout=5000)

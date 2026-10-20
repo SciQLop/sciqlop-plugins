@@ -297,3 +297,54 @@ def test_compare_with_another_open_tab(panel, cdf_file, qtbot, tmp_path):
     assert isinstance(view, CompareView)
     assert panel._tabs.tabText(panel._tabs.currentIndex()) == "sample.cdf ↔ other.cdf"
     assert "pT" in view.html()
+
+
+def test_closing_a_tab_closes_its_comparisons(panel, cdf_file, qtbot, tmp_path):
+    from cdf_workbench.compare_view import CompareView
+    other = str(tmp_path / "other.cdf")
+    pycdfpp.save(pycdfpp.load(cdf_file), other)
+    panel.open_file(cdf_file)
+    panel.open_file(other)
+    panel.compare_tabs(0, 1)
+    assert any(isinstance(panel._tabs.widget(i), CompareView) for i in range(panel._tabs.count()))
+
+    panel._close_tab(0)
+
+    assert not any(isinstance(panel._tabs.widget(i), CompareView) for i in range(panel._tabs.count()))
+    assert [panel._tabs.tabText(i) for i in range(panel._tabs.count())] == ["other.cdf", "+"]
+
+
+def test_a_second_request_while_downloading_keeps_its_variable(panel, cdf_file, qtbot, monkeypatch):
+    import threading
+    import cdf_workbench.workbench as workbench
+    from cdf_workbench.loader import load_cdf
+    release = threading.Event()
+    monkeypatch.setattr(workbench, "load_cdf", lambda source: release.wait(10) and load_cdf(cdf_file))
+
+    panel.open_file("https://h/a.cdf")
+    panel.open_file("https://h/a.cdf", variable="Bt")
+    release.set()
+
+    qtbot.waitUntil(lambda: panel._tabs.count() == 2)
+    assert panel._tabs.widget(0)._previewed.name == "Bt"
+
+
+def test_a_failed_load_keeps_the_other_downloads_in_the_status(panel, qtbot, monkeypatch):
+    import threading
+    import cdf_workbench.workbench as workbench
+    from cdf_workbench.loader import CdfLoadError
+    release = threading.Event()
+
+    def load(source):
+        if source.endswith("bad.cdf"):
+            raise CdfLoadError("404 for bad.cdf")
+        release.wait(10)
+        raise CdfLoadError("late")
+    monkeypatch.setattr(workbench, "load_cdf", load)
+
+    panel.open_file("https://h/slow.cdf")
+    panel.open_file("https://h/bad.cdf")
+
+    qtbot.waitUntil(lambda: "404" in panel._open_page.status())
+    assert "slow.cdf" in panel._open_page.status()
+    release.set()

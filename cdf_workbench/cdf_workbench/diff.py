@@ -87,9 +87,15 @@ def _features(var: Variable) -> set:
             | {("a", *kv) for kv in _attribute_texts(var).items()})
 
 
+_SAME_FOR_A_RENAME = ("type", "shape", "nrv")
+
+
 def _similarity(a: Variable, b: Variable) -> float:
-    """Properties alone (type, shape...) are shared by unrelated variables: without a common
-    attribute, two variables are not the same one renamed."""
+    """A rename keeps type, per-record shape and NRV; otherwise it is honestly a removal plus an
+    addition. Properties alone are shared by unrelated variables, so a common attribute is needed too."""
+    pa, pb = _properties(a), _properties(b)
+    if any(pa[k] != pb[k] for k in _SAME_FOR_A_RENAME):
+        return 0.0
     fa, fb = _features(a), _features(b)
     common = fa & fb
     if not any(feature[0] == "a" for feature in common):

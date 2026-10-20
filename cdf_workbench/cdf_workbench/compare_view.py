@@ -180,5 +180,9 @@ class CompareView(QWidget):
         except (ValueError, KeyError, StopIteration) as e:
             self._message.setText(f"Can't copy: {e}")
 
+    @property
+    def target(self) -> DocumentSession:
+        return self._target
+
     def html(self) -> str:
         return self._html

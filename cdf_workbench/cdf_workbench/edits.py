@@ -224,8 +224,16 @@ def copy_attribute(target: Document, source: Document, name: str, target_var: st
 
 
 def copy_variable(target: Document, source: Document, name: str) -> Document:
-    """The copy keeps reading its values lazily from the source file."""
-    return add_variable(target, name, source[name])
+    """Also copies, recursively, the variables it points at (DEPEND_*, labels...) that the target
+    lacks, so the copy doesn't dangle. Copies keep reading their values lazily from the source."""
+    doc, todo = target, [name]
+    while todo:
+        current = todo.pop()
+        if current in doc or current not in source:
+            continue
+        doc = add_variable(doc, current, source[current])
+        todo.extend(referenced_by(source[current]))
+    return doc
 
 
 # Editing values cell by cell only makes sense for labels and support data.

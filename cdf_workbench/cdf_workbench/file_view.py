@@ -288,7 +288,7 @@ def _is_plottable(info: VariableInfo) -> bool:
 
 # Linting an edited document holds a second full copy of it in memory: above this, skip it.
 LINT_SIZE_LIMIT = 200 * 1024 * 1024
-LINT_DELAY_MS = 1000
+AFTER_EDIT_DELAY_MS = 1000
 
 
 def _document_bytes(doc: Document) -> Optional[bytes]:
@@ -366,10 +366,10 @@ class CdfFileView(QWidget):
         self._serialize_signals.done.connect(self._on_document_serialized)
         self._lint_finished = False
         self._lint_exit_code: Optional[int] = None
-        self._lint_delay = QTimer(self)
-        self._lint_delay.setSingleShot(True)
-        self._lint_delay.setInterval(LINT_DELAY_MS)
-        self._lint_delay.timeout.connect(self._lint_document)
+        self._after_edit = QTimer(self)
+        self._after_edit.setSingleShot(True)
+        self._after_edit.setInterval(AFTER_EDIT_DELAY_MS)
+        self._after_edit.timeout.connect(self._refresh_derived)
         self._lint_on_open()
 
     def _setup_ui(self):
@@ -473,7 +473,7 @@ class CdfFileView(QWidget):
         self._tree_model = CdfTreeModel(self._doc)
         self._proxy_model.setSourceModel(self._tree_model)
         self._tree_view.expandAll()
-        self._lint_delay.start()
+        self._after_edit.start()
         if current is not None and current in self._doc:
             self.select_variable(current)
         else:
@@ -891,6 +891,20 @@ class CdfFileView(QWidget):
             logger.warning("Failed to send %s to console", var_name, exc_info=True)
             self.show_problem(_problem_text(e, "send", var_name))
 
+    def _refresh_derived(self):
+        """After a burst of edits: what was computed from the document follows it."""
+        self._lint_document()
+        self._stop_quality_analysis()
+        self._start_quality_analysis()
+
+    def _stop_quality_analysis(self):
+        """Disconnected first, so a late result can't overwrite a newer one."""
+        if getattr(self, "_analysis_worker", None) is not None:
+            self._analysis_worker.quality_ready.disconnect(self._on_quality_result)
+            self._analysis_worker.sparkline_ready.disconnect(self._on_sparkline_result)
+            self._analysis_worker.cancel()
+            self._analysis_worker = None
+
     def _start_quality_analysis(self):
         infos = {
             name: info
@@ -972,11 +986,7 @@ class CdfFileView(QWidget):
 
     def release(self):
         """Safe to call twice. A running analysis stops after its current variable."""
-        if getattr(self, "_analysis_worker", None) is not None:
-            self._analysis_worker.quality_ready.disconnect(self._on_quality_result)
-            self._analysis_worker.sparkline_ready.disconnect(self._on_sparkline_result)
-            self._analysis_worker.cancel()
-            self._analysis_worker = None
-        self._lint_delay.stop()
+        self._stop_quality_analysis()
+        self._after_edit.stop()
         self._stop_lint()
         self._session = None
