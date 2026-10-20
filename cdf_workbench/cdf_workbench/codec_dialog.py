@@ -32,7 +32,10 @@ class _CodecTask(QRunnable):
         for codec in CODECS:
             if self.cancelled:
                 return
-            result = try_codec(self._doc, codec)
+            try:
+                result = try_codec(self._doc, codec)
+            except Exception as e:  # one codec failing must not leave the others on "…"
+                result = CodecResult(codec, error=str(e) or type(e).__name__)
             try:
                 self._signals.result.emit(result)
             except RuntimeError:  # the dialog was closed meanwhile

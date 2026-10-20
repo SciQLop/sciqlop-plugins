@@ -24,7 +24,7 @@ from .document import (
     Attribute, Document, DocumentSession, GlobalAttribute, attribute_lists, global_attribute_lists, to_cdf,
 )
 from .edits import (
-    add_variable, delete_variable, format_value, new_variable, references_to, remove_global_attribute,
+    add_variable, decode_text, delete_variable, format_value, new_variable, references_to, remove_global_attribute,
     remove_variable_attribute, rename_variable, set_global_attribute, set_variable_attribute,
     set_variable_values, values_editable,
 )
@@ -237,6 +237,16 @@ _TEXT_TYPES = {pycdfpp.DataType.CDF_CHAR, pycdfpp.DataType.CDF_UCHAR}
 _TIME_TYPES = {pycdfpp.DataType.CDF_EPOCH, pycdfpp.DataType.CDF_EPOCH16, pycdfpp.DataType.CDF_TIME_TT2000}
 
 
+def _parse_lint_output(stdout: bytes) -> Optional[LintReport]:
+    """None for anything but the child's JSON: a library printing to stdout must not leave the
+    previous report on screen as if it were current."""
+    try:
+        return report_from_json(stdout.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError, TypeError) as e:
+        logger.debug("Unreadable lint output: %s", e)
+        return None
+
+
 def _with_filter_suffix(path: str, chosen_filter: str) -> str:
     """A name typed without extension gets the one of the chosen filter, e.g. "NumPy (*.npz)"."""
     if PurePosixPath(path).suffix:
@@ -256,7 +266,7 @@ def _text_labels(raw: np.ndarray) -> list[str]:
     # time-varying: (n_records, n_components)
     while raw.ndim > 1:
         raw = raw[-1]
-    return [s.decode().strip() if isinstance(s, bytes) else str(s).strip() for s in raw.tolist()]
+    return [decode_text(s).strip() if isinstance(s, bytes) else str(s).strip() for s in raw.tolist()]
 
 
 def _is_plottable(info: VariableInfo) -> bool:
@@ -562,7 +572,12 @@ class CdfFileView(QWidget):
         return dialog.result_values() if dialog.exec() else None
 
     def _edit_values(self, name: str):
-        values = self._ask_values(name, self._doc[name])
+        try:
+            values = self._ask_values(name, self._doc[name])
+        except Exception as e:
+            logger.warning("Can't edit the values of %s", name, exc_info=True)
+            self.show_problem(_problem_text(e, "edit", name))
+            return
         if values is not None:
             self._apply(lambda d: set_variable_values(d, name, values))
 
@@ -926,6 +941,7 @@ class CdfFileView(QWidget):
         self._stop_lint()
         process = QProcess(self)
         process.finished.connect(lambda code, _status, p=process: self._on_lint_finished(p, code))
+        process.finished.connect(process.deleteLater)
         from_stdin = isinstance(source, bytes)
         process.start(sys.executable, ["-I", lint.__file__, "-" if from_stdin else source])
         if from_stdin:
@@ -943,12 +959,13 @@ class CdfFileView(QWidget):
     def _on_lint_finished(self, process: QProcess, exit_code: int):
         if process is not self._lint_process:
             return
+        self._lint_process = None  # deleteLater'd once this slot returns
         self._lint_finished, self._lint_exit_code = True, exit_code
-        output = bytes(process.readAllStandardOutput()).decode()
         if exit_code != 0:
-            logger.debug("Lint failed: %s", bytes(process.readAllStandardError()).decode()[-2000:])
+            stderr = bytes(process.readAllStandardError()).decode("utf-8", "replace")
+            logger.debug("Lint failed: %s", stderr[-2000:])
             return
-        report = report_from_json(output)
+        report = _parse_lint_output(bytes(process.readAllStandardOutput()))
         if report is not None:
             self._lint_report = report
             self._inspector.set_lint_report(report)

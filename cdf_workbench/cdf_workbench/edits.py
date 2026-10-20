@@ -23,6 +23,16 @@ ATTRIBUTE_TYPES = (T.CDF_CHAR, T.CDF_DOUBLE, T.CDF_FLOAT, T.CDF_INT4, T.CDF_INT2
                    T.CDF_EPOCH, T.CDF_EPOCH16, T.CDF_UCHAR)
 
 
+def decode_text(raw: bytes) -> str:
+    """CDF text is often Latin-1 in old files: undecodable bytes survive as surrogates, so an
+    unedited value encodes back byte-exactly."""
+    return raw.decode("utf-8", "surrogateescape")
+
+
+def encode_text(text: str) -> bytes:
+    return text.encode("utf-8", "surrogateescape")
+
+
 def _parse_item(item: str, data_type: pycdfpp.DataType):
     if data_type in _INTEGER:
         return np.array(int(item), dtype=_INTEGER[data_type]).item()
@@ -185,7 +195,7 @@ def add_variable(doc: Document, name: str, var: Variable) -> Document:
 def parse_values(text: str, data_type: pycdfpp.DataType) -> np.ndarray:
     """Values typed in the new variable dialog: labels one per line, numbers and times comma separated."""
     if data_type in _TEXT:
-        return np.array([line.strip().encode() for line in text.splitlines() if line.strip()])
+        return np.array([encode_text(line.strip()) for line in text.splitlines() if line.strip()])
     values = parse_value(text, data_type)
     dtype = _INTEGER.get(data_type) or _REAL.get(data_type) or "datetime64[ns]"
     return np.array(values, dtype=dtype)
@@ -238,7 +248,7 @@ def _grid_orientation(var: Variable, records_by_columns: np.ndarray) -> np.ndarr
 
 
 def _cell_text(value) -> str:
-    return value.decode() if isinstance(value, bytes) else str(value)
+    return decode_text(value) if isinstance(value, bytes) else str(value)
 
 
 def values_grid(var: Variable) -> list[list[str]]:
@@ -251,7 +261,7 @@ def values_grid(var: Variable) -> list[list[str]]:
 
 def _parse_cell(text: str, data_type: pycdfpp.DataType, row: int, column: int):
     if data_type in _TEXT:
-        return text.encode()
+        return encode_text(text)
     try:
         return _parse_item(text.strip(), data_type)
     except (ValueError, OverflowError):

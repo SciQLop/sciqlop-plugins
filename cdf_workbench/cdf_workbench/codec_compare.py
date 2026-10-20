@@ -47,7 +47,8 @@ def try_codec(doc: Document, codec: pycdfpp.CompressionType) -> CodecResult:
         written = time.perf_counter()
         reloaded = pycdfpp.load(data, lazy_load=False)
         read = time.perf_counter()
+        identical = _same_values(doc, reloaded)
     except Exception as e:
-        return CodecResult(codec, error=str(e))
+        return CodecResult(codec, error=str(e) or type(e).__name__)
     return CodecResult(codec, size=len(data), write_s=written - start, read_s=read - written,
-                       identical=_same_values(doc, reloaded))
+                       identical=identical)

@@ -313,3 +313,29 @@ def test_a_bad_cell_is_named(small):
     grid[1][0] = "abc"
     with pytest.raises(ValueError, match="row 2, column 1"):
         values_from_grid(grid, small["matrix"])
+
+
+def test_non_utf8_labels_open_and_round_trip_byte_exactly():
+    from cdf_workbench.edits import values_from_grid, values_grid
+    cdf = pycdfpp.CDF()
+    cdf.add_variable("L", values=np.array([b"caf\xe9", b"ok"], dtype="S4"), is_nrv=True)
+    var = from_cdf(cdf)["L"]
+
+    grid = values_grid(var)
+
+    assert list(values_from_grid(grid, var).ravel()) == [b"caf\xe9", b"ok"]
+
+
+@pytest.mark.parametrize("time_type", [T.CDF_EPOCH, T.CDF_EPOCH16, T.CDF_TIME_TT2000])
+def test_time_values_round_trip_for_every_time_type(time_type):
+    from cdf_workbench.edits import set_variable_values, values_from_grid, values_grid
+    cdf = pycdfpp.CDF()
+    cdf.add_variable("t", values=np.array(["2020-01-01T00:00:01.5"], dtype="datetime64[ns]"), data_type=time_type)
+    doc = from_cdf(pycdfpp.load(bytes(pycdfpp.save(cdf))))
+    grid = values_grid(doc["t"])
+    grid[0][0] = "2021-02-03T04:05:06.25"
+
+    out = _saved(set_variable_values(doc, "t", values_from_grid(grid, doc["t"])))["t"]
+
+    assert out.type == time_type
+    assert pycdfpp.to_datetime64(out.values)[0] == np.datetime64("2021-02-03T04:05:06.25", "ns")

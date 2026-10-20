@@ -55,3 +55,25 @@ def test_dialog_fills_the_table_and_applies_the_chosen_codec(qtbot, doc):
     assert {v.compression for _, v in session.document.items()} == {C.gzip_compression}
     session.undo()
     assert {v.compression for _, v in session.document.items()} == {C.no_compression}
+
+
+def test_a_failing_identity_check_is_reported_not_raised(doc, monkeypatch):
+    import cdf_workbench.codec_compare as codec_compare
+    monkeypatch.setattr(codec_compare, "_same_values", lambda d, r: (_ for _ in ()).throw(KeyError("B")))
+    result = try_codec(doc, C.gzip_compression)
+    assert result.error and not result.identical
+
+
+def test_one_failing_codec_does_not_stop_the_others(doc, monkeypatch):
+    import cdf_workbench.codec_dialog as codec_dialog
+    real = codec_dialog.try_codec
+    monkeypatch.setattr(codec_dialog, "try_codec",
+                        lambda d, c: (_ for _ in ()).throw(RuntimeError("boom")) if c == C.rle_compression else real(d, c))
+    results = []
+    signals = codec_dialog._CodecSignals()
+    signals.result.connect(results.append)
+
+    codec_dialog._CodecTask(doc, signals).run()
+
+    assert len(results) == len(CODECS)
+    assert next(r for r in results if r.codec == C.rle_compression).error == "boom"

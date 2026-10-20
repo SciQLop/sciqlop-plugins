@@ -590,3 +590,76 @@ def test_edit_values_from_the_tree(b_view, monkeypatch):
 
     assert list(b_view.session.document["B"].values) == [7.0, 8.0, 9.0]
     assert b_view.session.is_modified
+
+
+def test_preview_labels_of_a_non_utf8_label_variable():
+    import numpy as np
+    from cdf_workbench.file_view import _text_labels
+    assert _text_labels(np.array([b"caf\xe9", b"ok"])) == ["caf\udce9", "ok"]
+
+
+def test_a_failing_values_dialog_is_reported(b_view, monkeypatch):
+    def boom(name, var):
+        raise UnicodeDecodeError("utf-8", b"\xe9", 0, 1, "invalid")
+    monkeypatch.setattr(b_view, "_ask_values", boom)
+
+    b_view._edit_values("B")
+
+    assert "Can't edit B" in b_view._preview_message.text()
+
+
+def test_garbage_lint_output_is_not_a_report():
+    from cdf_workbench.file_view import _parse_lint_output
+    from cdf_workbench.lint import LintIssue, LintReport, report_to_json
+    assert _parse_lint_output(b"Warning: something printed\n[]") is None
+    assert _parse_lint_output(b"\xff\xfe") is None
+    report = LintReport([LintIssue("ERROR", "m", "r", "B")])
+    assert _parse_lint_output(report_to_json(report).encode()) == report
+
+
+def test_finished_lint_processes_are_deleted(qtbot, tmp_path):
+    import numpy as np
+    from PySide6.QtCore import QCoreApplication, QEvent, QProcess
+    from cdf_workbench.document import DocumentSession, from_cdf
+    from cdf_workbench.file_view import CdfFileView
+    cdf = pycdfpp.CDF()
+    cdf.add_variable("B", values=np.ones(3))
+    path = str(tmp_path / "f.cdf")
+    pycdfpp.save(cdf, path)
+    view = CdfFileView(DocumentSession(from_cdf(pycdfpp.load(path)), source=path), source=path)
+    qtbot.addWidget(view)
+    for _ in range(2):
+        view._start_lint(path)
+        qtbot.waitUntil(lambda: view._lint_finished, timeout=30000)
+    QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+
+    assert view.findChildren(QProcess) == []
+    view.release()
+
+
+def test_a_late_lint_input_from_an_older_edit_is_dropped(b_view, qtbot, monkeypatch):
+    import threading
+    import cdf_workbench.file_view as file_view
+    first_may_finish = threading.Event()
+    real = file_view._document_bytes
+    calls = []
+
+    def serialize(doc):
+        calls.append(doc)
+        if len(calls) == 1:
+            first_may_finish.wait(10)
+        return real(doc)
+    monkeypatch.setattr(file_view, "_document_bytes", serialize)
+    linted = []
+    monkeypatch.setattr(b_view, "_start_lint", linted.append)
+
+    b_view._lint_document()
+    qtbot.waitUntil(lambda: len(calls) == 1)
+    b_view._inspector.delete_attribute.emit("B", "CATDESC")
+    b_view._lint_document()
+    qtbot.waitUntil(lambda: len(linted) == 1, timeout=5000)
+    first_may_finish.set()
+    qtbot.wait(300)
+
+    assert len(linted) == 1
+    assert "CATDESC" not in pycdfpp.load(linted[0])["B"].attributes
