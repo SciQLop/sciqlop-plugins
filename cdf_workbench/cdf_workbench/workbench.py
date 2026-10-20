@@ -12,6 +12,8 @@ from PySide6.QtWidgets import (
 from PySide6.QtGui import QAction, QDragEnterEvent, QDropEvent, QKeySequence
 from .loader import load_cdf, CdfLoadError
 from .codec_dialog import CodecDialog
+from .compare_view import CompareView
+from .diff import diff_documents
 from .document import DocumentSession, from_cdf, to_cdf
 from .export import skeleton_yaml, subset
 from .file_view import CdfFileView
@@ -213,6 +215,12 @@ class CdfWorkbenchPanel(QWidget):
         menu.addAction("Save subset…", lambda: self.save_subset(index))
         menu.addAction("Export structure as YAML…", lambda: self.export_structure(index))
         menu.addAction("Compare codecs…", lambda: self.compare_codecs(index))
+        compare = menu.addMenu("Compare with")
+        for other in range(self._tabs.count()):
+            if other != index and (view := self._view_at(other)) is not None:
+                compare.addAction(_tab_name(view.session.source), lambda o=other: self.compare_tabs(index, o))
+        compare.addSeparator()
+        compare.addAction("File…", lambda: self.compare_with_file(index))
         menu.addSeparator()
         menu.addAction("Close", lambda: self._close_tab(index))
         menu.exec(self._tabs.tabBar().mapToGlobal(pos))
@@ -268,6 +276,32 @@ class CdfWorkbenchPanel(QWidget):
         if path:
             text = skeleton_yaml(view.session.document)
             self._write(view, lambda: Path(path).write_text(text))
+
+    def compare_tabs(self, index: int, other: int):
+        a, b = self._view_at(index), self._view_at(other)
+        if a is not None and b is not None:
+            self._open_compare(a, b.session.document, _tab_name(b.session.source))
+
+    def compare_with_file(self, index: int):
+        view = self._view_at(index)
+        if view is None:
+            return
+        path, _ = QFileDialog.getOpenFileName(self, "Compare with", "", "CDF Files (*.cdf);;All Files (*)")
+        if not path:
+            return
+        try:
+            other = from_cdf(load_cdf(path))
+        except CdfLoadError as e:
+            view.show_problem(str(e))
+            return
+        self._open_compare(view, other, _tab_name(path))
+
+    def _open_compare(self, view: CdfFileView, other, other_name: str):
+        name = _tab_name(view.session.source)
+        compare = CompareView(diff_documents(view.session.document, other), (name, other_name))
+        index = max(0, self._tabs.count() - 1)
+        self._tabs.insertTab(index, compare, f"{name} ↔ {other_name}")
+        self._tabs.setCurrentIndex(index)
 
     def compare_codecs(self, index: int):
         view = self._view_at(index)

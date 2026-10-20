@@ -280,3 +280,20 @@ def test_a_url_is_downloaded_once_and_status_lists_every_download(panel, cdf_fil
     qtbot.waitUntil(lambda: panel._tabs.count() == 3)
     assert sorted(calls) == ["https://h/a.cdf", "https://h/b.cdf"]
     assert panel._open_page.status() == ""
+
+
+def test_compare_with_another_open_tab(panel, cdf_file, qtbot, tmp_path):
+    from cdf_workbench.compare_view import CompareView
+    other = str(tmp_path / "other.cdf")
+    cdf = pycdfpp.load(cdf_file)
+    cdf["Bt"].attributes["UNITS"].set_value("pT")
+    pycdfpp.save(cdf, other)
+    panel.open_file(cdf_file)
+    panel.open_file(other)
+
+    panel.compare_tabs(0, 1)
+
+    view = panel._tabs.currentWidget()
+    assert isinstance(view, CompareView)
+    assert panel._tabs.tabText(panel._tabs.currentIndex()) == "sample.cdf ↔ other.cdf"
+    assert "pT" in view.html()

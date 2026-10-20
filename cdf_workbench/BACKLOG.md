@@ -96,11 +96,13 @@ So we don't edit it. We load it into our own model, edit the model, and build a 
 
 ## Compare
 
-- [ ] **C1 — Compare two files** (L)
+- [x] **C1 — Compare two files** (L) — `diff.py`, `compare_view.py`, tab right-click "Compare with"
   Variables added / removed / renamed, attributes changed, word-level highlight of changed text.
   Inline and side-by-side views; "hide identical" filter on by default.
   Entry: "Compare with…" in the tab context menu, picking another open tab or a file.
   Port of CDFpp `411e53b`…`9955bf4`, `f3f9a4d`, `d7bf3b3`. Use stdlib `difflib`.
+  Done: structure only, not values (that would read both files whole). Shapes are compared per record,
+  so two days of one product match. A rename needs a shared attribute, not just the same type and shape.
 - [ ] **C2 — Copy across** (M) — depends on C1, E4
   From the diff, copy an attribute / attribute set from the reference file into the edited one.
 
