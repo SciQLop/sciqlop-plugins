@@ -103,8 +103,10 @@ So we don't edit it. We load it into our own model, edit the model, and build a 
   Port of CDFpp `411e53b`…`9955bf4`, `f3f9a4d`, `d7bf3b3`. Use stdlib `difflib`.
   Done: structure only, not values (that would read both files whole). Shapes are compared per record,
   so two days of one product match. A rename needs a shared attribute, not just the same type and shape.
-- [ ] **C2 — Copy across** (M) — depends on C1, E4
+- [x] **C2 — Copy across** (M) — depends on C1, E4
   From the diff, copy an attribute / attribute set from the reference file into the edited one.
+  Done: "← copy" links per attribute, "← copy all" per variable, "← copy variable" for variables only in
+  the reference. Each is an undoable edit of the tab the comparison started from. Not done: adopting a rename.
 
 ## Convert & export
 

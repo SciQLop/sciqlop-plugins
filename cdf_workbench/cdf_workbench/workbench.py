@@ -13,7 +13,6 @@ from PySide6.QtGui import QAction, QDragEnterEvent, QDropEvent, QKeySequence
 from .loader import load_cdf, CdfLoadError
 from .codec_dialog import CodecDialog
 from .compare_view import CompareView
-from .diff import diff_documents
 from .document import DocumentSession, from_cdf, to_cdf
 from .export import skeleton_yaml, subset
 from .file_view import CdfFileView
@@ -298,7 +297,7 @@ class CdfWorkbenchPanel(QWidget):
 
     def _open_compare(self, view: CdfFileView, other, other_name: str):
         name = _tab_name(view.session.source)
-        compare = CompareView(diff_documents(view.session.document, other), (name, other_name))
+        compare = CompareView(view.session, other, (name, other_name))
         index = max(0, self._tabs.count() - 1)
         self._tabs.insertTab(index, compare, f"{name} ↔ {other_name}")
         self._tabs.setCurrentIndex(index)

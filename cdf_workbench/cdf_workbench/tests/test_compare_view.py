@@ -46,10 +46,73 @@ def test_side_by_side_puts_old_and_new_in_two_columns(diff):
     assert "a.cdf" in text and "b.cdf" in text
 
 
-def test_view_rerenders_when_toggled(qtbot, diff):
-    view = CompareView(diff, ("a.cdf", "b.cdf"))
+@pytest.fixture
+def compare(qtbot):
+    from cdf_workbench.document import DocumentSession
+    session = DocumentSession(_doc("nT", extra="gone"))
+    view = CompareView(session, _doc("pT <b>", renamed=True), ("a.cdf", "b.cdf"))
     qtbot.addWidget(view)
+    return session, view
+
+
+def test_view_rerenders_when_toggled(qtbot, compare):
+    _session, view = compare
     assert "same_var" not in view.html()
     view._hide_same.click()
     assert "same_var" in view.html()
     assert "1 renamed" in view._summary.text() and "1 removed" in view._summary.text()
+
+
+def _link(view, kind):
+    import re
+    return re.search(rf'href="({kind}:[^"]*)"', view.html()).group(1).replace("&amp;", "&")
+
+
+def test_copy_an_attribute_from_the_reference(compare):
+    session, view = compare
+    view.copy(_link(view, "copy-attr"))
+
+    assert session.document["B"].attributes["UNITS"].value == "pT <b>"
+    assert session.is_modified
+    assert "UNITS" not in view.html()
+
+
+def test_copy_all_on_a_renamed_variable_targets_its_old_name():
+    from cdf_workbench.document import DocumentSession
+    from cdf_workbench.edits import set_variable_attribute
+    from cdf_workbench.document import Attribute
+    target = _doc("nT")
+    reference = set_variable_attribute(_doc("nT", renamed=True), "B_GSE", None, "LABLAXIS",
+                                       Attribute("B", pycdfpp.DataType.CDF_CHAR))
+    session = DocumentSession(target)
+    view = CompareView(session, reference, ("a", "b"))
+
+    view.copy(_link(view, "copy-all"))
+
+    assert session.document["B_gse"].attributes["LABLAXIS"].value == "B"
+
+
+def test_copy_a_variable_only_in_the_reference_and_undo(compare):
+    from cdf_workbench.document import DocumentSession
+    session = DocumentSession(_doc("nT"))
+    view = CompareView(session, _doc("nT", extra="extra"), ("a", "b"))
+
+    view.copy(_link(view, "copy-var"))
+    assert "extra" in session.document
+    assert "No differences" in view.html()
+
+    session.undo()
+    assert "extra" not in session.document and "copy variable" in view.html()
+
+
+def test_copy_a_global_attribute(qtbot):
+    from cdf_workbench.document import DocumentSession, GlobalAttribute, Attribute
+    from cdf_workbench.edits import set_global_attribute
+    reference = set_global_attribute(_doc("nT"), None, "Mission",
+                                     GlobalAttribute((Attribute("MMS", pycdfpp.DataType.CDF_CHAR),)))
+    session = DocumentSession(_doc("nT"))
+    view = CompareView(session, reference, ("a", "b"))
+
+    view.copy(_link(view, "copy-attr"))
+
+    assert [e.value for e in session.document.attributes["Mission"].entries] == ["MMS"]

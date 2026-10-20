@@ -199,3 +199,19 @@ def read_variable_form(name: str, data_type: pycdfpp.DataType, is_nrv: bool,
     if values.size == 0:
         raise ValueError("Enter at least one value")
     return name, data_type, is_nrv, values
+
+
+def copy_attribute(target: Document, source: Document, name: str, target_var: str = "",
+                   source_var: str = "") -> Document:
+    """Copy one attribute from `source` (global when no variable is given), replacing the target's.
+    The attribute keeps its origin, so even types pycdfpp can't write from values copy faithfully."""
+    if not target_var:
+        old = name if name in target.attributes else None
+        return set_global_attribute(target, old, name, source.attributes[name])
+    old = name if name in target[target_var].attributes else None
+    return set_variable_attribute(target, target_var, old, name, source[source_var].attributes[name])
+
+
+def copy_variable(target: Document, source: Document, name: str) -> Document:
+    """The copy keeps reading its values lazily from the source file."""
+    return add_variable(target, name, source[name])

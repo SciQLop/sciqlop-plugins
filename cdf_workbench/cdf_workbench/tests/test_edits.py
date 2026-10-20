@@ -228,3 +228,35 @@ def test_a_global_attribute_needs_at_least_one_entry():
     from cdf_workbench.edits import read_attribute_form
     with pytest.raises(ValueError, match="at least one"):
         read_attribute_form("FOO", T.CDF_CHAR, " \n\n", multi_entry=True)
+
+
+@pytest.fixture
+def target_and_reference():
+    def make(units, extra_global, extra_var):
+        cdf = pycdfpp.CDF()
+        cdf.add_attribute("Project", ["ISTP"])
+        if extra_global:
+            cdf.add_attribute("Mission", ["MMS"])
+        cdf.add_variable("B", values=np.arange(3.0))
+        cdf["B"].add_attribute("UNITS", units)
+        if extra_var:
+            cdf.add_variable("labels", values=np.array([b"x", b"y"]), is_nrv=True)
+            cdf["labels"].add_attribute("VAR_TYPE", "metadata")
+        return from_cdf(pycdfpp.load(bytes(pycdfpp.save(cdf))))
+    return make("nT", False, False), make("pT", True, True)
+
+
+def test_copy_attributes_and_variables_from_a_reference(target_and_reference):
+    from cdf_workbench.edits import copy_attribute, copy_variable
+    target, reference = target_and_reference
+
+    edited = copy_attribute(target, reference, "UNITS", target_var="B", source_var="B")
+    edited = copy_attribute(edited, reference, "Mission")
+    edited = copy_variable(edited, reference, "labels")
+
+    out = _saved(edited)
+    assert out["B"].attributes["UNITS"].value == "pT"
+    assert list(out.attributes["Mission"]) == ["MMS"]
+    assert out["labels"].attributes["VAR_TYPE"].value == "metadata"
+    assert list(out["labels"].values.ravel()) == [b"x", b"y"]
+    assert target["B"].attributes["UNITS"].value == "nT"
