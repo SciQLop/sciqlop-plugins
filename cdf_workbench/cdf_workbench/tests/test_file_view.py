@@ -692,3 +692,36 @@ def test_editing_a_mixed_type_global_attribute_keeps_each_entry_type(qtbot):
     dialog._accept()
 
     assert dialog.result_attribute() == ("Mixed", [T.CDF_INT4, T.CDF_DOUBLE], [[3, 4], [2.5]])
+
+
+def test_an_unmodified_local_document_is_linted_from_disk(qtbot, tmp_path, monkeypatch):
+    """No serialization at all, whatever the size: also after undoing back to the saved state."""
+    import numpy as np
+    from cdf_workbench.document import DocumentSession, from_cdf
+    from cdf_workbench.file_view import CdfFileView
+    cdf = pycdfpp.CDF()
+    cdf.add_variable("B", values=np.ones(3))
+    cdf["B"].add_attribute("UNITS", "nT")
+    path = str(tmp_path / "f.cdf")
+    pycdfpp.save(cdf, path)
+    linted = []
+    monkeypatch.setattr(CdfFileView, "_start_lint", lambda self, source: linted.append(source))
+    view = CdfFileView(DocumentSession(from_cdf(pycdfpp.load(path)), source=path), source=path)
+    qtbot.addWidget(view)
+    view._inspector.delete_attribute.emit("B", "UNITS")
+    view.session.undo()
+
+    linted.clear()
+    view._lint_document()
+    qtbot.wait(300)
+
+    assert linted == [path]
+    view.release()
+
+
+def test_a_modified_document_too_big_for_memory_is_not_serialized(b_view, monkeypatch):
+    import cdf_workbench.file_view as file_view
+    monkeypatch.setattr(file_view, "available_memory", lambda: 10)
+    assert file_view._document_bytes(b_view.session.document) is None
+    monkeypatch.setattr(file_view, "available_memory", lambda: 10**12)
+    assert file_view._document_bytes(b_view.session.document) is not None

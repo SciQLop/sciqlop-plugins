@@ -286,13 +286,14 @@ def _is_plottable(info: VariableInfo) -> bool:
     return True
 
 
-# Linting an edited document holds a second full copy of it in memory: above this, skip it.
-LINT_SIZE_LIMIT = 200 * 1024 * 1024
 AFTER_EDIT_DELAY_MS = 1000
+# Serializing an edited document for lint holds the new CDF and its bytes next to the values.
+_LINT_COPIES = 2
 
 
 def _document_bytes(doc: Document) -> Optional[bytes]:
-    if sum(decoded_nbytes(var) for _, var in doc.items()) > LINT_SIZE_LIMIT:
+    """None when the copies wouldn't fit in free memory: that edit is then not linted."""
+    if _LINT_COPIES * sum(decoded_nbytes(var) for _, var in doc.items()) > available_memory():
         return None
     return bytes(pycdfpp.save(to_cdf(doc)))
 
@@ -940,9 +941,14 @@ class CdfFileView(QWidget):
             self._start_lint(self._source)
 
     def _lint_document(self):
+        """An unmodified local file is linted from disk, whatever its size; edits from memory."""
         if self._doc is None:
             return
         self._lint_generation += 1
+        source = self._session.source
+        if not self._session.is_modified and source and not source.startswith(("http://", "https://")):
+            self._start_lint(source)
+            return
         QThreadPool.globalInstance().start(
             _SerializeTask(self._doc, self._lint_generation, self._serialize_signals))
 

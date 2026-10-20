@@ -91,7 +91,8 @@ So we don't edit it. We load it into our own model, edit the model, and build a 
 - [x] **E7 — Live lint** (S) — depends on E2
   Re-run AstraLint on `to_cdf(doc)` after each edit (debounced), update inspector badges.
   Done: 1 s after the last edit, lint `to_cdf(doc)` bytes; URL files are linted from memory.
-  Not re-linted above 200 MB decoded (a second full copy in memory). Not run for real here:
+  An unmodified local file is linted from disk, at any size; an edited one when its serialized copies fit
+  in free memory. Not run for real here:
   astralint is missing from the SciQLop dev venv, so tests stop at the lint process start.
 - [x] **E8 — Edit values** (L) — depends on E3 — variable right-click "Edit values…", `values_dialog.py`
   Table editor for small / NRV variables (labels, support data). Large record variables stay read-only.
