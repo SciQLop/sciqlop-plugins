@@ -2,6 +2,7 @@
 from __future__ import annotations
 import re
 from dataclasses import replace
+from math import prod
 from typing import Any, Optional
 
 import numpy as np
@@ -215,3 +216,59 @@ def copy_attribute(target: Document, source: Document, name: str, target_var: st
 def copy_variable(target: Document, source: Document, name: str) -> Document:
     """The copy keeps reading its values lazily from the source file."""
     return add_variable(target, name, source[name])
+
+
+# Editing values cell by cell only makes sense for labels and support data.
+EDITABLE_CELLS = 10_000
+
+
+def _values_shape(var: Variable) -> tuple:
+    """pycdfpp counts a CDF_CHAR's string length as its last dimension; the values don't have it."""
+    return tuple(var.shape[:-1]) if var.type in _TEXT else tuple(var.shape)
+
+
+def values_editable(var: Variable) -> bool:
+    editable_type = var.type in _TEXT or var.type in _INTEGER or var.type in _REAL or var.type in _TIME
+    return editable_type and 0 < prod(_values_shape(var)) <= EDITABLE_CELLS
+
+
+def _grid_orientation(var: Variable, records_by_columns: np.ndarray) -> np.ndarray:
+    """Records as rows; a single-record (NRV) variable as one column, so labels read downwards."""
+    return records_by_columns.T if var.is_nrv else records_by_columns
+
+
+def _cell_text(value) -> str:
+    return value.decode() if isinstance(value, bytes) else str(value)
+
+
+def values_grid(var: Variable) -> list[list[str]]:
+    values = var.values
+    if var.type in _TIME:  # tolist() would turn ns datetimes into plain integers
+        values = pycdfpp.to_datetime64(values).astype(str)
+    grid = _grid_orientation(var, np.asarray(values).reshape(max(len(values), 1), -1))
+    return [[_cell_text(v) for v in row] for row in grid.tolist()]
+
+
+def _parse_cell(text: str, data_type: pycdfpp.DataType, row: int, column: int):
+    if data_type in _TEXT:
+        return text.encode()
+    try:
+        return _parse_item(text.strip(), data_type)
+    except (ValueError, OverflowError):
+        raise ValueError(f"row {row + 1}, column {column + 1}: {text!r} is not a valid "
+                         f"{data_type.name.removeprefix('CDF_')} value") from None
+
+
+def values_from_grid(cells: list[list[str]], var: Variable) -> np.ndarray:
+    """The inverse of values_grid; raises ValueError naming the first bad cell."""
+    parsed = [[_parse_cell(text, var.type, r, c) for c, text in enumerate(row)] for r, row in enumerate(cells)]
+    dtype = _INTEGER.get(var.type) or _REAL.get(var.type) or ("datetime64[ns]" if var.type in _TIME else None)
+    grid = np.array(parsed, dtype=dtype)
+    return _grid_orientation(var, grid).reshape(_values_shape(var))
+
+
+def set_variable_values(doc: Document, name: str, values: np.ndarray) -> Document:
+    var = doc[name]
+    shape = values.shape + ((values.dtype.itemsize,) if var.type in _TEXT else ())
+    edited = replace(var, shape=shape, load_values=lambda: values)
+    return replace(doc, variables={**doc.variables, name: edited})

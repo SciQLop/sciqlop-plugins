@@ -260,3 +260,56 @@ def test_copy_attributes_and_variables_from_a_reference(target_and_reference):
     assert out["labels"].attributes["VAR_TYPE"].value == "metadata"
     assert list(out["labels"].values.ravel()) == [b"x", b"y"]
     assert target["B"].attributes["UNITS"].value == "nT"
+
+
+@pytest.fixture
+def small():
+    cdf = pycdfpp.CDF()
+    cdf.add_variable("labels", values=np.array([b"Bx", b"By", b"Bz"]), is_nrv=True)
+    cdf.add_variable("matrix", values=np.arange(6.0).reshape(2, 3))
+    cdf.add_variable("t", values=np.array(["2020-01-01T00:00:01", "2020-01-01T00:00:02"], dtype="datetime64[ns]"),
+                     data_type=T.CDF_TIME_TT2000)
+    cdf.add_variable("big", values=np.zeros((200, 100)))
+    return from_cdf(pycdfpp.load(bytes(pycdfpp.save(cdf))))
+
+
+def test_values_grid_shows_records_as_rows_and_nrv_as_a_column(small):
+    from cdf_workbench.edits import values_grid
+    assert values_grid(small["labels"]) == [["Bx"], ["By"], ["Bz"]]
+    assert values_grid(small["matrix"]) == [["0.0", "1.0", "2.0"], ["3.0", "4.0", "5.0"]]
+    assert values_grid(small["t"])[1] == ["2020-01-01T00:00:02.000000000"]
+
+
+def test_only_small_variables_are_editable(small):
+    from cdf_workbench.edits import values_editable
+    assert values_editable(small["labels"]) and values_editable(small["matrix"])
+    assert not values_editable(small["big"])
+
+
+def test_edited_grid_is_saved_with_the_variable_type(small):
+    from cdf_workbench.edits import set_variable_values, values_from_grid, values_grid
+    labels = values_grid(small["labels"])
+    labels[2] = ["B_total"]
+    matrix = values_grid(small["matrix"])
+    matrix[1][2] = "-1e31"
+    times = values_grid(small["t"])
+    times[0] = ["2021-06-01T12:00:00"]
+
+    doc = set_variable_values(small, "labels", values_from_grid(labels, small["labels"]))
+    doc = set_variable_values(doc, "matrix", values_from_grid(matrix, small["matrix"]))
+    doc = set_variable_values(doc, "t", values_from_grid(times, small["t"]))
+
+    out = _saved(doc)
+    assert list(out["labels"].values.ravel()) == [b"Bx", b"By", b"B_total"] and out["labels"].is_nrv
+    assert out["matrix"].values[1, 2] == -1e31 and out["matrix"].type == T.CDF_DOUBLE
+    assert pycdfpp.to_datetime64(out["t"].values)[0] == np.datetime64("2021-06-01T12:00:00", "ns")
+    assert out["t"].type == T.CDF_TIME_TT2000
+    assert list(small["labels"].values.ravel()) == [b"Bx", b"By", b"Bz"]
+
+
+def test_a_bad_cell_is_named(small):
+    from cdf_workbench.edits import values_from_grid, values_grid
+    grid = values_grid(small["matrix"])
+    grid[1][0] = "abc"
+    with pytest.raises(ValueError, match="row 2, column 1"):
+        values_from_grid(grid, small["matrix"])

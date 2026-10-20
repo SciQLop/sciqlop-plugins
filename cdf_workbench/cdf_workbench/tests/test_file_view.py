@@ -549,3 +549,44 @@ def test_export_path_gets_the_suffix_of_the_chosen_filter():
     assert _with_filter_suffix("/tmp/dist", "NumPy (*.npz)") == "/tmp/dist.npz"
     assert _with_filter_suffix("/tmp/dist", "CSV (*.csv)") == "/tmp/dist.csv"
     assert _with_filter_suffix("/tmp/dist.csv", "NumPy (*.npz)") == "/tmp/dist.csv"
+
+
+def test_values_dialog_returns_the_edited_values(qtbot):
+    import numpy as np
+    from cdf_workbench.document import from_cdf
+    from cdf_workbench.values_dialog import ValuesDialog
+    cdf = pycdfpp.CDF()
+    cdf.add_variable("labels", values=np.array([b"Bx", b"By"]), is_nrv=True)
+    var = from_cdf(cdf)["labels"]
+    dialog = ValuesDialog("labels", var)
+    qtbot.addWidget(dialog)
+
+    dialog._table.item(1, 0).setText("B_y")
+    dialog._accept()
+
+    assert list(dialog.result_values().ravel()) == [b"Bx", b"B_y"]
+
+
+def test_values_dialog_explains_a_bad_cell_and_stays_open(qtbot):
+    import numpy as np
+    from cdf_workbench.document import from_cdf
+    from cdf_workbench.values_dialog import ValuesDialog
+    cdf = pycdfpp.CDF()
+    cdf.add_variable("E", values=np.array([1.0, 2.0]), is_nrv=True)
+    dialog = ValuesDialog("E", from_cdf(cdf)["E"])
+    qtbot.addWidget(dialog)
+
+    dialog._table.item(0, 0).setText("x")
+    dialog._accept()
+
+    assert dialog.result_values() is None and "row 1, column 1" in dialog._error.text()
+
+
+def test_edit_values_from_the_tree(b_view, monkeypatch):
+    import numpy as np
+    monkeypatch.setattr(b_view, "_ask_values", lambda name, var: np.array([7.0, 8.0, 9.0]))
+
+    b_view._edit_values("B")
+
+    assert list(b_view.session.document["B"].values) == [7.0, 8.0, 9.0]
+    assert b_view.session.is_modified

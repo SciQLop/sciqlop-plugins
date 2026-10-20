@@ -26,7 +26,9 @@ from .document import (
 from .edits import (
     add_variable, delete_variable, format_value, new_variable, references_to, remove_global_attribute,
     remove_variable_attribute, rename_variable, set_global_attribute, set_variable_attribute,
+    set_variable_values, values_editable,
 )
+from .values_dialog import ValuesDialog
 from .variable_dialog import VariableDialog
 from .axis_bar import Axis, AxisModeBar
 from .memory import available_memory, decoded_nbytes, memory_problem
@@ -555,6 +557,15 @@ class CdfFileView(QWidget):
         self._session.apply(lambda d: add_variable(d, name, var))
         self.select_variable(name.strip())
 
+    def _ask_values(self, name: str, var):
+        dialog = ValuesDialog(name, var, self)
+        return dialog.result_values() if dialog.exec() else None
+
+    def _edit_values(self, name: str):
+        values = self._ask_values(name, self._doc[name])
+        if values is not None:
+            self._apply(lambda d: set_variable_values(d, name, values))
+
     def _delete_variable(self, name: str):
         if self._confirm_delete(name, references_to(self._doc, name)):
             self._apply(lambda d: delete_variable(d, name))
@@ -827,6 +838,8 @@ class CdfFileView(QWidget):
                 menu.addAction("Send to Console", lambda: self._send_to_console(node.name))
                 menu.addAction("Export data…", lambda: self._export_data(node.name))
                 menu.addSeparator()
+                if values_editable(self._doc[node.name]):
+                    menu.addAction("Edit values…", lambda: self._edit_values(node.name))
                 menu.addAction("Rename…", lambda: self._rename_variable(node.name))
                 menu.addAction("Delete", lambda: self._delete_variable(node.name))
                 menu.addSeparator()

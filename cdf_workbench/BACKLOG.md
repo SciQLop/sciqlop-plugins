@@ -91,8 +91,10 @@ So we don't edit it. We load it into our own model, edit the model, and build a 
   Done: 1 s after the last edit, lint `to_cdf(doc)` bytes; URL files are linted from memory.
   Not re-linted above 200 MB decoded (serialized on the GUI thread). Not run for real here:
   astralint is missing from the SciQLop dev venv, so tests stop at the lint process start.
-- [ ] **E8 — Edit values** (L) — depends on E3
+- [x] **E8 — Edit values** (L) — depends on E3 — variable right-click "Edit values…", `values_dialog.py`
   Table editor for small / NRV variables (labels, support data). Large record variables stay read-only.
+  Done up to 10,000 cells: text, integer, real and time types; NRV variables shown as one column;
+  a bad cell is named and the dialog stays open; longer labels widen the string length.
 
 ## Compare
 
