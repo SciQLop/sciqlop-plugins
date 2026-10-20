@@ -62,8 +62,10 @@ def _column_names(bundle: "PlotBundle") -> list[str]:
         return labels[:1] or ["value"]
     n = bundle.values.shape[1]
     if bundle.is_spectrogram and bundle.depend_1 is not None:
-        bins = bundle.depend_1 if bundle.depend_1.ndim == 1 else bundle.depend_1[0]
-        return [f"{b:g}" for b in bins]
+        rows = bundle.depend_1.reshape(-1, bundle.depend_1.shape[-1])
+        if not np.allclose(rows, rows[0], equal_nan=True):  # time-varying bins: use the .npz for them
+            return [f"bin {i}" for i in range(n)]
+        return [f"{b:g}" for b in rows[0]]
     labels = list(bundle.hints.component_labels or [])
     return labels[:n] + [f"#{i}" for i in range(len(labels), n)]
 

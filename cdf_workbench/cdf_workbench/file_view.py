@@ -1,6 +1,8 @@
 from __future__ import annotations
 import logging
+import re
 import sys
+from pathlib import PurePosixPath
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Optional
 import numpy as np
@@ -233,6 +235,14 @@ _TEXT_TYPES = {pycdfpp.DataType.CDF_CHAR, pycdfpp.DataType.CDF_UCHAR}
 _TIME_TYPES = {pycdfpp.DataType.CDF_EPOCH, pycdfpp.DataType.CDF_EPOCH16, pycdfpp.DataType.CDF_TIME_TT2000}
 
 
+def _with_filter_suffix(path: str, chosen_filter: str) -> str:
+    """A name typed without extension gets the one of the chosen filter, e.g. "NumPy (*.npz)"."""
+    if PurePosixPath(path).suffix:
+        return path
+    match = re.search(r"\*(\.\w+)", chosen_filter)
+    return path + match.group(1) if match else path
+
+
 def _problem_text(error: Exception, action: str, name: str) -> str:
     """A MemoryError already says what is needed; other errors get some context."""
     return str(error) if isinstance(error, MemoryError) else f"Can't {action} {name}: {error}"
@@ -456,6 +466,7 @@ class CdfFileView(QWidget):
             self.select_variable(current)
         else:
             self._show_global_attributes()
+            self._clear_preview()
 
     def _ask_attribute(self, title: str, name: str, data_type, entries: list[str], multi_entry: bool):
         dialog = AttributeDialog(title, name, data_type, entries, multi_entry, self)
@@ -571,9 +582,7 @@ class CdfFileView(QWidget):
         node = source_index.internalPointer()
         if node is None or node.variable_info is None:
             self._show_global_attributes()
-            self._axis_bar.clear()
-            self._log_y.hide()
-            self._preview.clear()
+            self._clear_preview()
             return
 
         info = node.variable_info
@@ -700,19 +709,23 @@ class CdfFileView(QWidget):
                           hints=hints, is_time_axis=is_time_axis)
 
     def _update_preview(self, info: VariableInfo):
-        self._previewed = info if _is_plottable(info) else None
-        if self._previewed is None:
-            self._axis_bar.clear()
-            self._log_y.hide()
-            self._preview_message.hide()
-            self._preview.clear()
+        if not _is_plottable(info):
+            self._clear_preview()
             return
+        self._previewed = info
         modes = self._modes_for(info)
         if modes is None:
             self._axis_bar.clear()
         else:
             self._axis_bar.show_axes(self._axes_of(info), modes)
         self._render_preview(info)
+
+    def _clear_preview(self):
+        self._previewed = None
+        self._axis_bar.clear()
+        self._log_y.hide()
+        self._preview_message.hide()
+        self._preview.clear()
 
     def _render_preview(self, info: VariableInfo):
         try:
@@ -822,8 +835,8 @@ class CdfFileView(QWidget):
         menu.exec(self._tree_view.viewport().mapToGlobal(pos))
 
     def _ask_export_path(self, name: str, filters: str) -> str:
-        path, _ = QFileDialog.getSaveFileName(self, "Export data", name, filters)
-        return path
+        path, chosen_filter = QFileDialog.getSaveFileName(self, "Export data", name, filters)
+        return _with_filter_suffix(path, chosen_filter) if path else ""
 
     def _export_data(self, var_name: str):
         """What the plot shows (masked, reduced, flipped): CSV, or .npz with the axes."""

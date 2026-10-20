@@ -106,3 +106,19 @@ def test_csv_times_have_no_float_noise(tmp_path):
     t = (np.datetime64("2020-07-05T04:00:00.123456", "us") - np.datetime64(0, "us")) / np.timedelta64(1, "s")
     write_csv(str(path), _bundle([1.0], [t]))
     assert path.read_text().splitlines()[1] == "2020-07-05T04:00:00.123456,1.0"
+
+
+def test_csv_of_time_varying_bins_does_not_claim_record_0_bins(tmp_path):
+    from cdf_workbench.export import write_csv
+    path = tmp_path / "s.csv"
+    write_csv(str(path), _bundle([[1.0, 2.0], [3.0, 4.0]], [0.0, 1.0], depend_1=[[10.0, 100.0], [20.0, 200.0]],
+                                 display_type="spectrogram"))
+    assert path.read_text().splitlines()[0] == "time,bin 0,bin 1"
+
+
+def test_csv_of_constant_2d_bins_uses_their_values(tmp_path):
+    from cdf_workbench.export import write_csv
+    path = tmp_path / "s.csv"
+    write_csv(str(path), _bundle([[1.0, 2.0], [3.0, 4.0]], [0.0, 1.0], depend_1=[[10.0, 100.0], [10.0, 100.0]],
+                                 display_type="spectrogram"))
+    assert path.read_text().splitlines()[0] == "time,10,100"

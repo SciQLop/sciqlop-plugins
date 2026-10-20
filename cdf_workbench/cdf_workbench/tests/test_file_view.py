@@ -531,3 +531,21 @@ def test_sparkline_masks_a_float32_fillval():
     worker.run()
 
     assert samples == [[1.0, 3.0]]
+
+
+def test_deleting_the_shown_variable_clears_its_preview(dist_view, monkeypatch):
+    monkeypatch.setattr(dist_view, "_confirm_delete", lambda name, refs: True)
+    dist_view.select_variable("dist")
+    assert dist_view._previewed is not None and not dist_view._axis_bar.isHidden()
+
+    dist_view._delete_variable("dist")
+
+    assert dist_view._previewed is None
+    assert dist_view._axis_bar.isHidden() and dist_view._log_y.isHidden()
+
+
+def test_export_path_gets_the_suffix_of_the_chosen_filter():
+    from cdf_workbench.file_view import _with_filter_suffix
+    assert _with_filter_suffix("/tmp/dist", "NumPy (*.npz)") == "/tmp/dist.npz"
+    assert _with_filter_suffix("/tmp/dist", "CSV (*.csv)") == "/tmp/dist.csv"
+    assert _with_filter_suffix("/tmp/dist.csv", "NumPy (*.npz)") == "/tmp/dist.csv"
