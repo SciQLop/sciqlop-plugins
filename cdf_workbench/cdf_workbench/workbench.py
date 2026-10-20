@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtGui import QAction, QDragEnterEvent, QDropEvent, QKeySequence
 from .loader import load_cdf, CdfLoadError
+from .codec_dialog import CodecDialog
 from .document import DocumentSession, from_cdf, to_cdf
 from .export import skeleton_yaml, subset
 from .file_view import CdfFileView
@@ -211,6 +212,7 @@ class CdfWorkbenchPanel(QWidget):
         menu.addAction("Save As…", lambda: self.save_tab_as(index))
         menu.addAction("Save subset…", lambda: self.save_subset(index))
         menu.addAction("Export structure as YAML…", lambda: self.export_structure(index))
+        menu.addAction("Compare codecs…", lambda: self.compare_codecs(index))
         menu.addSeparator()
         menu.addAction("Close", lambda: self._close_tab(index))
         menu.exec(self._tabs.tabBar().mapToGlobal(pos))
@@ -266,6 +268,14 @@ class CdfWorkbenchPanel(QWidget):
         if path:
             text = skeleton_yaml(view.session.document)
             self._write(view, lambda: Path(path).write_text(text))
+
+    def compare_codecs(self, index: int):
+        view = self._view_at(index)
+        if view is None:
+            return
+        source = view.session.source
+        size = os.path.getsize(source) if source and not _is_url(source) and os.path.exists(source) else None
+        CodecDialog(view.session, original_size=size, parent=self).exec()
 
     @staticmethod
     def _write(view: CdfFileView, write):
