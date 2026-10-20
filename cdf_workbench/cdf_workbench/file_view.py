@@ -1,13 +1,13 @@
 from __future__ import annotations
 import logging
-import multiprocessing
+import sys
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Optional
 import numpy as np
 
 if TYPE_CHECKING:
     from SciQLop.core.plot_hints import PlotHints
-from PySide6.QtCore import Qt, QThread, QTimer, Signal, QObject, QSortFilterProxyModel
+from PySide6.QtCore import Qt, QProcess, QThread, QTimer, Signal, QObject, QSortFilterProxyModel
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QSplitter, QTreeView, QLineEdit, QMenu, QCheckBox, QLabel,
     QInputDialog, QMessageBox, QFileDialog,
@@ -31,7 +31,8 @@ from .tree_model import CdfTreeModel, CdfItemDelegate, VariableInfo
 from .inspector import CdfInspectorWidget
 from .preview import CdfPreviewWidget
 from .quality import analyze_quality, QualityReport
-from .lint import run_lint, LintReport
+from . import lint
+from .lint import LintReport, report_from_json
 
 logger = logging.getLogger(__name__)
 
@@ -164,6 +165,7 @@ class AnalysisWorker(QObject):
     # Use Signal(str, object) for cross-thread safety with custom types
     quality_ready = Signal(str, object)   # var_name, QualityReport
     sparkline_ready = Signal(str, object) # var_name, list[float]
+    done = Signal()
 
     def __init__(self, doc: Document, variable_infos: dict[str, VariableInfo]):
         super().__init__()
@@ -175,6 +177,12 @@ class AnalysisWorker(QObject):
         self._cancelled = True
 
     def run(self):
+        try:
+            self._analyze_all()
+        finally:
+            self.done.emit()
+
+    def _analyze_all(self):
         for name, info in self._infos.items():
             if self._cancelled:
                 return
@@ -267,11 +275,28 @@ def _document_bytes(doc: Document) -> Optional[bytes]:
     return bytes(pycdfpp.save(to_cdf(doc)))
 
 
-def _lint_in_subprocess(source: str | bytes, conn):
-    """Entry point for the lint subprocess — runs lint and sends result back."""
-    report = run_lint(source)
-    conn.send(report)
-    conn.close()
+# Analyses outlive the view that started them: destroying a running QThread aborts the process.
+_RUNNING_ANALYSES: set = set()
+
+
+def _run_analysis(worker: AnalysisWorker) -> QThread:
+    thread = QThread()
+    worker.moveToThread(thread)
+    entry = (thread, worker)
+    _RUNNING_ANALYSES.add(entry)
+    thread.started.connect(worker.run)
+    worker.done.connect(thread.quit)
+    thread.finished.connect(lambda: _forget_analysis(entry))
+    thread.start()
+    return thread
+
+
+def _forget_analysis(entry: tuple) -> None:
+    """Runs on the GUI thread (PySide queues the lambda there); `finished` is emitted just before
+    the thread exits, so wait for it before dropping the last reference."""
+    thread, _worker = entry
+    thread.wait()
+    _RUNNING_ANALYSES.discard(entry)
 
 
 class CdfFileView(QWidget):
@@ -288,9 +313,9 @@ class CdfFileView(QWidget):
         self._setup_ui()
         session.changed.connect(self._on_document_changed)
         self._start_quality_analysis()
-        self._lint_process = None
-        self._lint_timer = QTimer(self)
-        self._lint_timer.timeout.connect(self._poll_lint)
+        self._lint_process: Optional[QProcess] = None
+        self._lint_finished = False
+        self._lint_exit_code: Optional[int] = None
         self._lint_delay = QTimer(self)
         self._lint_delay.setSingleShot(True)
         self._lint_delay.setInterval(LINT_DELAY_MS)
@@ -806,14 +831,10 @@ class CdfFileView(QWidget):
         if not infos:
             return
 
-        self._analysis_thread = QThread()
         self._analysis_worker = AnalysisWorker(self._doc, infos)
-        self._analysis_worker.moveToThread(self._analysis_thread)
-        self._analysis_thread.started.connect(self._analysis_worker.run)
         self._analysis_worker.quality_ready.connect(self._on_quality_result)
         self._analysis_worker.sparkline_ready.connect(self._on_sparkline_result)
-        self._analysis_thread.finished.connect(self._analysis_thread.deleteLater)
-        self._analysis_thread.start()
+        _run_analysis(self._analysis_worker)
 
     def _on_quality_result(self, var_name: str, report: QualityReport):
         self._quality_reports[var_name] = report
@@ -838,40 +859,45 @@ class CdfFileView(QWidget):
             self._start_lint(data)
 
     def _start_lint(self, source: str | bytes):
+        """lint.py runs as a script with `-I`: it needs nothing from the plugin, and the
+        plugin's own directory isn't put on the child's sys.path to shadow anything."""
         self._stop_lint()
-        parent_conn, child_conn = multiprocessing.Pipe(duplex=False)
-        self._lint_process = multiprocessing.Process(
-            target=_lint_in_subprocess, args=(source, child_conn), daemon=True,
-        )
-        self._lint_conn = parent_conn
-        self._lint_process.start()
-        child_conn.close()
-        self._lint_timer.start(500)
+        process = QProcess(self)
+        process.finished.connect(lambda code, _status, p=process: self._on_lint_finished(p, code))
+        from_stdin = isinstance(source, bytes)
+        process.start(sys.executable, ["-I", lint.__file__, "-" if from_stdin else source])
+        if from_stdin:
+            process.write(source)
+            process.closeWriteChannel()
+        self._lint_process = process
+        self._lint_finished = False
 
     def _stop_lint(self):
-        self._lint_timer.stop()
-        if self._lint_process is not None and self._lint_process.is_alive():
-            self._lint_process.kill()
-            self._lint_process.join(timeout=1)
+        process, self._lint_process = self._lint_process, None
+        if process is not None and process.state() != QProcess.NotRunning:
+            process.kill()
+            process.waitForFinished(1000)
 
-    def _poll_lint(self):
-        if self._lint_conn.poll():
-            report = self._lint_conn.recv()
-            self._lint_timer.stop()
-            self._lint_process.join(timeout=1)
-            if report is not None:
-                self._lint_report = report
-                self._inspector.set_lint_report(report)
-        elif not self._lint_process.is_alive():
-            self._lint_timer.stop()
-            self._lint_process.join(timeout=1)
+    def _on_lint_finished(self, process: QProcess, exit_code: int):
+        if process is not self._lint_process:
+            return
+        self._lint_finished, self._lint_exit_code = True, exit_code
+        output = bytes(process.readAllStandardOutput()).decode()
+        if exit_code != 0:
+            logger.debug("Lint failed: %s", bytes(process.readAllStandardError()).decode()[-2000:])
+            return
+        report = report_from_json(output)
+        if report is not None:
+            self._lint_report = report
+            self._inspector.set_lint_report(report)
 
     def release(self):
-        if hasattr(self, "_analysis_worker"):
+        """Safe to call twice. A running analysis stops after its current variable."""
+        if getattr(self, "_analysis_worker", None) is not None:
+            self._analysis_worker.quality_ready.disconnect(self._on_quality_result)
+            self._analysis_worker.sparkline_ready.disconnect(self._on_sparkline_result)
             self._analysis_worker.cancel()
-        if hasattr(self, "_analysis_thread") and self._analysis_thread.isRunning():
-            self._analysis_thread.quit()
-            self._analysis_thread.wait(1000)
+            self._analysis_worker = None
         self._lint_delay.stop()
         self._stop_lint()
         self._session = None

@@ -1,6 +1,14 @@
-"""AstraLint ISTP conformance checking — pure module, no Qt dependency."""
+"""AstraLint ISTP conformance checking — pure module, no Qt dependency.
+
+Also run as a script by the workbench: `python -I lint.py <path | ->` lints a file, or CDF bytes
+from stdin, and prints the report as JSON. It imports nothing from the plugin, so it works even
+though SciQLop loads plugins by file path. Keep it that way.
+"""
 from __future__ import annotations
-from dataclasses import dataclass, field
+import json
+import sys
+from dataclasses import asdict, dataclass, field
+from typing import Optional
 
 
 @dataclass(frozen=True)
@@ -69,3 +77,21 @@ def _walk(group, var_names: set[str], issues: list[LintIssue]) -> None:
                 rule=result.reference,
                 target=target,
             ))
+
+
+def report_to_json(report: Optional[LintReport]) -> str:
+    return json.dumps(None if report is None else [asdict(i) for i in report.issues])
+
+
+def report_from_json(text: str) -> Optional[LintReport]:
+    issues = json.loads(text)
+    return None if issues is None else LintReport([LintIssue(**i) for i in issues])
+
+
+def _main(argv: list[str]) -> None:
+    source = sys.stdin.buffer.read() if argv[1] == "-" else argv[1]
+    print(report_to_json(run_lint(source)))
+
+
+if __name__ == "__main__":
+    _main(sys.argv)

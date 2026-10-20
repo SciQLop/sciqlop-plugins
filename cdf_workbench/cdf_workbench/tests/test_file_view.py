@@ -417,3 +417,61 @@ def test_export_plotted_data_as_csv(dist_view, tmp_path, monkeypatch):
 
     lines = target.read_text().splitlines()
     assert lines[0] == "time,10,100,1000,10000" and len(lines) == 4
+
+
+_CLOSE_DURING_ANALYSIS = """
+import gc, os, sys, time
+import numpy as np, pycdfpp
+from PySide6.QtWidgets import QApplication
+app = QApplication([])
+sys.path.insert(0, sys.argv[1])
+from PySide6.QtCore import QCoreApplication, QEvent
+import cdf_workbench.file_view as fv
+from cdf_workbench.workbench import CdfWorkbenchPanel
+real_analyze = fv.analyze_quality
+fv.analyze_quality = lambda **kw: time.sleep(1.5) or real_analyze(**kw)
+cdf = pycdfpp.CDF()
+for name in ("A", "B"):
+    cdf.add_variable(name, values=np.ones(3))
+    cdf[name].add_attribute("VAR_TYPE", "data")
+path = os.path.join(sys.argv[2], "f.cdf")
+pycdfpp.save(cdf, path)
+panel = CdfWorkbenchPanel()
+panel.open_file(path)
+app.processEvents(); time.sleep(0.2)
+panel._close_tab(0)
+QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+gc.collect()
+deadline = time.time() + 4
+while time.time() < deadline:
+    app.processEvents(); time.sleep(0.05); gc.collect()
+print("survived", flush=True)
+os._exit(0)
+"""
+
+
+def test_closing_a_tab_during_quality_analysis_does_not_abort(tmp_path):
+    """Destroying a running QThread is a qFatal: SciQLop would abort and lose every unsaved tab."""
+    import os, subprocess, sys
+    plugin_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    result = subprocess.run([sys.executable, "-c", _CLOSE_DURING_ANALYSIS, plugin_dir, str(tmp_path)],
+                            capture_output=True,
+                            text=True, timeout=60, env={**os.environ, "QT_QPA_PLATFORM": "offscreen"})
+    assert result.returncode == 0 and "survived" in result.stdout, result.stderr[-2000:]
+
+
+def test_lint_process_runs_to_completion(qtbot, tmp_path):
+    import numpy as np
+    from cdf_workbench.document import DocumentSession, from_cdf
+    from cdf_workbench.file_view import CdfFileView
+    cdf = pycdfpp.CDF()
+    cdf.add_variable("B", values=np.ones(3))
+    path = str(tmp_path / "f.cdf")
+    pycdfpp.save(cdf, path)
+    view = CdfFileView(DocumentSession(from_cdf(pycdfpp.load(path)), source=path), source=path)
+    qtbot.addWidget(view)
+
+    qtbot.waitUntil(lambda: view._lint_finished, timeout=30000)
+
+    assert view._lint_exit_code == 0
+    view.release()
