@@ -505,3 +505,29 @@ def test_a_document_that_cannot_be_serialized_is_just_not_linted(b_view, qtbot, 
 
     qtbot.wait(300)
     assert linted == []
+
+
+def test_replace_fill_on_integer_data_with_a_nan_fillval():
+    import numpy as np
+    from cdf_workbench.file_view import _replace_fill
+    assert _replace_fill(np.array([1, 2], dtype=np.int32), float("nan")).tolist() == [1.0, 2.0]
+
+
+def test_sparkline_masks_a_float32_fillval():
+    import numpy as np
+    from cdf_workbench.document import from_cdf
+    from cdf_workbench.file_view import AnalysisWorker
+    from cdf_workbench.tree_model import CdfTreeModel
+    cdf = pycdfpp.CDF()
+    cdf.add_variable("B", values=np.array([1.0, -1e31, 3.0], dtype=np.float32))
+    cdf["B"].add_attribute("FILLVAL", [np.float32(-1e31)], pycdfpp.DataType.CDF_FLOAT)
+    doc = from_cdf(cdf)
+    info = CdfTreeModel(doc).variable_info("B")
+    info.fill_value = -1e31
+    worker = AnalysisWorker(doc, {"B": info})
+    samples = []
+    worker.sparkline_ready.connect(lambda name, s: samples.append(s))
+
+    worker.run()
+
+    assert samples == [[1.0, 3.0]]

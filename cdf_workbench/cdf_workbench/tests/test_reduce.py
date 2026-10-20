@@ -106,3 +106,22 @@ def test_reduced_info_without_a_plotted_axis_is_a_time_series():
     assert reduced.depend_1 == ""
     assert reduced.display_type == "time_series"
     assert "DEPEND_1" not in reduced.all_attributes
+
+
+@pytest.mark.parametrize("values, fill, expected", [
+    (np.array([1, 2, -1], dtype=np.int32), float("nan"), [False, False, False]),
+    (np.array([1.0, 2.0], dtype=np.float32), 1e300, [False, False]),
+    (np.array([1.0, -1e31], dtype=np.float32), -1e31, [False, True]),
+    (np.array([1, -32768], dtype=np.int16), -32768.0, [False, True]),
+])
+def test_fill_mask_compares_in_the_data_type_and_never_raises(values, fill, expected):
+    import warnings
+    from cdf_workbench.quality import fill_mask
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        assert list(fill_mask(values, fill)) == expected
+
+
+def test_integer_distribution_with_a_nan_fillval_still_reduces():
+    out = reduce_values(np.ones((2, 2, 2), dtype=np.int32), (SUM, PLOT), fill_value=float("nan"))
+    assert out.tolist() == [[2.0, 2.0], [2.0, 2.0]]

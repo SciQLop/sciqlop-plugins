@@ -15,6 +15,24 @@ class QualityReport:
         return max(0.0, 100.0 - bad)
 
 
+def fill_mask(values: np.ndarray, fill_value) -> np.ndarray:
+    """Where values equal FILLVAL, compared in the data's own type: a float32 file stores
+    -1e31 as -9.9999998e30. A FILLVAL that type can't hold (NaN for integers, 1e300 for
+    float32) matches nothing. A NaN FILLVAL matches NaN values."""
+    if fill_value is None:
+        return np.zeros(values.shape, dtype=bool)
+    fill = np.float64(fill_value)
+    if np.isnan(fill):
+        return np.isnan(values) if values.dtype.kind == "f" else np.zeros(values.shape, dtype=bool)
+    with np.errstate(over="ignore", invalid="ignore"):
+        typed = fill.astype(values.dtype)
+    if values.dtype.kind == "f":
+        holds = bool(np.isfinite(typed)) == bool(np.isfinite(fill))
+    else:
+        holds = bool(np.isfinite(fill)) and float(typed) == float(fill)
+    return values == typed if holds else np.zeros(values.shape, dtype=bool)
+
+
 def analyze_quality(
     values: np.ndarray,
     epochs: np.ndarray | None = None,
@@ -28,24 +46,12 @@ def analyze_quality(
 
     flat = values.ravel()
 
-    # Cast fill_value to data dtype to avoid float32/float64 mismatch
-    fill_count = 0
-    typed_fill = None
-    if fill_value is not None:
-        typed_fill = np.array(fill_value, dtype=flat.dtype)
-        if np.isnan(typed_fill):
-            fill_count = int(np.sum(np.isnan(flat)))
-        else:
-            fill_count = int(np.sum(flat == typed_fill))
+    is_fill = fill_mask(flat, fill_value)
+    fill_count = int(np.sum(is_fill))
 
     oor_count = 0
     if valid_min is not None or valid_max is not None:
-        if typed_fill is None:
-            non_fill = flat
-        elif np.isnan(typed_fill):
-            non_fill = flat[~np.isnan(flat)]
-        else:
-            non_fill = flat[flat != typed_fill]
+        non_fill = flat[~is_fill]
         if valid_min is not None:
             oor_count += int(np.sum(non_fill < valid_min))
         if valid_max is not None:

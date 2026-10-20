@@ -221,3 +221,10 @@ def test_variable_form_needs_a_name_and_values():
         read_variable_form("labels", T.CDF_CHAR, True, "\n")
     name, data_type, nrv, values = read_variable_form(" labels ", T.CDF_CHAR, True, "Bx\nBy")
     assert (name, nrv, list(values)) == ("labels", True, [b"Bx", b"By"])
+
+
+def test_a_global_attribute_needs_at_least_one_entry():
+    """pycdfpp can't write an empty global attribute: accepting one made the file unsaveable."""
+    from cdf_workbench.edits import read_attribute_form
+    with pytest.raises(ValueError, match="at least one"):
+        read_attribute_form("FOO", T.CDF_CHAR, " \n\n", multi_entry=True)

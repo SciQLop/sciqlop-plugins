@@ -11,6 +11,7 @@ from typing import Optional, Union
 import numpy as np
 import pycdfpp
 
+from .quality import fill_mask
 from .tree_model import VariableInfo
 
 PLOT = "plot"
@@ -48,9 +49,7 @@ def with_axis_mode(modes: tuple[Mode, ...], axis: int, mode: Mode) -> tuple[Mode
 
 def _valid_only(values: np.ndarray, fill_value, valid_min, valid_max) -> np.ndarray:
     data = values.astype(np.float64)
-    invalid = ~np.isfinite(data)
-    if fill_value is not None:
-        invalid |= values == np.array(fill_value, dtype=values.dtype)
+    invalid = ~np.isfinite(data) | fill_mask(values, fill_value)
     if valid_min is not None:
         invalid |= data < valid_min
     if valid_max is not None:

@@ -66,3 +66,23 @@ def test_quality_report_multidimensional():
     values = np.array([[1.0, 2.0], [-1e31, 3.0], [4.0, -1e31]])
     report = analyze_quality(values=values, fill_value=-1e31)
     assert report.fill_percentage == pytest.approx(100.0 * 2 / 6)
+
+
+def test_integer_data_with_a_nan_fillval():
+    import numpy as np
+    from cdf_workbench.quality import analyze_quality
+    report = analyze_quality(values=np.array([1, 2, 3], dtype=np.int32), fill_value=float("nan"))
+    assert report.fill_percentage == 0.0
+
+
+def test_float32_fill_given_as_a_python_float_is_counted():
+    import numpy as np
+    from cdf_workbench.quality import analyze_quality
+    report = analyze_quality(values=np.array([1.0, -1e31], dtype=np.float32), fill_value=-1e31)
+    assert report.fill_percentage == 50.0
+
+
+def test_nan_fillval_on_float_data_matches_nan_values():
+    import numpy as np
+    from cdf_workbench.quality import fill_mask
+    assert fill_mask(np.array([1.0, np.nan]), float("nan")).tolist() == [False, True]

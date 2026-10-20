@@ -32,7 +32,7 @@ from .reduce import Mode, axis_attribute, default_modes, needs_reduction, reduce
 from .tree_model import CdfTreeModel, CdfItemDelegate, VariableInfo
 from .inspector import CdfInspectorWidget
 from .preview import CdfPreviewWidget
-from .quality import analyze_quality, QualityReport
+from .quality import analyze_quality, fill_mask, QualityReport
 from . import lint
 from .lint import LintReport, report_from_json
 
@@ -114,8 +114,7 @@ def _is_descending(depend_1: Optional[np.ndarray]) -> bool:
 def _replace_fill(values: np.ndarray, fill_value) -> np.ndarray:
     if fill_value is None:
         return values
-    typed = np.array(fill_value, dtype=values.dtype)
-    return np.where(values == typed, np.nan, values.astype(float))
+    return np.where(fill_mask(values, fill_value), np.nan, values.astype(float))
 
 
 def _hints_from(info: VariableInfo, depend_1_meta: Optional[dict],
@@ -216,9 +215,9 @@ class AnalysisWorker(QObject):
                 # instead of its time evolution).
                 if estimated_size < SPARKLINE_SIZE_LIMIT:
                     arr = values.astype(float, copy=False)
-                    if info.fill_value is not None:
-                        arr = np.where(arr == float(info.fill_value), np.nan, arr)
-                    per_record = np.nansum(arr.reshape(len(arr), -1), axis=1)
+                    arr = np.where(fill_mask(values, info.fill_value), np.nan, arr)
+                    rows = arr.reshape(len(arr), -1)
+                    per_record = np.where(np.isfinite(rows).any(axis=1), np.nansum(rows, axis=1), np.nan)
                     if len(per_record) > 60:
                         indices = np.linspace(0, len(per_record) - 1, 60, dtype=int)
                         per_record = per_record[indices]

@@ -93,6 +93,8 @@ def read_attribute_form(name: str, data_type: pycdfpp.DataType, text: str,
     if not name:
         raise ValueError("The attribute needs a name")
     lines = [line for line in text.splitlines() if line.strip()] if multi_entry else [text]
+    if not lines:
+        raise ValueError("Enter at least one entry")
     return name, data_type, [parse_value(line, data_type) for line in lines]
 
 
