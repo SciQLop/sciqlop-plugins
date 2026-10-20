@@ -7,7 +7,9 @@ import numpy as np
 
 if TYPE_CHECKING:
     from SciQLop.core.plot_hints import PlotHints
-from PySide6.QtCore import Qt, QProcess, QThread, QTimer, Signal, QObject, QSortFilterProxyModel
+from PySide6.QtCore import (
+    Qt, QProcess, QRunnable, QThread, QThreadPool, QTimer, Signal, QObject, QSortFilterProxyModel,
+)
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QSplitter, QTreeView, QLineEdit, QMenu, QCheckBox, QLabel,
     QInputDialog, QMessageBox, QFileDialog,
@@ -263,8 +265,7 @@ def _is_plottable(info: VariableInfo) -> bool:
     return True
 
 
-# simplify: an edited document is serialized on the GUI thread for the lint subprocess; above
-# this size that would freeze the UI, so it is not re-linted. Serialize in a worker to lift it.
+# Linting an edited document holds a second full copy of it in memory: above this, skip it.
 LINT_SIZE_LIMIT = 200 * 1024 * 1024
 LINT_DELAY_MS = 1000
 
@@ -273,6 +274,31 @@ def _document_bytes(doc: Document) -> Optional[bytes]:
     if sum(decoded_nbytes(var) for _, var in doc.items()) > LINT_SIZE_LIMIT:
         return None
     return bytes(pycdfpp.save(to_cdf(doc)))
+
+
+class _SerializeSignals(QObject):
+    done = Signal(int, object)  # lint generation, CDF bytes
+
+
+class _SerializeTask(QRunnable):
+    """Builds the lint input off the GUI thread: to_cdf reads every value."""
+
+    def __init__(self, doc: Document, generation: int, signals: _SerializeSignals):
+        super().__init__()
+        self._doc, self._generation, self._signals = doc, generation, signals
+
+    def run(self):
+        try:
+            data = _document_bytes(self._doc)
+        except Exception:  # e.g. an edited CDF_BYTE attribute pycdfpp can't write: no lint
+            logger.debug("Can't serialize the document for lint", exc_info=True)
+            return
+        if data is None:
+            return
+        try:
+            self._signals.done.emit(self._generation, data)
+        except RuntimeError:  # the view was closed meanwhile
+            pass
 
 
 # Analyses outlive the view that started them: destroying a running QThread aborts the process.
@@ -314,6 +340,9 @@ class CdfFileView(QWidget):
         session.changed.connect(self._on_document_changed)
         self._start_quality_analysis()
         self._lint_process: Optional[QProcess] = None
+        self._lint_generation = 0
+        self._serialize_signals = _SerializeSignals(self)
+        self._serialize_signals.done.connect(self._on_document_serialized)
         self._lint_finished = False
         self._lint_exit_code: Optional[int] = None
         self._lint_delay = QTimer(self)
@@ -855,7 +884,15 @@ class CdfFileView(QWidget):
             self._start_lint(self._source)
 
     def _lint_document(self):
-        if self._doc is not None and (data := _document_bytes(self._doc)) is not None:
+        if self._doc is None:
+            return
+        self._lint_generation += 1
+        QThreadPool.globalInstance().start(
+            _SerializeTask(self._doc, self._lint_generation, self._serialize_signals))
+
+    def _on_document_serialized(self, generation: int, data: bytes):
+        """Results of older edits, or arriving after release(), are dropped."""
+        if generation == self._lint_generation and self._session is not None:
             self._start_lint(data)
 
     def _start_lint(self, source: str | bytes):

@@ -405,6 +405,7 @@ def test_a_url_file_is_linted_from_memory_not_downloaded_again(qtbot, monkeypatc
                        source="https://example.org/f.cdf")
     qtbot.addWidget(view)
 
+    qtbot.waitUntil(lambda: bool(linted), timeout=5000)
     assert len(linted) == 1 and isinstance(linted[0], bytes)
     view.release()
 
@@ -475,3 +476,32 @@ def test_lint_process_runs_to_completion(qtbot, tmp_path):
 
     assert view._lint_exit_code == 0
     view.release()
+
+
+def test_the_document_is_serialized_for_lint_off_the_gui_thread(b_view, qtbot, monkeypatch):
+    from PySide6.QtCore import QThread
+    import cdf_workbench.file_view as file_view
+    on_gui_thread = []
+    real = file_view._document_bytes
+    monkeypatch.setattr(file_view, "_document_bytes",
+                        lambda doc: on_gui_thread.append(QThread.currentThread() is qtbot_main) or real(doc))
+    qtbot_main = QThread.currentThread()
+    linted = []
+    monkeypatch.setattr(b_view, "_start_lint", linted.append)
+
+    b_view._lint_document()
+
+    qtbot.waitUntil(lambda: bool(linted), timeout=5000)
+    assert on_gui_thread == [False]
+
+
+def test_a_document_that_cannot_be_serialized_is_just_not_linted(b_view, qtbot, monkeypatch):
+    import cdf_workbench.file_view as file_view
+    monkeypatch.setattr(file_view, "_document_bytes", lambda doc: (_ for _ in ()).throw(ValueError("CDF_BYTE")))
+    linted = []
+    monkeypatch.setattr(b_view, "_start_lint", linted.append)
+
+    b_view._lint_document()
+
+    qtbot.wait(300)
+    assert linted == []
