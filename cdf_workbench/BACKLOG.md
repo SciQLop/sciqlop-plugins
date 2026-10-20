@@ -48,9 +48,9 @@ Order inside each section is the suggested build order.
   Opening a path twice, or Save As onto a path another tab owns: the last save silently wins. Warn or switch to the open tab.
 - [ ] **B6 — URL downloads can't be cancelled or deduplicated** (S)
   Clicking an example twice downloads it twice into memory; one finishing clears the other's status.
-- [ ] **R6 — Decide what a summed distribution means** (S, needs a decision)
-  Sums count missing bins as zero, so sparse coverage looks like low flux; `UNITS` stays per-steradian after a
-  sum over angles. Options: label the sum ("Σ over N bins") and drop UNITS, weight by solid angle, or default to mean.
+- [x] **R6 — What a summed distribution means** — decided: keep the sum and the variable's UNITS.
+  Summing angle bins is how omni spectrograms are built, and real distributions rarely have fill per bin.
+  The reduction is generic (not only particle distributions), so it can't know how a sum changes units.
 
 ## Edit
 
