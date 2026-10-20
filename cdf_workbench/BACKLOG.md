@@ -44,6 +44,14 @@ Order inside each section is the suggested build order.
 - [x] **B2 — No quality report for CDF_EPOCH16 files** (S)
   `AnalysisWorker` cast epochs with `astype("datetime64[ns]")`: wrong dates for TT2000/EPOCH, a swallowed error for EPOCH16.
 
+- [ ] **B5 — Same file in two tabs** (S)
+  Opening a path twice, or Save As onto a path another tab owns: the last save silently wins. Warn or switch to the open tab.
+- [ ] **B6 — URL downloads can't be cancelled or deduplicated** (S)
+  Clicking an example twice downloads it twice into memory; one finishing clears the other's status.
+- [ ] **R6 — Decide what a summed distribution means** (S, needs a decision)
+  Sums count missing bins as zero, so sparse coverage looks like low flux; `UNITS` stays per-steradian after a
+  sum over angles. Options: label the sum ("Σ over N bins") and drop UNITS, weight by solid angle, or default to mean.
+
 ## Edit
 
 A `pycdfpp.CDF` is mostly immutable (no rename, no attribute delete, no overwrite).
@@ -61,7 +69,6 @@ So we don't edit it. We load it into our own model, edit the model, and build a 
 - [x] **E2 — Save / Save As** (S) — depends on E1 — `DocumentSession.save`, tab right-click menu
   `pycdfpp.save(to_cdf(doc), path)`, then `session.mark_saved()`. Ctrl+S / Ctrl+Shift+S. URL-opened files only get Save As.
   Closing a modified tab asks Save / Discard / Cancel.
-  Cancel / join the `AnalysisWorker` first: it lazily loads values from the same `pycdfpp.CDF` on another thread.
   `to_cdf` holds a second copy of all values; try `add_variable(..., copy=False)` for numeric variables.
   Not done: quitting SciQLop with unsaved tabs doesn't ask (needs the plugin's close() hook).
 - [x] **E3 — Undo / redo** (S) — depends on E1 — `DocumentSession.undo/redo`, Ctrl+Z / Ctrl+Shift+Z
