@@ -348,3 +348,42 @@ def test_a_failed_load_keeps_the_other_downloads_in_the_status(panel, qtbot, mon
     qtbot.waitUntil(lambda: "404" in panel._open_page.status())
     assert "slow.cdf" in panel._open_page.status()
     release.set()
+
+
+@pytest.mark.parametrize("answer, allowed, saved", [("cancel", False, False), ("discard", True, False),
+                                                    ("save", True, True)])
+def test_quitting_with_unsaved_tabs_asks(panel, cdf_file, qtbot, monkeypatch, answer, allowed, saved):
+    asked = []
+    monkeypatch.setattr(panel, "_ask_unsaved_on_quit", lambda names: asked.append(names) or answer)
+    panel.open_file(cdf_file)
+    _modify(panel._tabs.widget(0))
+
+    assert panel.confirm_quit() == allowed
+
+    assert asked == [["sample.cdf"]]
+    assert _was_saved(cdf_file) == saved
+
+
+def test_quitting_without_unsaved_tabs_does_not_ask(panel, cdf_file, qtbot, monkeypatch):
+    monkeypatch.setattr(panel, "_ask_unsaved_on_quit", lambda names: pytest.fail("asked"))
+    panel.open_file(cdf_file)
+    assert panel.confirm_quit()
+
+
+def test_the_quit_guard_blocks_the_main_window_close(panel, cdf_file, qtbot, monkeypatch):
+    from PySide6.QtWidgets import QMainWindow
+    from cdf_workbench.workbench import install_quit_guard
+    window = QMainWindow()
+    qtbot.addWidget(window)
+    window.show()
+    install_quit_guard(window, panel)
+    monkeypatch.setattr(panel, "_ask_unsaved_on_quit", lambda names: "cancel")
+    panel.open_file(cdf_file)
+    _modify(panel._tabs.widget(0))
+
+    window.close()
+    assert window.isVisible()
+
+    window._closing = True  # SciQLop's own second close, or --batch: no prompt
+    window.close()
+    assert not window.isVisible()

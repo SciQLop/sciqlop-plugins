@@ -3,7 +3,7 @@ import os
 from pathlib import Path, PurePosixPath
 from urllib.parse import parse_qs, urlparse
 from typing import Optional
-from PySide6.QtCore import QObject, QRunnable, QThreadPool, Qt, Signal
+from PySide6.QtCore import QEvent, QObject, QRunnable, QThreadPool, Qt, Signal
 import pycdfpp
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QTabWidget, QTabBar, QStyle, QFileDialog, QMenu, QMessageBox,
@@ -62,6 +62,32 @@ class _LoadTask(QRunnable):
             signal.emit(*args)
         except RuntimeError:  # the panel was closed during the download
             pass
+
+
+class _QuitGuard(QObject):
+    """SciQLop has no hook for a plugin to cancel quitting, so watch the main window's Close.
+    SciQLop sets `_closing` for its own second close and in --batch: no prompt then."""
+
+    def __init__(self, window, panel: "CdfWorkbenchPanel"):
+        super().__init__(window)
+        self._panel = panel
+
+    def eventFilter(self, obj, event) -> bool:
+        if event.type() != QEvent.Close or getattr(obj, "_closing", False):
+            return False
+        try:
+            allowed = self._panel.confirm_quit()
+        except RuntimeError:  # the panel is already gone
+            return False
+        if not allowed:
+            event.ignore()
+        return not allowed
+
+
+def install_quit_guard(window, panel: "CdfWorkbenchPanel") -> QObject:
+    guard = _QuitGuard(window, panel)
+    window.installEventFilter(guard)
+    return guard
 
 
 class CdfWorkbenchPanel(QWidget):
@@ -352,6 +378,24 @@ class CdfWorkbenchPanel(QWidget):
             self, "Unsaved changes", f"Save the changes to {name}?",
             QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel, QMessageBox.Save)
         return {QMessageBox.Save: "save", QMessageBox.Discard: "discard"}.get(answer, "cancel")
+
+    def confirm_quit(self) -> bool:
+        """Before SciQLop quits: True to go on, False to stay (cancelled, or a save failed)."""
+        modified = [i for i in range(self._tabs.count())
+                    if (view := self._view_at(i)) is not None and view.session.is_modified]
+        if not modified:
+            return True
+        answer = self._ask_unsaved_on_quit([_tab_name(self._view_at(i).session.source) for i in modified])
+        if answer == "save":
+            return all(self.save_tab(i) for i in modified)
+        return answer == "discard"
+
+    def _ask_unsaved_on_quit(self, names: list[str]) -> str:
+        """'save', 'discard' or 'cancel'."""
+        answer = QMessageBox.question(
+            self, "Unsaved CDF files", "Save the changes to these files before quitting?\n\n" + "\n".join(names),
+            QMessageBox.SaveAll | QMessageBox.Discard | QMessageBox.Cancel, QMessageBox.SaveAll)
+        return {QMessageBox.SaveAll: "save", QMessageBox.Discard: "discard"}.get(answer, "cancel")
 
     def _close_comparisons_of(self, session: DocumentSession):
         """A comparison edits its target tab: it can't outlive it."""

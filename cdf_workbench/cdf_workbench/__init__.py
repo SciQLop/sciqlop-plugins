@@ -1,6 +1,6 @@
 import PySide6QtAds as QtAds
 from PySide6.QtGui import QIcon
-from .workbench import CdfWorkbenchPanel
+from .workbench import CdfWorkbenchPanel, install_quit_guard
 
 
 def _find_central_area(main_window):
@@ -26,6 +26,7 @@ def _find_central_area(main_window):
 def load(main_window):
     panel = CdfWorkbenchPanel(main_window=main_window)
     panel.setWindowTitle("CDF Workbench")
+    install_quit_guard(main_window, panel)
 
     main_window.addWidgetIntoDock(
         QtAds.DockWidgetArea.TopDockWidgetArea, panel,

@@ -72,7 +72,8 @@ So we don't edit it. We load it into our own model, edit the model, and build a 
   `pycdfpp.save(to_cdf(doc), path)`, then `session.mark_saved()`. Ctrl+S / Ctrl+Shift+S. URL-opened files only get Save As.
   Closing a modified tab asks Save / Discard / Cancel.
   `to_cdf` holds a second copy of all values; try `add_variable(..., copy=False)` for numeric variables.
-  Not done: quitting SciQLop with unsaved tabs doesn't ask (needs the plugin's close() hook).
+  Quitting SciQLop with unsaved tabs asks Save all / Discard / Cancel (an event filter on the main
+  window: SciQLop has no quit-veto hook for plugins; one would be cleaner).
 - [x] **E3 — Undo / redo** (S) — depends on E1 — `DocumentSession.undo/redo`, Ctrl+Z / Ctrl+Shift+Z
   Documents are immutable, so undo is a list of past documents and an index. No per-edit undo commands.
 - [x] **E4 — Edit attributes** (M) — depends on E3 — `edits.py`, `attribute_dialog.py`
