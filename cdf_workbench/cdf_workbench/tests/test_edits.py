@@ -98,13 +98,13 @@ def test_global_attribute_edits(doc):
 
 def test_attribute_form_for_a_variable_is_one_value():
     from cdf_workbench.edits import read_attribute_form
-    assert read_attribute_form(" UNITS ", T.CDF_INT4, "1, 2", multi_entry=False) == ("UNITS", T.CDF_INT4, [[1, 2]])
+    assert read_attribute_form(" UNITS ", T.CDF_INT4, "1, 2", multi_entry=False) == ("UNITS", [T.CDF_INT4], [[1, 2]])
 
 
 def test_attribute_form_for_a_global_is_one_entry_per_line():
     from cdf_workbench.edits import read_attribute_form
     assert read_attribute_form("Project", T.CDF_CHAR, "ISTP\nSPDF\n", multi_entry=True) == (
-        "Project", T.CDF_CHAR, ["ISTP", "SPDF"])
+        "Project", [T.CDF_CHAR, T.CDF_CHAR], ["ISTP", "SPDF"])
 
 
 def test_attribute_form_needs_a_name():
@@ -357,3 +357,11 @@ def test_copy_variable_brings_the_variables_it_points_at():
     out = _saved(copy_variable(target, reference, "flux"))
 
     assert set(out.keys()) == {"Epoch", "E", "E_delta", "flux"}
+
+
+def test_attribute_form_keeps_each_entry_type_when_asked():
+    from cdf_workbench.edits import read_attribute_form
+    name, types, values = read_attribute_form("Mixed", None, "1, 2\n1.5\n7", multi_entry=True,
+                                              entry_types=[T.CDF_INT4, T.CDF_DOUBLE])
+    assert types == [T.CDF_INT4, T.CDF_DOUBLE, T.CDF_DOUBLE]
+    assert values == [[1, 2], [1.5], [7.0]]

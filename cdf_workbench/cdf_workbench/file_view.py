@@ -480,19 +480,21 @@ class CdfFileView(QWidget):
             self._show_global_attributes()
             self._clear_preview()
 
-    def _ask_attribute(self, title: str, name: str, data_type, entries: list[str], multi_entry: bool):
-        dialog = AttributeDialog(title, name, data_type, entries, multi_entry, self)
+    def _ask_attribute(self, title: str, name: str, data_type, entries: list[str], multi_entry: bool,
+                       entry_types=()):
+        dialog = AttributeDialog(title, name, data_type, entries, multi_entry, entry_types, self)
         return dialog.result_attribute() if dialog.exec() else None
 
     def _edit_attribute(self, var_name: str, attr_name: str):
         if var_name:
             attr = self._doc[var_name].attributes[attr_name]
-            data_type, entries = attr.type, [format_value(attr.value)]
+            data_type, entries, entry_types = attr.type, [format_value(attr.value)], [attr.type]
         else:
             attr = self._doc.attributes[attr_name]
             data_type = attr.entries[0].type if attr.entries else pycdfpp.DataType.CDF_CHAR
             entries = [format_value(e.value) for e in attr.entries]
-        answer = self._ask_attribute(f"Edit {attr_name}", attr_name, data_type, entries, not var_name)
+            entry_types = [e.type for e in attr.entries]
+        answer = self._ask_attribute(f"Edit {attr_name}", attr_name, data_type, entries, not var_name, entry_types)
         if answer is not None:
             self._set_attribute(var_name, attr_name, *answer)
 
@@ -501,11 +503,11 @@ class CdfFileView(QWidget):
         if answer is not None:
             self._set_attribute(var_name, None, *answer)
 
-    def _set_attribute(self, var_name: str, old_name: Optional[str], name: str, data_type, values: list):
+    def _set_attribute(self, var_name: str, old_name: Optional[str], name: str, types: list, values: list):
         if var_name:
-            edit = lambda d: set_variable_attribute(d, var_name, old_name, name, Attribute(values[0], data_type))
+            edit = lambda d: set_variable_attribute(d, var_name, old_name, name, Attribute(values[0], types[0]))
         else:
-            entries = GlobalAttribute(tuple(Attribute(v, data_type) for v in values))
+            entries = GlobalAttribute(tuple(Attribute(v, t) for v, t in zip(values, types)))
             edit = lambda d: set_global_attribute(d, old_name, name, entries)
         self._apply(edit)
 

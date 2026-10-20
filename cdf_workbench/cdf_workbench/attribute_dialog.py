@@ -1,6 +1,6 @@
 """Add or edit one attribute: name, type and value(s)."""
 from __future__ import annotations
-from typing import Optional
+from typing import Optional, Sequence
 
 import pycdfpp
 from PySide6.QtWidgets import (
@@ -12,10 +12,10 @@ from .edits import ATTRIBUTE_TYPES, read_attribute_form
 
 class AttributeDialog(QDialog):
     def __init__(self, title: str, name: str, data_type: pycdfpp.DataType, entries: list[str],
-                 multi_entry: bool, parent=None):
+                 multi_entry: bool, entry_types: Sequence[pycdfpp.DataType] = (), parent=None):
         super().__init__(parent)
         self.setWindowTitle(title)
-        self._multi_entry = multi_entry
+        self._multi_entry, self._entry_types = multi_entry, list(entry_types)
         self._result = None
 
         self._name = QLineEdit(name)
@@ -24,6 +24,9 @@ class AttributeDialog(QDialog):
         for t in types:
             self._type.addItem(t.name, t)
         self._type.setCurrentIndex(self._type.findData(data_type))
+        if len(set(self._entry_types)) > 1:  # mixed types: keep them unless one is chosen
+            self._type.insertItem(0, "(each entry's own type)", None)
+            self._type.setCurrentIndex(0)
         if multi_entry:
             self._value = QPlainTextEdit("\n".join(entries))
             hint = "One entry per line. Numbers and times are comma separated."
@@ -53,11 +56,11 @@ class AttributeDialog(QDialog):
     def _accept(self):
         try:
             self._result = read_attribute_form(self._name.text(), self._type.currentData(), self._text(),
-                                               self._multi_entry)
+                                               self._multi_entry, self._entry_types)
         except ValueError as e:
             self._error.setText(str(e))
             return
         self.accept()
 
-    def result_attribute(self) -> Optional[tuple[str, pycdfpp.DataType, list]]:
+    def result_attribute(self) -> Optional[tuple[str, list, list]]:
         return self._result

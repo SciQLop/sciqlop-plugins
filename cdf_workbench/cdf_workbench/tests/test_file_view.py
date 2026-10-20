@@ -282,7 +282,7 @@ def b_view(qtbot):
 
 
 def test_editing_a_variable_attribute_updates_document_and_inspector(b_view, monkeypatch):
-    monkeypatch.setattr(b_view, "_ask_attribute", lambda *args: ("UNITS", pycdfpp.DataType.CDF_CHAR, ["pT"]))
+    monkeypatch.setattr(b_view, "_ask_attribute", lambda *args: ("UNITS", [pycdfpp.DataType.CDF_CHAR], ["pT"]))
 
     b_view._inspector.edit_attribute.emit("B", "UNITS")
 
@@ -302,7 +302,7 @@ def test_deleting_and_undoing_a_variable_attribute(b_view):
 
 def test_adding_a_global_attribute(b_view, monkeypatch):
     monkeypatch.setattr(b_view, "_ask_attribute",
-                        lambda *args: ("Mission", pycdfpp.DataType.CDF_CHAR, ["MMS", "Cluster"]))
+                        lambda *args: ("Mission", [pycdfpp.DataType.CDF_CHAR] * 2, ["MMS", "Cluster"]))
 
     b_view._inspector.add_attribute.emit("")
 
@@ -310,7 +310,7 @@ def test_adding_a_global_attribute(b_view, monkeypatch):
 
 
 def test_renaming_onto_an_existing_attribute_is_refused(b_view, monkeypatch):
-    monkeypatch.setattr(b_view, "_ask_attribute", lambda *args: ("CATDESC", pycdfpp.DataType.CDF_CHAR, ["x"]))
+    monkeypatch.setattr(b_view, "_ask_attribute", lambda *args: ("CATDESC", [pycdfpp.DataType.CDF_CHAR], ["x"]))
 
     b_view._inspector.edit_attribute.emit("B", "UNITS")
 
@@ -677,3 +677,18 @@ def test_quality_follows_value_edits(b_view, qtbot):
         "B", np.array([1.0, -1e31, 3.0])))
 
     qtbot.waitUntil(lambda: b_view._quality_reports["B"].fill_percentage > 0, timeout=5000)
+
+
+def test_editing_a_mixed_type_global_attribute_keeps_each_entry_type(qtbot):
+    import numpy as np
+    from cdf_workbench.attribute_dialog import AttributeDialog
+    T = pycdfpp.DataType
+    dialog = AttributeDialog("Edit Mixed", "Mixed", T.CDF_INT4, ["0, 1", "1.5"], multi_entry=True,
+                             entry_types=[T.CDF_INT4, T.CDF_DOUBLE])
+    qtbot.addWidget(dialog)
+    assert dialog._type.currentData() is None
+
+    dialog._value.setPlainText("3, 4\n2.5")
+    dialog._accept()
+
+    assert dialog.result_attribute() == ("Mixed", [T.CDF_INT4, T.CDF_DOUBLE], [[3, 4], [2.5]])

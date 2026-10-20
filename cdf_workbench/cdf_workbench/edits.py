@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from dataclasses import replace
 from math import prod
-from typing import Any, Optional
+from typing import Any, Optional, Sequence
 
 import numpy as np
 import pycdfpp
@@ -96,17 +96,20 @@ def remove_global_attribute(doc: Document, name: str) -> Document:
     return replace(doc, attributes={k: v for k, v in doc.attributes.items() if k != name})
 
 
-def read_attribute_form(name: str, data_type: pycdfpp.DataType, text: str,
-                        multi_entry: bool) -> tuple[str, pycdfpp.DataType, list]:
-    """What the attribute dialog returns: a variable attribute has one value, a global
-    attribute one entry per non-empty line."""
+def read_attribute_form(name: str, data_type: Optional[pycdfpp.DataType], text: str, multi_entry: bool,
+                        entry_types: Sequence[pycdfpp.DataType] = ()) -> tuple[str, list, list]:
+    """What the attribute dialog returns: (name, one type per value, values). A variable attribute
+    has one value, a global attribute one entry per non-empty line. With no `data_type`, each entry
+    keeps its own type from `entry_types`; added lines take the last one."""
     name = name.strip()
     if not name:
         raise ValueError("The attribute needs a name")
     lines = [line for line in text.splitlines() if line.strip()] if multi_entry else [text]
     if not lines:
         raise ValueError("Enter at least one entry")
-    return name, data_type, [parse_value(line, data_type) for line in lines]
+    types = ([data_type] * len(lines) if data_type is not None
+             else [entry_types[min(i, len(entry_types) - 1)] for i in range(len(lines))])
+    return name, types, [parse_value(line, t) for line, t in zip(lines, types)]
 
 
 # ISTP attributes whose value is the name of another variable.

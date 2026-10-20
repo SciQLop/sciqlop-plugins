@@ -80,8 +80,8 @@ So we don't edit it. We load it into our own model, edit the model, and build a 
 - [x] **E4 — Edit attributes** (M) — depends on E3 — `edits.py`, `attribute_dialog.py`
   Edit, add, delete global and variable attributes in the inspector.
   Typed entries (CDF_CHAR, numeric, epoch) — keep the type unless the user changes it.
-  Limits: the dialog gives all entries of a global attribute one type; an edited CDF_BYTE
-  attribute can't be saved until pycdfpp writes CDF_BYTE from values.
+  Global attributes whose entries have different types keep each entry's type unless one is chosen.
+  Limit: an edited CDF_BYTE attribute can't be saved until pycdfpp writes CDF_BYTE from values.
 - [x] **E5 — Rename / delete variables** (S) — depends on E3 — tree right-click menu
   Rename also updates `DEPEND_*`, `LABL_PTR_*`, `DELTA_*_VAR` references in other variables (ask first).
   Delete warns when other variables reference it.
