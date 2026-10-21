@@ -158,7 +158,8 @@ def _word_level(old: str, new: str) -> tuple[str, str]:
     return "".join(out_a), "".join(out_b)
 
 
-def _similar_lines(a: str, b: str) -> bool:
+def similar_text(a: str, b: str) -> bool:
+    """Enough words in common for word-level marks to help; otherwise they mark everything."""
     return SequenceMatcher(a=a.split(), b=b.split(), autojunk=False).ratio() >= RENAME_SIMILARITY
 
 
@@ -176,7 +177,7 @@ def word_diff(old: str, new: str) -> tuple[str, str]:
         for k in range(max(len(old_lines), len(new_lines))):
             line_a = old_lines[k] if k < len(old_lines) else None
             line_b = new_lines[k] if k < len(new_lines) else None
-            if line_a is not None and line_b is not None and _similar_lines(line_a, line_b):
+            if line_a is not None and line_b is not None and similar_text(line_a, line_b):
                 marked_a, marked_b = _word_level(line_a, line_b)
                 out_a.append(marked_a)
                 out_b.append(marked_b)

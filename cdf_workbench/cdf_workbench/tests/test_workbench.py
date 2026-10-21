@@ -295,8 +295,9 @@ def test_compare_with_another_open_tab(panel, cdf_file, qtbot, tmp_path):
 
     view = panel._tabs.currentWidget()
     assert isinstance(view, CompareView)
-    assert panel._tabs.tabText(panel._tabs.currentIndex()) == "sample.cdf ↔ other.cdf"
-    assert "pT" in view.html()
+    assert panel._tabs.tabText(panel._tabs.currentIndex()) == "sample ↔ other"
+    units = next(c for r in view.rows() if r.name == "Bt" for c in r.children if c.name == "UNITS")
+    assert (units.old, units.new) == ("nT", "pT")
 
 
 def test_closing_a_tab_closes_its_comparisons(panel, cdf_file, qtbot, tmp_path):

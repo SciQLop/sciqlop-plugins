@@ -13,6 +13,7 @@ from PySide6.QtGui import QAction, QDragEnterEvent, QDropEvent, QIcon, QKeySeque
 from .loader import load_cdf, CdfLoadError, DownloadCancelled
 from .codec_dialog import CodecDialog
 from .compare_view import CompareView
+from .compare_rows import short_titles
 from .document import DocumentSession, from_cdf, to_cdf
 from .export import skeleton_yaml, subset
 from .file_view import CdfFileView
@@ -415,7 +416,9 @@ class CdfWorkbenchPanel(QWidget):
         name = _tab_name(view.session.source)
         compare = CompareView(view.session, other, (name, other_name))
         index = max(0, self._tabs.count() - 1)
-        self._tabs.insertTab(index, compare, f"{name} ↔ {other_name}")
+        short_a, short_b = short_titles(name, other_name)
+        self._tabs.insertTab(index, compare, f"{short_a} ↔ {short_b}")
+        self._tabs.setTabToolTip(index, f"{name} ↔ {other_name}")
         self._tabs.setCurrentIndex(index)
 
     def compare_codecs(self, index: int):

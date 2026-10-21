@@ -1,192 +1,304 @@
-"""C1: a tab showing the differences between two documents."""
+"""C1: a tab comparing the target tab's document (A) with a reference (B), and copying from B into A."""
 from __future__ import annotations
-from functools import reduce
 from html import escape
-from typing import Callable, Optional
-from urllib.parse import parse_qs, urlencode
+from typing import Optional
 
-from PySide6.QtWidgets import QCheckBox, QHBoxLayout, QLabel, QTextBrowser, QVBoxLayout, QWidget
+from PySide6.QtCore import QRect, QSize, Qt
+from PySide6.QtGui import QColor, QTextDocument, QTextOption
+from PySide6.QtWidgets import (
+    QAbstractItemView, QCheckBox, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMenu, QSplitter,
+    QStyle, QStyledItemDelegate, QTextBrowser, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
+)
 
-from .diff import AttributeDiff, DocumentDiff, VariableDiff, diff_documents, word_diff
+from .compare_rows import Row, build_rows, copy_edit, short_titles
+from .diff import DocumentDiff, diff_documents, similar_text, word_diff
 from .document import Document, DocumentSession
-from .edits import copy_attribute, copy_variable, rename_variable
 
-# Semi-transparent tints read in light and dark themes alike. Qt's rich text has no <del>/<ins>
-# styling, so the marks become spans.
-_DEL = '<span style="background-color: rgba(233, 69, 96, 0.35);">'
-_INS = '<span style="background-color: rgba(76, 175, 80, 0.35);">'
+NAME, OLD, GUTTER, NEW = range(4)
+_ROW = Qt.UserRole
+
+# Semi-transparent tints read in light and dark themes alike.
 _STATUS_COLOR = {"added": "#4caf50", "removed": "#e94560", "changed": "#e7a33e", "renamed": "#4a9fe7",
                  "same": "#888888"}
+_WORD_DEL = "rgba(233, 69, 96, 0.45)"
+_WORD_INS = "rgba(76, 175, 80, 0.45)"
+_CELL_TINT = {"removed": QColor(233, 69, 96, 40), "added": QColor(76, 175, 80, 40)}
 _SUMMARY_ORDER = ("changed", "renamed", "added", "removed", "same")
 _SUMMARY_WORD = {"same": "identical"}
-
-
-def _spans(marked: str) -> str:
-    return (marked.replace("<del>", _DEL).replace("</del>", "</span>")
-            .replace("<ins>", _INS).replace("</ins>", "</span>").replace("\n", "<br>"))
-
-
-def _values(old: str, new: str, status: str) -> tuple[str, str]:
-    if status == "added":
-        return "", _INS + _spans(word_diff("", new)[1]) + "</span>"
-    if status == "removed":
-        return _DEL + _spans(word_diff(old, "")[0]) + "</span>", ""
-    marked_old, marked_new = word_diff(old, new)
-    return _spans(marked_old), _spans(marked_new)
-
-
-def _href(kind: str, **params: str) -> str:
-    return escape(f"{kind}:{urlencode(params)}", quote=True)
-
-
-def _copy_link(href: Optional[str], label: str = "← copy") -> str:
-    return f' <a href="{href}">{label}</a>' if href else ""
-
-
-def _rows(name: str, old: str, new: str, status: str, side_by_side: bool, copy_href: Optional[str] = None) -> str:
-    """Side by side: one row, old | new. Inline: a − row for the old value, a + row for the new."""
-    html_old, html_new = _values(old, new, status)
-    html_new += _copy_link(copy_href)
-    label = f"<b>{escape(name)}</b>"
-    if side_by_side:
-        return f"<tr><td>{label}</td><td>{html_old}</td><td>{html_new}</td></tr>"
-    if status == "same":
-        return f"<tr><td>{label}</td><td>{html_old}</td></tr>"
-    lines = ([("−", html_old)] if status != "added" else []) + ([("+", html_new)] if status != "removed" else [])
-    return "".join(f"<tr><td>{label if k == 0 else ''}</td><td>{sign} {value}</td></tr>"
-                   for k, (sign, value) in enumerate(lines))
-
-
-def _table(rows: list[str], side_by_side: bool, titles: tuple[str, str]) -> str:
-    if not rows:
-        return ""
-    header = (f"<tr><th></th><th align='left'>{escape(titles[0])}</th>"
-              f"<th align='left'>{escape(titles[1])}</th></tr>"
-              if side_by_side else "")
-    return f"<table cellspacing='0' cellpadding='3' width='100%'>{header}{''.join(rows)}</table>"
-
-
-def _copyable(attr: AttributeDiff) -> bool:
-    """The reference (B) has a value the target (A) lacks or differs from."""
-    return attr.status in ("added", "changed")
-
-
-def _attribute_rows(attrs: tuple[AttributeDiff, ...], hide_same: bool, side_by_side: bool,
-                    href: Callable[[AttributeDiff], Optional[str]]) -> list[str]:
-    return [_rows(a.name, a.old, a.new, a.status, side_by_side, href(a) if _copyable(a) else None)
-            for a in attrs if not (hide_same and a.status == "same")]
-
-
-def _badge(status: str) -> str:
-    return f"<span style='color: {_STATUS_COLOR[status]};'>{status}</span>"
-
-
-def _variable(var: VariableDiff, hide_same: bool, side_by_side: bool, titles: tuple[str, str],
-              copyable: bool) -> str:
-    """A renamed variable copies from its new name (reference) to its old one (target)."""
-    target, source = var.old_name or var.name, var.name
-    title = escape(f"{var.old_name} → {var.name}" if var.old_name else var.name)
-    can_copy_attributes = copyable and var.status in ("changed", "renamed")
-    href = (lambda a: _href("copy-attr", t=target, s=source, a=a.name)) if can_copy_attributes else (lambda a: None)
-    header_link = ""
-    if copyable and var.status == "added":
-        header_link = _copy_link(_href("copy-var", n=var.name), "← copy variable")
-    elif can_copy_attributes and any(_copyable(a) for a in var.attributes):
-        header_link = _copy_link(_href("copy-all", t=target, s=source), "← copy all")
-    if copyable and var.status == "renamed":
-        header_link += _copy_link(_href("copy-rename", t=target, s=source), f"← rename to {escape(source)}")
-    rows = [_rows(p, old, new, "changed", side_by_side) for p, old, new in var.properties]
-    rows += _attribute_rows(var.attributes, hide_same and var.status not in ("added", "removed"),
-                            side_by_side, href)
-    return f"<h3>{title} {_badge(var.status)}{header_link}</h3>{_table(rows, side_by_side, titles)}"
-
-
-def render_html(diff: DocumentDiff, hide_same: bool, side_by_side: bool,
-                titles: tuple[str, str] = ("A", "B"), copyable: bool = False) -> str:
-    """`copyable` adds "← copy" links taking a value from B (the reference) into A."""
-    global_href = (lambda a: _href("copy-attr", t="", s="", a=a.name)) if copyable else (lambda a: None)
-    globals_rows = _attribute_rows(diff.attributes, hide_same, side_by_side, global_href)
-    variables = [v for v in diff.variables if not (hide_same and v.status == "same")]
-    parts = []
-    if globals_rows:
-        parts.append(f"<h2>Global attributes</h2>{_table(globals_rows, side_by_side, titles)}")
-    if variables:
-        parts.append("<h2>Variables</h2>" + "".join(_variable(v, hide_same, side_by_side, titles, copyable)
-                                                    for v in variables))
-    return "".join(parts) or "<p>No differences.</p>"
 
 
 def summary_text(diff: DocumentDiff) -> str:
     counts = diff.summary()
     changed_globals = sum(1 for a in diff.attributes if a.status != "same")
     parts = [f"{counts[s]} {_SUMMARY_WORD.get(s, s)}" for s in _SUMMARY_ORDER if counts.get(s)]
-    return f"Variables: {', '.join(parts) or 'none'}. Global attributes changed: {changed_globals}."
+    return f"Variables: {', '.join(parts) or 'none'} · global attributes changed: {changed_globals}"
 
 
-def _copy_edit(link: str, reference: Document, diff: DocumentDiff) -> Callable[[Document], Document]:
-    kind, _, query = link.partition(":")
-    p = {k: v[0] for k, v in parse_qs(query, keep_blank_values=True).items()}
-    if kind == "copy-var":
-        return lambda d: copy_variable(d, reference, p["n"])
-    if kind == "copy-attr":
-        return lambda d: copy_attribute(d, reference, p["a"], p["t"], p["s"])
-    if kind == "copy-rename":
-        return lambda d: rename_variable(d, p["t"], p["s"], update_references=True)
-    var = next(v for v in diff.variables if (v.old_name or v.name) == p["t"])
-    names = [a.name for a in var.attributes if _copyable(a)]
-    return lambda d: reduce(lambda acc, name: copy_attribute(acc, reference, name, p["t"], p["s"]), names, d)
+def _marked_html(marked: str) -> str:
+    """word_diff output (<del>/<ins>, already escaped) as spans Qt's rich text can colour."""
+    return (marked.replace("<del>", f'<span style="background-color: {_WORD_DEL};">')
+            .replace("<ins>", f'<span style="background-color: {_WORD_INS};">')
+            .replace("</del>", "</span>").replace("</ins>", "</span>"))
+
+
+def _values_html(row: Row) -> tuple[str, str]:
+    """Word marks only where the values share words: the row's status bar already says it changed."""
+    if row.status in ("added", "removed") or not similar_text(row.old, row.new):
+        return escape(row.old), escape(row.new)
+    old, new = word_diff(row.old, row.new)
+    return _marked_html(old), _marked_html(new)
+
+
+def gutter_action(row: Row) -> Optional[str]:
+    """The arrow between A and B: copy B's value, or, for a pure rename, take B's name."""
+    return row.copy or row.rename
+
+
+def _is_group(row: Row) -> bool:
+    return "/" not in row.key
+
+
+def detail_html(row: Row, titles: tuple[str, str]) -> str:
+    """The selected row in full, values wrapped, for the pane under the tree."""
+    old, new = (v.replace("\n", "<br>") for v in _values_html(row))
+    status = f"<span style='color: {_STATUS_COLOR[row.status]};'>{row.status}</span>"
+    return (f"<p><b>{escape(row.name)}</b> &nbsp; {status}</p>"
+            f"<table width='100%' cellspacing='0' cellpadding='4'><tr>"
+            f"<th align='left' width='50%'>{escape(titles[0])}</th><th align='left'>{escape(titles[1])}</th></tr>"
+            f"<tr><td valign='top'>{old}</td><td valign='top'>{new}</td></tr></table>")
+
+
+class _DiffDelegate(QStyledItemDelegate):
+    """Status bar and pill on the names, one clipped line of highlighted text per value, a copy
+    arrow in the gutter."""
+
+    def sizeHint(self, option, index):
+        hint = super().sizeHint(option, index)
+        return QSize(hint.width(), hint.height() + 8)
+
+    def paint(self, painter, option, index):
+        row: Optional[Row] = index.data(_ROW)
+        if row is None:
+            return super().paint(painter, option, index)
+        painter.save()
+        selected = bool(option.state & QStyle.StateFlag.State_Selected)
+        if selected:
+            painter.fillRect(option.rect, option.palette.highlight())
+        text = (option.palette.highlightedText() if selected else option.palette.text()).color()
+        paint = {NAME: self._paint_name, OLD: self._paint_value, NEW: self._paint_value, GUTTER: self._paint_gutter}
+        paint[index.column()](painter, option.rect, row, index.column(), text)
+        painter.restore()
+
+    def _paint_name(self, painter, rect, row, _column, text):
+        if row.status != "same":
+            painter.fillRect(QRect(rect.left(), rect.top() + 3, 3, rect.height() - 6), QColor(_STATUS_COLOR[row.status]))
+        font = painter.font()
+        font.setBold(_is_group(row))
+        painter.setFont(font)
+        painter.setPen(text)
+        area = rect.adjusted(10, 0, -4, 0)
+        painter.drawText(area, Qt.AlignVCenter | Qt.AlignLeft, row.name)
+        x = area.left() + painter.fontMetrics().horizontalAdvance(row.name) + 10
+        if _is_group(row) and row.key != "globals" and row.status != "same":
+            x = self._paint_pill(painter, x, rect, row.status) + 8
+        if row.note:
+            font.setBold(False)
+            painter.setFont(font)
+            muted = QColor(text)
+            muted.setAlpha(130)
+            painter.setPen(muted)
+            painter.drawText(QRect(x, rect.top(), max(rect.right() - x, 0), rect.height()),
+                             Qt.AlignVCenter | Qt.AlignLeft, row.note)
+
+    def _paint_pill(self, painter, x, rect, status) -> int:
+        font = painter.font()
+        font.setBold(False)
+        font.setPointSizeF(max(font.pointSizeF() - 1.5, 7))
+        painter.setFont(font)
+        width = painter.fontMetrics().horizontalAdvance(status) + 12
+        pill = QRect(x, rect.top() + (rect.height() - 16) // 2, width, 16)
+        fill = QColor(_STATUS_COLOR[status])
+        fill.setAlpha(45)
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(fill)
+        painter.drawRoundedRect(pill, 8, 8)
+        painter.setPen(QColor(_STATUS_COLOR[status]))
+        painter.drawText(pill, Qt.AlignCenter, status)
+        return pill.right()
+
+    def _paint_value(self, painter, rect, row, column, text):
+        value = row.old if column == OLD else row.new
+        if not value:
+            return
+        tint = _CELL_TINT.get(row.status)
+        if tint is not None:
+            painter.fillRect(rect.adjusted(0, 2, 0, -2), tint)
+        old, new = _values_html(row)
+        doc = QTextDocument()
+        doc.setDefaultFont(painter.font())
+        doc.setDefaultTextOption(QTextOption(Qt.AlignLeft))
+        doc.setDocumentMargin(0)
+        doc.setHtml(f"<div style='color: {text.name()}; white-space: pre;'>"
+                    f"{(old if column == OLD else new).replace(chr(10), ' ⏎ ')}</div>")
+        painter.setClipRect(rect.adjusted(6, 0, -4, 0))
+        painter.translate(rect.left() + 6, rect.top() + (rect.height() - doc.size().height()) / 2)
+        doc.drawContents(painter)
+
+    def _paint_gutter(self, painter, rect, row, _column, text):
+        if gutter_action(row) is None:
+            return
+        muted = QColor(text)
+        muted.setAlpha(150)
+        painter.setPen(muted)
+        painter.drawText(rect, Qt.AlignCenter, "←")
 
 
 class CompareView(QWidget):
-    """Compares the target tab's current document (A) with a reference (B), and copies from B
-    into A on request. Follows A's edits and undo; B is an immutable snapshot."""
+    """Follows A's edits and undo; B is an immutable snapshot."""
 
     def __init__(self, target: DocumentSession, reference: Document, titles: tuple[str, str], parent=None):
         super().__init__(parent)
-        self._target, self._reference, self._titles = target, reference, titles
+        self._target, self._reference = target, reference
+        self._full_titles = titles
+        self._titles = short_titles(*titles)
+        self._expanded: dict[str, bool] = {}
+        self._rows: list[Row] = []
+
         self._summary = QLabel()
-        self._message = QLabel()
-        self._message.setStyleSheet("color: #e94560;")
+        self._filter = QLineEdit()
+        self._filter.setPlaceholderText("Filter attributes and variables…")
+        self._filter.setClearButtonEnabled(True)
+        self._filter.setMinimumWidth(260)
+        self._filter.textChanged.connect(self._render)
         self._hide_same = QCheckBox("Hide identical")
         self._hide_same.setChecked(True)
-        self._side_by_side = QCheckBox("Side by side")
-        for box in (self._hide_same, self._side_by_side):
-            box.toggled.connect(self._render)
-        self._browser = QTextBrowser()
-        self._browser.setOpenLinks(False)
-        self._browser.anchorClicked.connect(lambda url: self.copy(url.toString()))
+        self._hide_same.toggled.connect(self._render)
+        self._message = QLabel()
+        self._message.setStyleSheet("color: #e94560;")
+        self._message.hide()
+
+        self._tree = self._build_tree()
+        self._detail = QTextBrowser()
+        self._detail.setPlaceholderText("Select a row to see both values in full.")
+        splitter = QSplitter(Qt.Vertical)
+        splitter.addWidget(self._tree)
+        splitter.addWidget(self._detail)
+        splitter.setStretchFactor(0, 4)
+        splitter.setStretchFactor(1, 1)
+
         bar = QHBoxLayout()
-        bar.addWidget(QLabel(f"<b>{escape(titles[0])}</b> ↔ <b>{escape(titles[1])}</b>"))
         bar.addWidget(self._summary, 1)
+        bar.addWidget(self._filter)
         bar.addWidget(self._hide_same)
-        bar.addWidget(self._side_by_side)
         layout = QVBoxLayout(self)
         layout.addLayout(bar)
         layout.addWidget(self._message)
-        layout.addWidget(self._browser)
+        layout.addWidget(splitter)
         target.changed.connect(self._render)
         self._render()
 
-    def _render(self):
-        self._diff = diff_documents(self._target.document, self._reference)
-        self._summary.setText(summary_text(self._diff))
-        self._html = render_html(self._diff, self._hide_same.isChecked(), self._side_by_side.isChecked(),
-                                 self._titles, copyable=True)
-        scroll = self._browser.verticalScrollBar().value()
-        self._browser.setHtml(self._html)
-        self._browser.verticalScrollBar().setValue(scroll)
-
-    def copy(self, link: str):
-        """A copy is an ordinary edit of the target: it undoes, and the target tab gets its •."""
-        try:
-            self._target.apply(_copy_edit(link, self._reference, self._diff))
-            self._message.clear()
-        except (ValueError, KeyError, StopIteration) as e:
-            self._message.setText(f"Can't copy: {e}")
+    def _build_tree(self) -> QTreeWidget:
+        tree = QTreeWidget()
+        tree.setColumnCount(4)
+        tree.setHeaderLabels(["", self._titles[0], "", self._titles[1]])
+        for column, title in ((OLD, self._full_titles[0]), (NEW, self._full_titles[1])):
+            tree.headerItem().setToolTip(column, title)
+        tree.setItemDelegate(_DiffDelegate(tree))
+        tree.setUniformRowHeights(True)
+        tree.setSelectionMode(QAbstractItemView.ExtendedSelection)
+        tree.setContextMenuPolicy(Qt.CustomContextMenu)
+        tree.customContextMenuRequested.connect(self._show_menu)
+        tree.itemClicked.connect(self._on_clicked)
+        tree.itemExpanded.connect(lambda item: self._remember(item, True))
+        tree.itemCollapsed.connect(lambda item: self._remember(item, False))
+        tree.currentItemChanged.connect(self._show_detail)
+        header = tree.header()
+        header.setStretchLastSection(False)
+        header.setSectionResizeMode(NAME, QHeaderView.Interactive)
+        header.setSectionResizeMode(OLD, QHeaderView.Stretch)
+        header.setSectionResizeMode(GUTTER, QHeaderView.Fixed)
+        header.setSectionResizeMode(NEW, QHeaderView.Stretch)
+        header.resizeSection(NAME, 280)
+        header.resizeSection(GUTTER, 28)
+        return tree
 
     @property
     def target(self) -> DocumentSession:
         return self._target
 
-    def html(self) -> str:
-        return self._html
+    def rows(self) -> list[Row]:
+        return self._rows
+
+    def _render(self, *_):
+        current = self._tree.currentItem()
+        current_key = current.data(NAME, _ROW).key if current is not None else None
+        self._diff = diff_documents(self._target.document, self._reference)
+        self._summary.setText(summary_text(self._diff))
+        self._rows = build_rows(self._diff, self._hide_same.isChecked(), self._filter.text())
+        scroll = self._tree.verticalScrollBar().value()
+        self._tree.clear()
+        for row in self._rows:
+            self._add_item(self._tree.invisibleRootItem(), row, current_key)
+        self._tree.verticalScrollBar().setValue(scroll)
+        if self._tree.currentItem() is None:
+            self._detail.clear()
+
+    def _add_item(self, parent: QTreeWidgetItem, row: Row, current_key: Optional[str]):
+        item = QTreeWidgetItem(parent)
+        for column in (NAME, OLD, GUTTER, NEW):
+            item.setData(column, _ROW, row)
+        item.setToolTip(OLD, row.old[:2000])
+        item.setToolTip(NEW, row.new[:2000])
+        if row.copy is not None:
+            item.setToolTip(GUTTER, f"Copy from {self._full_titles[1]}")
+        elif row.rename is not None:
+            item.setToolTip(GUTTER, f"Rename to {row.name.split(' → ')[-1]}")
+        for child in row.children:
+            self._add_item(item, child, current_key)
+        item.setExpanded(self._expanded.get(row.key, row.expanded))
+        if row.key == current_key:
+            self._tree.setCurrentItem(item)
+
+    def _remember(self, item: QTreeWidgetItem, expanded: bool):
+        self._expanded[item.data(NAME, _ROW).key] = expanded
+
+    def _show_detail(self, item: Optional[QTreeWidgetItem], _previous=None):
+        row = item.data(NAME, _ROW) if item is not None else None
+        if row is None or not (row.old or row.new):
+            self._detail.clear()
+            return
+        self._detail.setHtml(detail_html(row, self._full_titles))
+
+    def _on_clicked(self, item: QTreeWidgetItem, column: int):
+        action = gutter_action(item.data(NAME, _ROW))
+        if column == GUTTER and action is not None:
+            self.copy(action)
+
+    def _show_menu(self, pos):
+        selected = [item.data(NAME, _ROW) for item in self._tree.selectedItems()]
+        copies = [row.copy for row in selected if row.copy is not None]
+        renames = [row for row in selected if row.rename is not None]
+        if not copies and not renames:
+            return
+        menu = QMenu(self)
+        if copies:
+            label = f"Copy {len(copies)} from {self._titles[1]}" if len(copies) > 1 else f"Copy from {self._titles[1]}"
+            menu.addAction(label, lambda: self.copy(*copies))
+        for row in renames:
+            menu.addAction(f"Rename to {row.name.split(' → ')[-1]}", lambda a=row.rename: self.copy(a))
+        menu.exec(self._tree.viewport().mapToGlobal(pos))
+
+    def copy(self, *actions: str):
+        """One undoable edit of the target, whatever the number of actions."""
+        edits = [copy_edit(action, self._reference, self._diff) for action in actions]
+
+        def apply_all(doc: Document) -> Document:
+            for edit in edits:
+                doc = edit(doc)
+            return doc
+        try:
+            self._target.apply(apply_all)
+            self._message.hide()
+        except (ValueError, KeyError, StopIteration) as e:
+            self._message.setText(f"Can't copy: {e}")
+            self._message.show()
