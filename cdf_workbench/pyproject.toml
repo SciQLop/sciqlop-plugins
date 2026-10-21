@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "sciqlop-cdf-workbench"
-version = "0.4.2"
+version = "0.5.0"
 description = "Multi-function CDF file explorer for SciQLop"
 requires-python = ">=3.10"
 dependencies = ["pycdfpp>=0.18.0", "httpx", "psutil", "pyyaml", "astralint", "SciQLop>=0.12.0,<0.15.0"]
