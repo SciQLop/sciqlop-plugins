@@ -75,8 +75,15 @@ def _with_key(mapping: dict, old: Optional[str], new: str, value) -> dict:
     return {(new if k == old else k): (value if k == old else v) for k, v in mapping.items()}
 
 
+def _variable_attribute_names(doc: Document) -> set[str]:
+    return {name for _, var in doc.items() for name in var.attributes}
+
+
 def set_variable_attribute(doc: Document, var_name: str, old_name: Optional[str], name: str,
                            attr: Attribute) -> Document:
+    """A CDF attribute name has one scope: pycdfpp refuses to save it both global and variable."""
+    if name in doc.attributes:
+        raise ValueError(f"{name} is already a global attribute")
     var = doc[var_name]
     edited = replace(var, attributes=_with_key(var.attributes, old_name, name, attr))
     return replace(doc, variables={**doc.variables, var_name: edited})
@@ -89,6 +96,8 @@ def remove_variable_attribute(doc: Document, var_name: str, name: str) -> Docume
 
 
 def set_global_attribute(doc: Document, old_name: Optional[str], name: str, attr: GlobalAttribute) -> Document:
+    if name in _variable_attribute_names(doc):
+        raise ValueError(f"{name} is already a variable attribute")
     return replace(doc, attributes=_with_key(doc.attributes, old_name, name, attr))
 
 
@@ -173,7 +182,20 @@ def _attribute_for(value, var_type: pycdfpp.DataType) -> Attribute:
         return Attribute(value, T.CDF_CHAR)
     numeric_type = var_type if var_type in _INTEGER or var_type in _REAL else T.CDF_DOUBLE
     dtype = _INTEGER.get(numeric_type) or _REAL[numeric_type]
-    return Attribute(np.atleast_1d(np.asarray(value, dtype=dtype)), numeric_type)
+    values = np.atleast_1d(np.asarray(value, dtype=dtype))
+    if values.size == 0:
+        raise ValueError("needs at least one value")
+    return Attribute(values, numeric_type)
+
+
+def _attributes_for(attributes: dict, var_type: pycdfpp.DataType) -> dict[str, Attribute]:
+    out = {}
+    for name, value in attributes.items():
+        try:
+            out[name] = _attribute_for(value, var_type)
+        except ValueError as e:
+            raise ValueError(f"{name}: {e}") from None
+    return out
 
 
 def new_variable(values, data_type: Optional[pycdfpp.DataType] = None, is_nrv: bool = False,
@@ -184,7 +206,7 @@ def new_variable(values, data_type: Optional[pycdfpp.DataType] = None, is_nrv: b
     shape = array.shape + ((array.dtype.itemsize,) if data_type in _TEXT else ())
     return Variable(type=data_type, shape=shape, is_nrv=is_nrv,
                     compression=pycdfpp.CompressionType.no_compression,
-                    attributes={k: _attribute_for(v, data_type) for k, v in (attributes or {}).items()},
+                    attributes=_attributes_for(attributes or {}, data_type),
                     load_values=lambda: array)
 
 
@@ -192,6 +214,8 @@ def add_variable(doc: Document, name: str, var: Variable) -> Document:
     name = name.strip()
     if not name:
         raise ValueError("The variable needs a name")
+    if clash := sorted(set(var.attributes) & set(doc.attributes)):
+        raise ValueError(f"{', '.join(clash)} is already a global attribute")
     return replace(doc, variables=_with_key(doc.variables, None, name, var))
 
 
@@ -217,8 +241,7 @@ def read_variable_form(name: str, data_type: pycdfpp.DataType, is_nrv: bool,
 
 def copy_attribute(target: Document, source: Document, name: str, target_var: str = "",
                    source_var: str = "") -> Document:
-    """Copy one attribute from `source` (global when no variable is given), replacing the target's.
-    The attribute keeps its origin, so even types pycdfpp can't write from values copy faithfully."""
+    """Copy one attribute from `source` (global when no variable is given), replacing the target's."""
     if not target_var:
         old = name if name in target.attributes else None
         return set_global_attribute(target, old, name, source.attributes[name])
@@ -291,5 +314,5 @@ def values_from_grid(cells: list[list[str]], var: Variable) -> np.ndarray:
 def set_variable_values(doc: Document, name: str, values: np.ndarray) -> Document:
     var = doc[name]
     shape = values.shape + ((values.dtype.itemsize,) if var.type in _TEXT else ())
-    edited = replace(var, shape=shape, load_values=lambda: values)
+    edited = replace(var, shape=shape, load_values=lambda: values, virtual_records=None)  # all records real now
     return replace(doc, variables={**doc.variables, name: edited})

@@ -365,3 +365,38 @@ def test_attribute_form_keeps_each_entry_type_when_asked():
                                               entry_types=[T.CDF_INT4, T.CDF_DOUBLE])
     assert types == [T.CDF_INT4, T.CDF_DOUBLE, T.CDF_DOUBLE]
     assert values == [[1, 2], [1.5], [7.0]]
+
+
+def test_editing_the_values_of_a_sparse_variable_stores_every_record():
+    from cdf_workbench.edits import set_variable_values, values_from_grid, values_grid
+    path = "/home/jeandet/Documents/prog/CDFpp/tests/resources/sparse_records.cdf"
+    if not __import__("os").path.exists(path):
+        pytest.skip("CDFpp test resources not found")
+    doc = from_cdf(pycdfpp.load(path))
+    var = doc["pad_explicit"]
+    assert var.virtual_records is not None and var.virtual_records.any()
+
+    edited = set_variable_values(doc, "pad_explicit", values_from_grid(values_grid(var), var))
+
+    assert edited["pad_explicit"].virtual_records is None
+    assert not any(_saved(edited)["pad_explicit"].virtual_records)
+
+
+def test_a_name_is_either_global_or_variable_attribute(doc):
+    """pycdfpp (and NASA's library) refuse a name with both scopes at save: refuse it at edit."""
+    with pytest.raises(ValueError, match="UNITS is already a variable attribute"):
+        set_global_attribute(doc, None, "UNITS", GlobalAttribute((Attribute("x", T.CDF_CHAR),)))
+    with pytest.raises(ValueError, match="Project is already a global attribute"):
+        set_variable_attribute(doc, "B", "UNITS", "Project", Attribute("nT", T.CDF_CHAR))
+
+
+def test_new_variable_refuses_an_empty_numeric_attribute():
+    from cdf_workbench.edits import new_variable
+    with pytest.raises(ValueError, match="VALIDMIN"):
+        new_variable(np.ones(3), attributes={"VALIDMIN": []})
+
+
+def test_an_added_variable_cannot_bring_a_global_attribute_name(doc):
+    from cdf_workbench.edits import add_variable, new_variable
+    with pytest.raises(ValueError, match="Project is already a global attribute"):
+        add_variable(doc, "C", new_variable(np.ones(2), attributes={"Project": "x"}))

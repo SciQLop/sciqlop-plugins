@@ -1,6 +1,11 @@
 import os
 import atexit
 
+# Importing SciQLop initializes Speasy's data providers, which check that each server is up:
+# about a minute when AMDA is unreachable. These tests use no data provider. Child processes
+# started by the tests inherit this too.
+os.environ.setdefault("SPEASY_SKIP_INIT_PROVIDERS", "1")
+
 import pytest
 import pycdfpp
 import numpy as np

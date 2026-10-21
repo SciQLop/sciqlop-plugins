@@ -18,16 +18,11 @@ class Attribute:
     """A variable attribute, or one entry of a global attribute."""
     value: Any
     type: pycdfpp.DataType
-    # simplify: pycdfpp 0.15 can't write CDF_BYTE or empty attributes from values,
-    # so an unedited attribute is copied verbatim from the object it was read from.
-    # Drop `origin` once pycdfpp accepts them from values.
-    origin: Optional[Any] = field(default=None, compare=False, repr=False)
 
 
 @dataclass(frozen=True)
 class GlobalAttribute:
     entries: tuple[Attribute, ...]
-    origin: Optional[Any] = field(default=None, compare=False, repr=False)
 
 
 @dataclass(frozen=True)
@@ -38,6 +33,11 @@ class Variable:
     compression: pycdfpp.CompressionType
     attributes: dict[str, Attribute]
     load_values: Callable[[], np.ndarray] = field(compare=False, repr=False)
+    compression_level: int = 6
+    sparse_records: pycdfpp.SparseRecords = pycdfpp.SparseRecords.no_sparse_records
+    pad_value: Any = field(default=None, compare=False)
+    # One bool per record, True for records the file doesn't store; None: all stored.
+    virtual_records: Optional[np.ndarray] = field(default=None, compare=False, repr=False)
 
     @property
     def values(self) -> np.ndarray:
@@ -45,9 +45,33 @@ class Variable:
 
 
 @dataclass(frozen=True)
+class FileProperties:
+    """What a CDF declares beside its attributes and variables, saved back as loaded."""
+    compression: pycdfpp.CompressionType
+    compression_level: int
+    majority: pycdfpp.Majority
+    encoding: pycdfpp.Encoding
+    checksum: pycdfpp.Checksum
+    declared_variable_attributes: tuple[str, ...]
+    # Declared but used by no variable when loaded (masters do that): kept even though unused.
+    unused_variable_attributes: tuple[str, ...]
+
+    @staticmethod
+    def of(cdf: pycdfpp.CDF) -> "FileProperties":
+        declared = tuple(cdf.declared_variable_attributes)
+        used = {name for _, var in cdf.items() for name in var.attributes.keys()}
+        return FileProperties(cdf.compression, cdf.compression_level, cdf.majority, cdf.encoding,
+                              cdf.checksum, declared, tuple(n for n in declared if n not in used))
+
+
+_NEW_FILE = FileProperties.of(pycdfpp.CDF())
+
+
+@dataclass(frozen=True)
 class Document:
     attributes: dict[str, GlobalAttribute]
     variables: dict[str, Variable]
+    properties: FileProperties = _NEW_FILE
 
     def __getitem__(self, name: str) -> Variable:
         return self.variables[name]
@@ -74,11 +98,12 @@ def from_cdf(cdf: pycdfpp.CDF) -> Document:
     return Document(
         attributes={name: _global_entries(attr) for name, attr in cdf.attributes.items()},
         variables={name: _variable_from(cdf, name, var) for name, var in cdf.items()},
+        properties=FileProperties.of(cdf),
     )
 
 
 def _global_entries(attr) -> GlobalAttribute:
-    return GlobalAttribute(tuple(Attribute(attr[i], attr.type(i)) for i in range(len(attr))), attr)
+    return GlobalAttribute(tuple(Attribute(attr[i], attr.type(i)) for i in range(len(attr))))
 
 
 def _variable_from(cdf: pycdfpp.CDF, name: str, var) -> Variable:
@@ -87,8 +112,12 @@ def _variable_from(cdf: pycdfpp.CDF, name: str, var) -> Variable:
         shape=tuple(var.shape),
         is_nrv=var.is_nrv,
         compression=var.compression,
-        attributes={n: Attribute(a.value, a.type(), a) for n, a in var.attributes.items()},
+        attributes={n: Attribute(a.value, a.type()) for n, a in var.attributes.items()},
         load_values=lambda: cdf[name].values,
+        compression_level=var.compression_level,
+        sparse_records=var.sparse_records,
+        pad_value=var.pad_value,
+        virtual_records=np.asarray(var.virtual_records) if np.any(var.virtual_records) else None,
     )
 
 
@@ -98,42 +127,39 @@ def to_cdf(doc: Document) -> pycdfpp.CDF:
         _write_global(cdf, name, attr)
     for name, var in doc.variables.items():
         _write_variable(cdf, name, var)
+    _write_file_properties(cdf, doc)
     return cdf
 
 
-def _same(a, b) -> bool:
-    # repr compares lists, strings, numpy arrays and NaN fill values alike
-    return repr(a) == repr(b)
+def _declared_variable_attributes(doc: Document) -> list[str]:
+    """The loaded order, minus names an edit left unused, plus names an edit introduced."""
+    props = doc.properties
+    used = list(dict.fromkeys(name for _, var in doc.items() for name in var.attributes))
+    kept = [n for n in props.declared_variable_attributes if n in used or n in props.unused_variable_attributes]
+    return kept + [n for n in used if n not in kept]
 
 
-def _global_is_pristine(name: str, attr: GlobalAttribute) -> bool:
-    origin = attr.origin
-    return (origin is not None and origin.name == name and len(origin) == len(attr.entries)
-            and all(e.type == origin.type(i) and _same(e.value, origin[i])
-                    for i, e in enumerate(attr.entries)))
+def _write_file_properties(cdf: pycdfpp.CDF, doc: Document) -> None:
+    props = doc.properties
+    cdf.compression = props.compression
+    cdf.compression_level = props.compression_level
+    cdf.majority = props.majority
+    cdf.encoding = props.encoding
+    cdf.checksum = props.checksum
+    cdf.declared_variable_attributes = _declared_variable_attributes(doc)
 
 
 def _write_global(cdf: pycdfpp.CDF, name: str, attr: GlobalAttribute) -> None:
-    if _global_is_pristine(name, attr):
-        cdf.add_attribute(attr.origin)
-    else:
-        cdf.add_attribute(name, [e.value for e in attr.entries], [e.type for e in attr.entries])
-
-
-def _variable_attribute_is_pristine(name: str, attr: Attribute) -> bool:
-    origin = attr.origin
-    return (origin is not None and origin.name == name and origin.type() == attr.type
-            and _same(origin.value, attr.value))
+    cdf.add_attribute(name, [e.value for e in attr.entries], [e.type for e in attr.entries])
 
 
 def _write_variable(cdf: pycdfpp.CDF, name: str, var: Variable) -> None:
-    out = cdf.add_variable(name, values=var.values, data_type=var.type,
-                           is_nrv=var.is_nrv, compression=var.compression)
+    out = cdf.add_variable(name, values=var.values, data_type=var.type, is_nrv=var.is_nrv,
+                           compression=var.compression, compression_level=var.compression_level,
+                           sparse_records=var.sparse_records, pad_value=var.pad_value,
+                           virtual_records=var.virtual_records)
     for attr_name, attr in var.attributes.items():
-        if _variable_attribute_is_pristine(attr_name, attr):
-            out.add_attribute(attr.origin)
-        else:
-            out.add_attribute(attr_name, attr.value, attr.type)
+        out.add_attribute(attr_name, attr.value, attr.type)
 
 
 class DocumentSession(QObject):

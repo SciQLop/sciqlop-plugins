@@ -64,11 +64,9 @@ So we don't edit it. We load it into our own model, edit the model, and build a 
   Frozen `Document` / `Variable` / `Attribute`; values stay lazy; `to_cdf` rebuilds a CDF.
   Every CDFpp test file round-trips (types, shapes, NRV, per-variable compression, attributes, values).
   Views read the document; `DocumentSession` tracks modified state; tab title gets `•`.
-  Known limits, all pycdfpp 0.15 gaps:
-  - file-level compression is lost on save (`CDF.compression` is read-only);
-  - CDF_BYTE and empty attributes can't be written from values, so they are copied from the source while unedited;
-  - an empty global attribute can't be created at all (`add_attribute(name, [])` breaks on `zip(*[])`);
-  - column-major files are saved row-major (`add_variable` takes no majority). Values are identical.
+  With pycdfpp >= 0.18 nothing is lost on save: file compression and level, majority, encoding, checksum,
+  declared attribute order, and per variable compression level, sparse/virtual records and pad value.
+  Every attribute is written from its values (CDF_BYTE and empty ones included).
 - [x] **E2 — Save / Save As** (S) — depends on E1 — `DocumentSession.save`, tab right-click menu
   `pycdfpp.save(to_cdf(doc), path)`, then `session.mark_saved()`. Ctrl+S / Ctrl+Shift+S. URL-opened files only get Save As.
   Closing a modified tab asks Save / Discard / Cancel.
@@ -81,7 +79,6 @@ So we don't edit it. We load it into our own model, edit the model, and build a 
   Edit, add, delete global and variable attributes in the inspector.
   Typed entries (CDF_CHAR, numeric, epoch) — keep the type unless the user changes it.
   Global attributes whose entries have different types keep each entry's type unless one is chosen.
-  Limit: an edited CDF_BYTE attribute can't be saved until pycdfpp writes CDF_BYTE from values.
 - [x] **E5 — Rename / delete variables** (S) — depends on E3 — tree right-click menu
   Rename also updates `DEPEND_*`, `LABL_PTR_*`, `DELTA_*_VAR` references in other variables (ask first).
   Delete warns when other variables reference it.
@@ -92,8 +89,7 @@ So we don't edit it. We load it into our own model, edit the model, and build a 
   Re-run AstraLint on `to_cdf(doc)` after each edit (debounced), update inspector badges.
   Done: 1 s after the last edit, lint `to_cdf(doc)` bytes; URL files are linted from memory.
   An unmodified local file is linted from disk, at any size; an edited one when its serialized copies fit
-  in free memory. Not run for real here:
-  astralint is missing from the SciQLop dev venv, so tests stop at the lint process start.
+  in free memory. Run for real by a test whenever astralint is installed.
 - [x] **E8 — Edit values** (L) — depends on E3 — variable right-click "Edit values…", `values_dialog.py`
   Table editor for small / NRV variables (labels, support data). Large record variables stay read-only.
   Done up to 10,000 cells: text, integer, real and time types; NRV variables shown as one column;

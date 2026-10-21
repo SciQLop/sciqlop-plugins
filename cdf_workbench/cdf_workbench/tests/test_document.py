@@ -37,9 +37,12 @@ def _fingerprint(cdf: pycdfpp.CDF) -> dict:
         return [(a.type(i), repr(a[i])) for i in range(len(a))]
 
     return {
+        "file": (cdf.compression, cdf.compression_level, cdf.majority, cdf.encoding, cdf.checksum,
+                 list(cdf.declared_variable_attributes)),
         "globals": {n: attr_entries(a) for n, a in cdf.attributes.items()},
         "variables": {
-            n: (v.type, tuple(v.shape), v.is_nrv, v.compression, v.values.tobytes(),
+            n: (v.type, tuple(v.shape), v.is_nrv, v.compression, v.compression_level, v.sparse_records,
+                repr(v.pad_value), list(v.virtual_records), v.values.tobytes(),
                 {an: (a.type(), repr(a.value)) for an, a in v.attributes.items()})
             for n, v in cdf.items()
         },

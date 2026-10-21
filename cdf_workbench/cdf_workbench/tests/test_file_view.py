@@ -725,3 +725,33 @@ def test_a_modified_document_too_big_for_memory_is_not_serialized(b_view, monkey
     assert file_view._document_bytes(b_view.session.document) is None
     monkeypatch.setattr(file_view, "available_memory", lambda: 10**12)
     assert file_view._document_bytes(b_view.session.document) is not None
+
+
+def test_real_lint_reports_issues_and_follows_edits(qtbot, tmp_path):
+    """Runs AstraLint for real, from disk on open and from memory after an edit."""
+    pytest.importorskip("astralint")
+    import numpy as np
+    from cdf_workbench.document import DocumentSession, from_cdf
+    from cdf_workbench.file_view import CdfFileView
+    cdf = pycdfpp.CDF()
+    epochs = np.datetime64("2020-01-01", "ns") + np.arange(3).astype("timedelta64[s]")
+    cdf.add_variable("Epoch", values=epochs, data_type=pycdfpp.DataType.CDF_TIME_TT2000)
+    cdf.add_variable("B", values=np.ones(3))
+    cdf["B"].add_attribute("VAR_TYPE", "data")
+    cdf["B"].add_attribute("DEPEND_0", "Epoch")
+    path = str(tmp_path / "f.cdf")
+    pycdfpp.save(cdf, path)
+    view = CdfFileView(DocumentSession(from_cdf(pycdfpp.load(path)), source=path), source=path)
+    qtbot.addWidget(view)
+
+    qtbot.waitUntil(lambda: view._lint_report is not None, timeout=60000)
+    before = view._lint_report
+    assert before.issues_for_variable("B")
+
+    from cdf_workbench.document import Attribute
+    from cdf_workbench.edits import set_variable_attribute
+    view.session.apply(lambda d: set_variable_attribute(d, "B", None, "UNITS",
+                                                        Attribute("nT", pycdfpp.DataType.CDF_CHAR)))
+    view._refresh_derived()
+    qtbot.waitUntil(lambda: view._lint_report is not before, timeout=60000)
+    view.release()
