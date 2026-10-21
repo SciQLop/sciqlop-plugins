@@ -7,9 +7,9 @@ from PySide6.QtCore import QEvent, QObject, QRunnable, QThreadPool, Qt, Signal
 import pycdfpp
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QTabWidget, QTabBar, QStyle, QFileDialog, QMenu, QMessageBox,
-    QDialog, QDialogButtonBox, QListWidget, QListWidgetItem,
+    QDialog, QDialogButtonBox, QListWidget, QListWidgetItem, QToolBar, QToolButton,
 )
-from PySide6.QtGui import QAction, QDragEnterEvent, QDropEvent, QKeySequence
+from PySide6.QtGui import QAction, QDragEnterEvent, QDropEvent, QIcon, QKeySequence
 from .loader import load_cdf, CdfLoadError, DownloadCancelled
 from .codec_dialog import CodecDialog
 from .compare_view import CompareView
@@ -109,11 +109,9 @@ class CdfWorkbenchPanel(QWidget):
         self._tabs.tabBarDoubleClicked.connect(self._on_tab_double_clicked)
         self._tabs.tabBar().setContextMenuPolicy(Qt.CustomContextMenu)
         self._tabs.tabBar().customContextMenuRequested.connect(self._show_tab_menu)
+        layout.addWidget(self._build_toolbar())
         layout.addWidget(self._tabs)
-        self._add_shortcut(QKeySequence.Save, lambda: self.save_tab(self._tabs.currentIndex()))
-        self._add_shortcut(QKeySequence.SaveAs, lambda: self.save_tab_as(self._tabs.currentIndex()))
-        self._add_shortcut(QKeySequence.Undo, self.undo_current)
-        self._add_shortcut(QKeySequence.Redo, self.redo_current)
+        self._tabs.currentChanged.connect(self._update_actions)
 
         self._downloading: dict[str, str] = {}  # URL -> variable to select once open
         self._download_tasks: dict[str, _LoadTask] = {}
@@ -121,13 +119,87 @@ class CdfWorkbenchPanel(QWidget):
         self._load_signals.loaded.connect(self._add_tab)
         self._load_signals.failed.connect(self._on_load_failed)
         self._add_open_tab()
+        self._update_actions()
 
-    def _add_shortcut(self, keys, slot):
-        action = QAction(self)
-        action.setShortcut(keys)
-        action.setShortcutContext(Qt.WidgetWithChildrenShortcut)
+    def _build_toolbar(self) -> QToolBar:
+        """What used to hide in right-click menus, acting on the current tab."""
+        toolbar = QToolBar()
+        toolbar.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        current = self._tabs.currentIndex
+        self._actions = {
+            "save": self._action("Save", "document-save", lambda: self.save_tab(current()), QKeySequence.Save),
+            "save_as": self._action("Save As…", "document-save-as", lambda: self.save_tab_as(current()),
+                                    QKeySequence.SaveAs),
+            "undo": self._action("Undo", "edit-undo", self.undo_current, QKeySequence.Undo),
+            "redo": self._action("Redo", "edit-redo", self.redo_current, QKeySequence.Redo),
+            "compare": self._menu_action("Compare with", self._compare_menu),
+            "export": self._menu_action("Export", self._export_menu),
+            "codecs": self._action("Codecs…", "", lambda: self.compare_codecs(current())),
+            "new_variable": self._action("New variable…", "list-add", self._new_variable_in_current),
+        }
+        for name, action in self._actions.items():
+            toolbar.addAction(action)
+            if name in ("redo", "export"):
+                toolbar.addSeparator()
+        for name in ("compare", "export"):
+            toolbar.widgetForAction(self._actions[name]).setPopupMode(QToolButton.InstantPopup)
+        return toolbar
+
+    def _action(self, text: str, icon: str, slot, keys=None) -> QAction:
+        action = QAction(QIcon.fromTheme(icon), text, self)
+        if keys is not None:
+            action.setShortcut(keys)
+            action.setShortcutContext(Qt.WidgetWithChildrenShortcut)
+            self.addAction(action)
         action.triggered.connect(slot)
-        self.addAction(action)
+        return action
+
+    def _menu_action(self, text: str, fill) -> QAction:
+        action = QAction(text, self)
+        menu = QMenu(self)
+        menu.aboutToShow.connect(fill)
+        action.setMenu(menu)
+        return action
+
+    def _update_actions(self, *_):
+        view = self._view_at(self._tabs.currentIndex())
+        session = view.session if view is not None else None
+        for name, action in self._actions.items():
+            action.setEnabled(session is not None)
+        if session is not None:
+            self._actions["save"].setEnabled(session.is_modified)
+            self._actions["undo"].setEnabled(session.can_undo)
+            self._actions["redo"].setEnabled(session.can_redo)
+
+    def _fill_compare_menu(self, menu: QMenu, index: int) -> QMenu:
+        for other in range(self._tabs.count()):
+            if other != index and (view := self._view_at(other)) is not None:
+                menu.addAction(_tab_name(view.session.source), lambda o=other: self.compare_tabs(index, o))
+        menu.addSeparator()
+        menu.addAction("File…", lambda: self.compare_with_file(index))
+        return menu
+
+    def _compare_menu(self) -> QMenu:
+        menu = self._actions["compare"].menu()
+        menu.clear()
+        return self._fill_compare_menu(menu, self._tabs.currentIndex())
+
+    def _export_menu(self) -> QMenu:
+        menu = self._actions["export"].menu()
+        menu.clear()
+        index = self._tabs.currentIndex()
+        menu.addAction("Structure as YAML…", lambda: self.export_structure(index))
+        menu.addAction("Subset of variables…", lambda: self.save_subset(index))
+        menu.addAction("Data of the selected variable…", self._export_selected_variable)
+        return menu
+
+    def _export_selected_variable(self):
+        if (view := self._view_at(self._tabs.currentIndex())) is not None:
+            view.export_selected()
+
+    def _new_variable_in_current(self):
+        if (view := self._view_at(self._tabs.currentIndex())) is not None:
+            view._new_variable()
 
     def _add_open_tab(self):
         self._open_page = OpenPage()
@@ -221,6 +293,7 @@ class CdfWorkbenchPanel(QWidget):
         self._tabs.insertTab(insert_idx, file_view, _tab_name(source))
         self._tabs.setCurrentIndex(insert_idx)
         file_view.session.changed.connect(lambda: self._refresh_title(file_view))
+        file_view.session.changed.connect(self._update_actions)
         if variable:
             file_view.select_variable(variable)
 
@@ -262,12 +335,7 @@ class CdfWorkbenchPanel(QWidget):
         menu.addAction("Save subset…", lambda: self.save_subset(index))
         menu.addAction("Export structure as YAML…", lambda: self.export_structure(index))
         menu.addAction("Compare codecs…", lambda: self.compare_codecs(index))
-        compare = menu.addMenu("Compare with")
-        for other in range(self._tabs.count()):
-            if other != index and (view := self._view_at(other)) is not None:
-                compare.addAction(_tab_name(view.session.source), lambda o=other: self.compare_tabs(index, o))
-        compare.addSeparator()
-        compare.addAction("File…", lambda: self.compare_with_file(index))
+        self._fill_compare_menu(menu.addMenu("Compare with"), index)
         menu.addSeparator()
         menu.addAction("Close", lambda: self._close_tab(index))
         menu.exec(self._tabs.tabBar().mapToGlobal(pos))

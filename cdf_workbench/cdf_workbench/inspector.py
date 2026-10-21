@@ -3,13 +3,18 @@ from PySide6.QtCore import Signal, Qt
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QGridLayout,
-    QProgressBar, QPushButton, QFrame, QScrollArea, QMenu,
+    QPushButton, QScrollArea, QMenu, QToolButton,
     QTreeWidget, QTreeWidgetItem, QSizePolicy,
 )
 from .edits import format_value
 from .tree_model import VariableInfo
 from .quality import QualityReport
 from .lint import LintReport, LintIssue
+from .presentation import quality_summary
+
+
+# Room for a menu tool button's padding and arrow beside its text.
+_MENU_BUTTON_EXTRA_WIDTH = 48
 
 
 class _AttributeLabel(QLabel):
@@ -42,6 +47,7 @@ class CdfInspectorWidget(QWidget):
     edit_attribute = Signal(str, str)
     delete_attribute = Signal(str, str)
     add_attribute = Signal(str)       # variable name ("" for global attributes)
+    export_data = Signal(str)         # variable name
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -57,14 +63,18 @@ class CdfInspectorWidget(QWidget):
         layout.addWidget(self._header)
         layout.addWidget(self._description)
 
-        # Plot buttons
+        # One primary action: plot in a new panel; the menu has the other destinations.
         btn_layout = QHBoxLayout()
-        self._btn_new_panel = QPushButton("New Panel")
-        self._btn_new_panel.clicked.connect(self._on_new_panel)
-        self._btn_add_panel = QPushButton("Add to Panel ▾")
-        self._btn_add_panel.clicked.connect(self._on_add_to_panel)
-        btn_layout.addWidget(self._btn_new_panel)
-        btn_layout.addWidget(self._btn_add_panel)
+        self._plot = QToolButton()
+        self._plot.setText("Plot")
+        self._plot.setPopupMode(QToolButton.MenuButtonPopup)
+        self._plot.setToolButtonStyle(Qt.ToolButtonTextOnly)
+        # Stylesheets shrink a menu tool button to its arrow: leave room for the text.
+        self._plot.setMinimumWidth(self._plot.fontMetrics().horizontalAdvance("Plot") + _MENU_BUTTON_EXTRA_WIDTH)
+        self._plot.clicked.connect(self._on_new_panel)
+        self._plot.setMenu(QMenu(self._plot))
+        self._plot.menu().aboutToShow.connect(self._fill_plot_menu)
+        btn_layout.addWidget(self._plot)
         btn_layout.addStretch()
         layout.addLayout(btn_layout)
 
@@ -82,17 +92,10 @@ class CdfInspectorWidget(QWidget):
         add_row.addStretch()
         layout.addLayout(add_row)
 
-        # Quality bar
-        self._quality_frame = QFrame()
-        q_layout = QVBoxLayout(self._quality_frame)
-        self._quality_label = QLabel("Data Quality")
-        self._quality_bar = QProgressBar()
-        self._quality_bar.setRange(0, 100)
-        self._quality_detail = QLabel("")
-        q_layout.addWidget(self._quality_label)
-        q_layout.addWidget(self._quality_bar)
-        q_layout.addWidget(self._quality_detail)
-        layout.addWidget(self._quality_frame)
+        # Quality: one line, coloured only when something is missing
+        self._quality_line = QLabel()
+        self._quality_line.setToolTip("Values that are FILLVAL, outside VALIDMIN/VALIDMAX, and gaps in time")
+        layout.addWidget(self._quality_line)
 
         # Lint section — collapsible toggle + tree
         self._lint_toggle = QPushButton("ISTP Conformance")
@@ -117,9 +120,8 @@ class CdfInspectorWidget(QWidget):
         self._set_enabled(False)
 
     def _set_enabled(self, enabled: bool):
-        self._btn_new_panel.setEnabled(enabled)
-        self._btn_add_panel.setEnabled(enabled)
-        self._quality_frame.setVisible(enabled)
+        self._plot.setEnabled(enabled)
+        self._quality_line.setVisible(enabled and bool(self._quality_line.text()))
 
     @property
     def current_variable(self) -> str | None:
@@ -127,6 +129,7 @@ class CdfInspectorWidget(QWidget):
 
     def update_variable(self, info: VariableInfo, quality: QualityReport | None = None):
         self._current_var = info.name
+        self._quality_line.clear()
         self._header.setText(info.name)
         self._description.setText(info.catdesc)
         self._set_enabled(True)
@@ -178,28 +181,33 @@ class CdfInspectorWidget(QWidget):
             val_label = self._editable(_AttributeLabel(value), key) if editable else QLabel(value)
             self._attrs_grid.addWidget(val_label, row, 1)
 
+    _QUALITY_COLORS = {"ok": "#3aa76d", "warning": "#d18a1f", "error": "#e94560"}
+
     def _update_quality(self, report: QualityReport):
-        self._quality_bar.setValue(int(report.valid_percentage))
-        self._quality_detail.setText(
-            f"Fill: {report.fill_percentage:.1f}%  "
-            f"Out of range: {report.out_of_range_percentage:.1f}%  "
-            f"Epoch gaps: {report.epoch_gaps}"
-        )
+        text, level = quality_summary(report)
+        self._quality_line.setText(text)
+        self._quality_line.setProperty("level", level)
+        self._quality_line.setStyleSheet(f"color: {self._QUALITY_COLORS[level]};")
+        self._quality_line.setVisible(True)
 
     def _on_new_panel(self):
         if self._current_var:
             self.plot_new_panel.emit(self._current_var)
 
-    def _on_add_to_panel(self):
-        if not self._current_var:
-            return
-        menu = QMenu(self)
-        if not self._panel_names:
-            menu.addAction("No panels open").setEnabled(False)
-        else:
-            for name in self._panel_names:
-                menu.addAction(name, lambda n=name: self.plot_to_panel.emit(self._current_var, n))
-        menu.exec(self._btn_add_panel.mapToGlobal(self._btn_add_panel.rect().bottomLeft()))
+    def _plot_menu(self) -> QMenu:
+        menu = self._plot.menu()
+        menu.clear()
+        name = self._current_var
+        menu.addAction("In a new panel", self._on_new_panel)
+        for panel in self._panel_names:
+            menu.addAction(f"In {panel}", lambda p=panel: self.plot_to_panel.emit(name, p))
+        menu.addSeparator()
+        menu.addAction("Send to console", lambda: self.send_to_console.emit(name))
+        menu.addAction("Export data…", lambda: self.export_data.emit(name))
+        return menu
+
+    def _fill_plot_menu(self):
+        self._plot_menu()
 
     def set_panel_names(self, names: list[str]):
         self._panel_names = names

@@ -260,30 +260,18 @@ if _REAL_QT:
     from PySide6.QtGui import QPainter, QColor, QPen
     from PySide6.QtCore import QRect, QSize
 
-    _DISPLAY_TYPE_LABELS: dict[str, tuple[str, str]] = {
-        "time_series": ("TS", "#5b9bd5"),
-        "spectrogram": ("SP", "#c678dd"),
-        "stack_plot": ("SK", "#e5c07b"),
-        "no_plot": ("--", "#666666"),
-    }
-
-    _DIM_COLORS = ["#888888", "#56b6c2", "#c678dd", "#e5c07b"]
-
-    def _dim_tag(shape: tuple) -> tuple[str, str]:
-        ndim = len(shape)
-        return f"{ndim}D", _DIM_COLORS[min(ndim, len(_DIM_COLORS) - 1)]
-
     class CdfItemDelegate(QStyledItemDelegate):
         SPARKLINE_WIDTH = 60
         SPARKLINE_HEIGHT = 14
-        BADGE_WIDTH = 40
-        TAG_WIDTH = 24
-        DIM_TAG_WIDTH = 22
+        BADGE_WIDTH = 36
+        LABEL_WIDTH = 52
+        GAP = 6
 
         def __init__(self, parent=None):
             super().__init__(parent)
             self._sparklines: dict[str, list[float]] = {}
             self._quality: dict[str, float] = {}
+            self._prefix = ""
 
         def set_sparkline(self, var_name: str, samples: list[float]):
             self._sparklines[var_name] = samples
@@ -291,97 +279,64 @@ if _REAL_QT:
         def set_quality(self, var_name: str, valid_pct: float):
             self._quality[var_name] = valid_pct
 
+        def set_prefix(self, prefix: str):
+            """Drawn dimmed in front of every name, so the distinctive part stands out."""
+            self._prefix = prefix
+
+        def _right_width(self) -> int:
+            return self.LABEL_WIDTH + self.SPARKLINE_WIDTH + self.BADGE_WIDTH + 4 * self.GAP
+
         def sizeHint(self, option, index):
             base = super().sizeHint(option, index)
-            extra = self.DIM_TAG_WIDTH + self.TAG_WIDTH + self.SPARKLINE_WIDTH + self.BADGE_WIDTH + 32
-            return QSize(base.width() + extra, max(base.height(), 22))
+            return QSize(base.width() + self._right_width(), max(base.height(), 22))
 
         def paint(self, painter, option, index):
+            from .presentation import quality_badge, row_label
             model = index.model()
-            if hasattr(model, "mapToSource"):
-                source_index = model.mapToSource(index)
-                node = source_index.internalPointer()
-            else:
-                node = index.internalPointer()
-
+            node = (model.mapToSource(index) if hasattr(model, "mapToSource") else index).internalPointer()
             if node is None or node.variable_info is None:
                 super().paint(painter, option, index)
                 return
 
             painter.save()
-
-            is_selected = bool(option.state & QStyle.StateFlag.State_Selected)
-            if is_selected:
+            selected = bool(option.state & QStyle.StateFlag.State_Selected)
+            if selected:
                 painter.fillRect(option.rect, option.palette.highlight())
-                painter.setPen(option.palette.highlightedText().color())
-            else:
-                painter.setPen(option.palette.text().color())
+            text = (option.palette.highlightedText() if selected else option.palette.text()).color()
+            muted = QColor(text)
+            muted.setAlpha(120)
 
-            right_margin = self.DIM_TAG_WIDTH + self.SPARKLINE_WIDTH + self.BADGE_WIDTH + self.TAG_WIDTH + 32
             name_rect = QRect(option.rect)
-            name_rect.setWidth(option.rect.width() - right_margin)
-            painter.drawText(name_rect, Qt.AlignVCenter | Qt.AlignLeft, node.name)
+            name_rect.setWidth(option.rect.width() - self._right_width())
+            self._draw_name(painter, name_rect, node.name, text, muted)
 
-            var_name = node.name
-            info = node.variable_info
-            x_cursor = option.rect.right() - self.SPARKLINE_WIDTH - self.BADGE_WIDTH - self.TAG_WIDTH - self.DIM_TAG_WIDTH - 24
+            x = option.rect.right() - self._right_width() + self.GAP
+            mid = option.rect.top() + option.rect.height() // 2
+            painter.setPen(muted)
+            small = painter.font()
+            small.setPointSizeF(max(small.pointSizeF() - 2, 7))
+            painter.setFont(small)
+            painter.drawText(QRect(x, option.rect.top(), self.LABEL_WIDTH, option.rect.height()),
+                             Qt.AlignVCenter | Qt.AlignLeft, row_label(node.variable_info))
+            x += self.LABEL_WIDTH + self.GAP
 
-            # Dimension tag
-            dim_label, dim_color = _dim_tag(info.shape)
-            dim_rect = QRect(
-                x_cursor,
-                option.rect.top() + (option.rect.height() - 14) // 2,
-                self.DIM_TAG_WIDTH,
-                14,
-            )
-            self._draw_tag(painter, dim_rect, dim_label, dim_color)
-            x_cursor += self.DIM_TAG_WIDTH + 4
+            if node.name in self._sparklines:
+                self._draw_sparkline(painter, QRect(x, mid - self.SPARKLINE_HEIGHT // 2, self.SPARKLINE_WIDTH,
+                                                    self.SPARKLINE_HEIGHT), self._sparklines[node.name])
+            x += self.SPARKLINE_WIDTH + self.GAP
 
-            # Display type tag
-            dt_key = info.display_type.lower().strip() if info else ""
-            tag_label, tag_color = _DISPLAY_TYPE_LABELS.get(dt_key, ("", ""))
-            if tag_label:
-                tag_rect = QRect(
-                    x_cursor,
-                    option.rect.top() + (option.rect.height() - 14) // 2,
-                    self.TAG_WIDTH,
-                    14,
-                )
-                self._draw_tag(painter, tag_rect, tag_label, tag_color)
-
-            if var_name in self._sparklines:
-                spark_rect = QRect(
-                    option.rect.right() - self.SPARKLINE_WIDTH - self.BADGE_WIDTH - 12,
-                    option.rect.top() + (option.rect.height() - self.SPARKLINE_HEIGHT) // 2,
-                    self.SPARKLINE_WIDTH,
-                    self.SPARKLINE_HEIGHT,
-                )
-                self._draw_sparkline(painter, spark_rect, self._sparklines[var_name])
-
-            if var_name in self._quality:
-                badge_rect = QRect(
-                    option.rect.right() - self.BADGE_WIDTH - 4,
-                    option.rect.top() + (option.rect.height() - 16) // 2,
-                    self.BADGE_WIDTH,
-                    16,
-                )
-                self._draw_badge(painter, badge_rect, self._quality[var_name])
-
+            badge = quality_badge(self._quality[node.name]) if node.name in self._quality else None
+            if badge is not None:
+                self._draw_badge(painter, QRect(x, mid - 8, self.BADGE_WIDTH, 16), *badge)
             painter.restore()
 
-        def _draw_tag(self, painter, rect, label, color_hex):
-            color = QColor(color_hex)
-            color.setAlpha(40)
-            painter.setBrush(color)
-            painter.setPen(Qt.NoPen)
-            painter.drawRoundedRect(rect, 3, 3)
-
-            painter.setPen(QColor(color_hex))
-            font = painter.font()
-            font.setPointSize(7)
-            font.setBold(True)
-            painter.setFont(font)
-            painter.drawText(rect, Qt.AlignCenter, label)
+        def _draw_name(self, painter, rect, name, color, muted):
+            prefix = self._prefix if self._prefix and name.startswith(self._prefix) else ""
+            painter.setPen(muted)
+            painter.drawText(rect, Qt.AlignVCenter | Qt.AlignLeft, prefix)
+            offset = painter.fontMetrics().horizontalAdvance(prefix)
+            painter.setPen(color)
+            painter.drawText(rect.adjusted(offset, 0, 0, 0), Qt.AlignVCenter | Qt.AlignLeft, name[len(prefix):])
 
         def _draw_sparkline(self, painter, rect, samples):
             if not samples:
@@ -404,27 +359,18 @@ if _REAL_QT:
             for i in range(len(points) - 1):
                 painter.drawLine(points[i][0], points[i][1], points[i + 1][0], points[i + 1][1])
 
-        def _draw_badge(self, painter, rect, valid_pct):
-            if valid_pct > 80:
-                color = QColor("#4ecca3")
-                text_color = QColor("#000")
-            elif valid_pct > 50:
-                color = QColor("#e7c94c")
-                text_color = QColor("#000")
-            else:
-                color = QColor("#e94560")
-                text_color = QColor("#fff")
+        _BADGE_COLORS = {"warning": ("#e7a33e", "#000"), "error": ("#e94560", "#fff")}
 
-            painter.setBrush(color)
+        def _draw_badge(self, painter, rect, text, level):
+            fill, ink = self._BADGE_COLORS[level]
+            painter.setBrush(QColor(fill))
             painter.setPen(Qt.NoPen)
             painter.drawRoundedRect(rect, 3, 3)
-
-            painter.setPen(text_color)
+            painter.setPen(QColor(ink))
             font = painter.font()
-            font.setPointSize(8)
             font.setBold(True)
             painter.setFont(font)
-            painter.drawText(rect, Qt.AlignCenter, f"{valid_pct:.0f}%")
+            painter.drawText(rect, Qt.AlignCenter, text)
 else:
     class CdfItemDelegate:  # type: ignore[no-redef]
         """Stub used when Qt is not available (e.g. in tests)."""
@@ -433,4 +379,7 @@ else:
             pass
 
         def set_quality(self, var_name: str, valid_pct: float) -> None:
+            pass
+
+        def set_prefix(self, prefix: str) -> None:
             pass

@@ -411,3 +411,39 @@ def test_cancel_downloads(panel, cdf_file, qtbot, monkeypatch):
     assert panel._open_page._cancel.isHidden()
     qtbot.wait(200)
     assert panel._tabs.count() == 1 and panel._open_page.status() == "Download cancelled."
+
+
+def _enabled(panel):
+    return {name: action.isEnabled() for name, action in panel._actions.items()}
+
+
+def test_toolbar_follows_the_current_tab(panel, cdf_file, qtbot):
+    assert set(panel._actions) == {"save", "save_as", "undo", "redo", "compare", "export", "codecs", "new_variable"}
+    assert not any(_enabled(panel).values())
+
+    panel.open_file(cdf_file)
+    state = _enabled(panel)
+    assert state["save_as"] and state["compare"] and state["new_variable"]
+    assert not state["save"] and not state["undo"] and not state["redo"]
+
+    _modify(panel._tabs.widget(0))
+    assert _enabled(panel)["save"] and _enabled(panel)["undo"]
+    panel.undo_current()
+    assert _enabled(panel)["redo"] and not _enabled(panel)["save"]
+
+    panel._tabs.setCurrentWidget(panel._open_page)
+    assert not any(_enabled(panel).values())
+
+
+def test_toolbar_menus_list_compare_targets_and_exports(panel, cdf_file, qtbot, tmp_path):
+    other = str(tmp_path / "other.cdf")
+    pycdfpp.save(pycdfpp.load(cdf_file), other)
+    panel.open_file(cdf_file)
+    panel.open_file(other)
+    panel._tabs.setCurrentIndex(0)
+
+    compare = [a.text() for a in panel._compare_menu().actions() if not a.isSeparator()]
+    export = [a.text() for a in panel._export_menu().actions() if not a.isSeparator()]
+
+    assert compare == ["other.cdf", "File…"]
+    assert export == ["Structure as YAML…", "Subset of variables…", "Data of the selected variable…"]

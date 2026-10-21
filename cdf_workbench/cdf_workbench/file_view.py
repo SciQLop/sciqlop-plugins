@@ -36,6 +36,7 @@ from .reduce import Mode, axis_attribute, default_modes, needs_reduction, reduce
 from .tree_model import CdfTreeModel, CdfItemDelegate, VariableInfo
 from .inspector import CdfInspectorWidget
 from .preview import CdfPreviewWidget
+from .presentation import common_prefix
 from .quality import analyze_quality, fill_mask, QualityReport
 from . import lint
 from .lint import LintReport, report_from_json
@@ -402,6 +403,7 @@ class CdfFileView(QWidget):
         self._tree_view.selectionModel().currentChanged.connect(self._on_variable_selected)
 
         self._delegate = CdfItemDelegate()
+        self._delegate.set_prefix(common_prefix(list(self._doc.keys())))
         self._tree_view.setItemDelegate(self._delegate)
 
         # Context menu
@@ -421,6 +423,8 @@ class CdfFileView(QWidget):
         self._inspector.edit_attribute.connect(self._edit_attribute)
         self._inspector.delete_attribute.connect(self._delete_attribute)
         self._inspector.add_attribute.connect(self._add_attribute)
+        self._inspector.export_data.connect(self._export_data)
+        self._inspector.send_to_console.connect(self._send_to_console)
         right_splitter.addWidget(self._inspector)
 
         if self._main_window is not None:
@@ -473,6 +477,7 @@ class CdfFileView(QWidget):
         current = self._inspector.current_variable
         self._tree_model = CdfTreeModel(self._doc)
         self._proxy_model.setSourceModel(self._tree_model)
+        self._delegate.set_prefix(common_prefix(list(self._doc.keys())))
         self._tree_view.expandAll()
         self._after_edit.start()
         if current is not None and current in self._doc:
@@ -883,6 +888,12 @@ class CdfFileView(QWidget):
         except Exception as e:
             logger.warning("Failed to export %s", var_name, exc_info=True)
             self.show_problem(_problem_text(e, "export", var_name))
+
+    def export_selected(self):
+        if (name := self._inspector.current_variable) is None:
+            self.show_problem("Select a variable to export its data.")
+            return
+        self._export_data(name)
 
     def _send_to_console(self, var_name: str):
         if self._main_window is None or self._doc is None:
