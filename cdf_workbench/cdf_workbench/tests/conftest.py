@@ -1,4 +1,5 @@
 import os
+import sys
 import atexit
 
 # Importing SciQLop initializes Speasy's data providers, which check that each server is up:
@@ -11,6 +12,14 @@ import pycdfpp
 import numpy as np
 
 
+_exit_status = 0
+
+
+def pytest_sessionfinish(session, exitstatus):
+    global _exit_status
+    _exit_status = int(exitstatus)
+
+
 def _force_exit():
     """Avoid segfault during interpreter shutdown.
 
@@ -18,8 +27,15 @@ def _force_exit():
     causing a segfault.  This is an upstream issue — SciQLopPlots' own
     tests exhibit the same crash.  Force-exit to skip the problematic
     teardown.
+
+    os._exit skips every atexit handler registered before this one, among them pytest-xvfb's:
+    its Xvfb was left running after each test run. Stop it here, and keep pytest's exit status
+    (a run with failures exited 0).
     """
-    os._exit(0)
+    xvfb = sys.modules.get("pytest_xvfb")
+    if xvfb is not None:
+        xvfb.shutdown_xvfb()
+    os._exit(_exit_status)
 
 
 @pytest.fixture(autouse=True, scope="session")
