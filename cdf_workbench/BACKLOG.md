@@ -112,7 +112,7 @@ So we don't edit it. We load it into our own model, edit the model, and build a 
 
 ## Convert & export
 
-- [x] **X1 — Codec comparison** (M) — depends on E2 — tab right-click "Compare codecs…"
+- [x] **X1 — Codec comparison** (M) — depends on E2 — tab right-click / toolbar "Compare compression algorithms…"
   Re-encode with each pycdfpp `CompressionType`, show resulting sizes, save the chosen one.
   Run in a worker thread; big files take a while.
   Done: every pycdfpp codec is tried (Huffman ones report "can't write"), read back and checked

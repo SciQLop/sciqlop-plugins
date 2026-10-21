@@ -418,7 +418,7 @@ def _enabled(panel):
 
 
 def test_toolbar_follows_the_current_tab(panel, cdf_file, qtbot):
-    assert set(panel._actions) == {"save", "save_as", "undo", "redo", "compare", "export", "codecs", "new_variable"}
+    assert set(panel._actions) == {"save", "save_as", "undo", "redo", "compare", "export", "compression", "new_variable"}
     assert not any(_enabled(panel).values())
 
     panel.open_file(cdf_file)

@@ -134,7 +134,7 @@ class CdfWorkbenchPanel(QWidget):
             "redo": self._action("Redo", "edit-redo", self.redo_current, QKeySequence.Redo),
             "compare": self._menu_action("Compare with", self._compare_menu),
             "export": self._menu_action("Export", self._export_menu),
-            "codecs": self._action("Codecs…", "", lambda: self.compare_codecs(current())),
+            "compression": self._action("Compare compression…", "", lambda: self.compare_codecs(current())),
             "new_variable": self._action("New variable…", "list-add", self._new_variable_in_current),
         }
         for name, action in self._actions.items():
@@ -334,7 +334,7 @@ class CdfWorkbenchPanel(QWidget):
         menu.addAction("Save As…", lambda: self.save_tab_as(index))
         menu.addAction("Save subset…", lambda: self.save_subset(index))
         menu.addAction("Export structure as YAML…", lambda: self.export_structure(index))
-        menu.addAction("Compare codecs…", lambda: self.compare_codecs(index))
+        menu.addAction("Compare compression algorithms…", lambda: self.compare_codecs(index))
         self._fill_compare_menu(menu.addMenu("Compare with"), index)
         menu.addSeparator()
         menu.addAction("Close", lambda: self._close_tab(index))

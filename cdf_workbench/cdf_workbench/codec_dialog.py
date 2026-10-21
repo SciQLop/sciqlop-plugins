@@ -1,4 +1,5 @@
-"""X1: a table of each codec's size and speed for the current document, and a way to adopt one."""
+"""X1: compare compression algorithms: size and speed of each for the current document, and a way
+to adopt one."""
 from __future__ import annotations
 from typing import Optional
 
@@ -13,7 +14,7 @@ from .codec_compare import CODECS, CodecResult, try_codec, with_compression
 from .document import DocumentSession
 from .memory import available_memory, decoded_nbytes, format_bytes
 
-_COLUMNS = ("Codec", "Size", "vs file", "Write", "Read", "Values")
+_COLUMNS = ("Algorithm", "Size", "vs file", "Write", "Read", "Values")
 # Encoding one codec holds the decoded values, the new CDF and its bytes.
 _COPIES_PER_CODEC = 3
 
@@ -54,7 +55,7 @@ def _cells(result: CodecResult, original_size: Optional[int]) -> list[str]:
 class CodecDialog(QDialog):
     def __init__(self, session: DocumentSession, original_size: Optional[int], parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Compare codecs")
+        self.setWindowTitle("Compare compression algorithms")
         self._session, self._original_size = session, original_size
         self._results: dict[pycdfpp.CompressionType, CodecResult] = {}
 
@@ -67,9 +68,9 @@ class CodecDialog(QDialog):
             self._table.setItem(row, 0, QTableWidgetItem(codec.name.removesuffix("_compression")))
             self._table.setItem(row, 1, QTableWidgetItem("…"))
         self._table.itemSelectionChanged.connect(self._update_use_button)
-        self._message = QLabel("Every variable is re-encoded with each codec, then read back and compared.")
+        self._message = QLabel("Every variable is compressed with each algorithm, then read back and compared.")
         self._message.setWordWrap(True)
-        self._use = QPushButton("Use selected codec")
+        self._use = QPushButton("Use selected algorithm")
         self._use.setEnabled(False)
         self._use.clicked.connect(self.use_selected)
         buttons = QDialogButtonBox(QDialogButtonBox.Close)
@@ -87,7 +88,7 @@ class CodecDialog(QDialog):
         doc = self._session.document
         needed = _COPIES_PER_CODEC * sum(decoded_nbytes(var) for _, var in doc.items())
         if needed > (free := available_memory()):
-            self._message.setText(f"Comparing codecs needs about {format_bytes(needed)}, "
+            self._message.setText(f"Comparing compression algorithms needs about {format_bytes(needed)}, "
                                   f"only {format_bytes(free)} of memory is free.")
             return None
         self._signals = _CodecSignals(self)
@@ -121,7 +122,7 @@ class CodecDialog(QDialog):
         self._use.setEnabled(result is not None and result.identical)
 
     def use_selected(self):
-        """An ordinary edit: it undoes, and the next Save writes the file with this codec."""
+        """An ordinary edit: it undoes, and the next Save writes the file with this algorithm."""
         result = self._selected()
         if result is not None and result.identical:
             self._session.apply(lambda d: with_compression(d, result.codec))
